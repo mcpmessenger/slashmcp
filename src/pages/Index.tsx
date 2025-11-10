@@ -7,6 +7,7 @@ import { useVoicePlayback } from "@/hooks/useVoicePlayback";
 import { useToast } from "@/components/ui/use-toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 const Index = () => {
   const {
@@ -19,11 +20,25 @@ const Index = () => {
     isAuthLoading,
     signInWithGoogle,
     signOut,
+    appendAssistantText,
   } = useChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastSpokenRef = useRef<string>("");
   const { toast } = useToast();
   const { enabled: voicePlaybackEnabled, toggle: toggleVoicePlayback, speak, stop, isSpeaking } = useVoicePlayback();
+
+  const userMetadata = (session?.user?.user_metadata ?? {}) as Record<string, unknown>;
+  const avatarUrl =
+    (userMetadata.avatar_url as string | undefined) ??
+    (userMetadata.picture as string | undefined) ??
+    null;
+  const displayName =
+    (userMetadata.full_name as string | undefined) ??
+    (userMetadata.name as string | undefined) ??
+    session?.user?.email ??
+    "You";
+  const avatarInitial =
+    displayName && displayName.trim().length > 0 ? displayName.trim().charAt(0).toUpperCase() : "U";
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -83,9 +98,13 @@ const Index = () => {
               {authReady && (
                 session ? (
                   <div className="flex items-center gap-2">
-                    <span className="hidden sm:inline text-xs text-foreground/60 truncate max-w-[140px]" title={session.user?.email ?? undefined}>
-                      {session.user?.email ?? "Signed in"}
-                    </span>
+                    <Avatar className="h-8 w-8 border border-border/50 shadow-sm" title={displayName ?? undefined}>
+                      {avatarUrl ? (
+                        <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
+                      ) : (
+                        <AvatarFallback>{avatarInitial}</AvatarFallback>
+                      )}
+                    </Avatar>
                     <button
                       type="button"
                       onClick={() => void signOut()}
@@ -181,7 +200,12 @@ const Index = () => {
       </div>
 
       {/* Chat Input */}
-      <ChatInput onSubmit={sendMessage} disabled={isLoading} className="px-4 pb-4" />
+      <ChatInput
+        onSubmit={sendMessage}
+        onAssistantMessage={appendAssistantText}
+        disabled={isLoading}
+        className="px-4 pb-4"
+      />
     </div>
   );
 };

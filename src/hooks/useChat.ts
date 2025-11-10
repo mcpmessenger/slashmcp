@@ -553,25 +553,9 @@ export function useChat() {
     const { data: listener } = supabaseClient.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
       if (event === "SIGNED_IN" && nextSession?.user) {
-        setMessages(prev => [
-          ...prev,
-          {
-            role: "assistant",
-            type: "text",
-            content: `✅ Signed in as ${nextSession.user.email ?? "your account"}.`,
-          },
-        ]);
         setLoginPrompt(false);
       }
       if (event === "SIGNED_OUT") {
-        setMessages(prev => [
-          ...prev,
-          {
-            role: "assistant",
-            type: "text",
-            content: "You have signed out of Supabase.",
-          },
-        ]);
         setRegistry([]);
       }
     });
