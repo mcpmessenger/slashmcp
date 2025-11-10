@@ -90,7 +90,7 @@ const Index = () => {
               <div className="leading-tight">
                 <p className="font-semibold text-base text-foreground">SlashMCP Assistant</p>
                 <p className="text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
-                  MCP-powered AI workspace for document intelligence
+                  MCP-powered AI workspace
                 </p>
               </div>
             </div>
