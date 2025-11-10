@@ -88,7 +88,7 @@ const Index = () => {
             <div className="flex items-center gap-3">
               <img src="/Untitled design.svg" alt="SlashMCP logo" className="h-10 w-auto" />
               <div className="leading-tight">
-                <p className="font-semibold text-base text-foreground">SlashMCP Assistant</p>
+                <p className="font-semibold text-base text-foreground">SlashMCP</p>
                 <p className="text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
                   MCP-powered AI workspace
                 </p>
@@ -163,7 +163,7 @@ const Index = () => {
         <div className="max-w-4xl mx-auto space-y-6">
           {messages.length === 0 ? (
             <div className="text-center mt-20 space-y-3">
-              <h1 className="text-4xl font-bold text-foreground">SlashMCP Assistant</h1>
+              <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
               <p className="text-muted-foreground">
                 MCP-powered AI workspace for document intelligence.
               </p>
