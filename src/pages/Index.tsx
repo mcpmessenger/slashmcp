@@ -69,7 +69,7 @@ const Index = () => {
     <div className="min-h-screen bg-background flex flex-col">
       <div className="px-4 pt-6">
         <div className="max-w-4xl mx-auto flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/40 bg-muted/30 px-4 py-3 backdrop-blur">
+          <div className="flex items-center justify-between gap-4 rounded-2xl border border-border/40 bg-muted/30 px-4 py-3">
             <div className="flex items-center gap-3">
               <img src="/slashmcp-logo.svg" alt="SlashMCP logo" className="h-10 w-auto" />
               <div className="leading-tight">
