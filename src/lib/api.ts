@@ -10,6 +10,7 @@ export interface UploadJobResponse {
 const textractFunctionPath = "/textract-worker";
 const jobStatusPath = "/job-status";
 const visionPath = "/vision-worker";
+const imageGenerationPath = "/image-generator";
 
 const FUNCTIONS_URL =
   import.meta.env.VITE_SUPABASE_FUNCTIONS_URL ||
@@ -147,5 +148,60 @@ export async function triggerVisionJob(params: {
     const error = await response.json().catch(() => ({}));
     throw new Error(error?.error || "Failed to trigger vision job");
   }
+}
+
+export interface GeneratedImage {
+  base64: string;
+  mimeType: string;
+  width?: number | null;
+  height?: number | null;
+  index?: number;
+}
+
+export interface ImageGenerationResponse {
+  provider: "gemini";
+  prompt: string;
+  imageCountRequested: number;
+  aspectRatio?: string;
+  images: GeneratedImage[];
+  safetyRatings?: unknown[];
+  finishReasons?: unknown[];
+  promptFeedback?: unknown;
+  usageMetadata?: unknown;
+}
+
+export async function generateImages(params: {
+  prompt: string;
+  negativePrompt?: string;
+  aspectRatio?: string;
+  imageCount?: number;
+}): Promise<ImageGenerationResponse> {
+  if (!FUNCTIONS_URL) {
+    throw new Error("Functions URL is not configured");
+  }
+
+  const response = await fetch(`${FUNCTIONS_URL}${imageGenerationPath}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}),
+    },
+    body: JSON.stringify(params),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    const message =
+      (error?.details as string | undefined) ??
+      (error?.error as string | undefined) ??
+      `Failed to generate image (status ${response.status})`;
+    throw new Error(message);
+  }
+
+  const payload = (await response.json()) as ImageGenerationResponse;
+  if (!Array.isArray(payload.images)) {
+    throw new Error("Gemini image generation response missing images");
+  }
+  return payload;
 }
 
