@@ -626,11 +626,34 @@ export function ChatInput({
     [handleFileUpload],
   );
 
+  const handleDragOver = useCallback((event: React.DragEvent<HTMLFormElement>) => {
+    if (event.dataTransfer?.types.includes("Files")) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    async (event: React.DragEvent<HTMLFormElement>) => {
+      if (!event.dataTransfer?.files || event.dataTransfer.files.length === 0) {
+        return;
+      }
+      event.preventDefault();
+      const fileList = Array.from(event.dataTransfer.files);
+      for (const file of fileList) {
+        await handleFileUpload(file);
+      }
+    },
+    [handleFileUpload],
+  );
+
   const isSubmitDisabled = disabled || !value.trim();
 
   return (
     <form
       onSubmit={handleSubmit}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
       className={cn(
         "sticky bottom-4 left-1/2 -translate-x-1/2 z-50 mx-auto min-h-12 w-full max-w-2xl transition-all duration-300 ease-out",
         className
