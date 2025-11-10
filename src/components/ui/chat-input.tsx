@@ -35,6 +35,7 @@ interface UploadJob {
 interface ChatInputProps {
   placeholder?: string;
   onSubmit?: (value: string) => void;
+  onAssistantMessage?: (content: string) => void;
   disabled?: boolean;
   className?: string;
 }
@@ -97,6 +98,7 @@ const OptionsMenu = memo(({
 export function ChatInput({
   placeholder = "Ask anything...",
   onSubmit = (value: string) => console.log("Submitted:", value),
+  onAssistantMessage,
   disabled = false,
   className,
 }: ChatInputProps) {
@@ -108,6 +110,8 @@ export function ChatInput({
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const [visionProvider, setVisionProvider] = useState<"gpt4o" | "gemini">("gpt4o");
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
@@ -313,26 +317,102 @@ export function ChatInput({
     }
   }, [value]);
 
-  const handleSubmit = useCallback(
-    (e: React.FormEvent) => {
-      e.preventDefault();
-      if (value.trim() && !disabled) {
-        onSubmit(value.trim());
-        setValue("");
-        setSelectedOptions([]);
+  const nextHistoryValue = useRef<string>("");
+
+  const navigateHistory = useCallback(
+    (direction: "prev" | "next") => {
+      if (!inputHistory.length) return;
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+
+      const atStart = textarea.selectionStart === 0 && textarea.selectionEnd === 0;
+      const atEnd =
+        textarea.selectionStart === textarea.value.length &&
+        textarea.selectionEnd === textarea.value.length;
+
+      if (direction === "prev" && !atStart) return;
+      if (direction === "next" && !atEnd) return;
+
+      if (historyIndex === null) {
+        nextHistoryValue.current = value;
+      }
+
+      if (direction === "prev") {
+        const currentIndex = historyIndex ?? inputHistory.length;
+        const newIndex = currentIndex - 1;
+        if (newIndex < 0) return;
+        setHistoryIndex(newIndex);
+        setValue(inputHistory[newIndex]);
+        requestAnimationFrame(() => {
+          textarea.selectionStart = textarea.selectionEnd = inputHistory[newIndex].length;
+        });
+      } else {
+        const currentIndex = historyIndex ?? inputHistory.length;
+        const newIndex = currentIndex + 1;
+        if (newIndex >= inputHistory.length) {
+          setHistoryIndex(null);
+          setValue(nextHistoryValue.current);
+          requestAnimationFrame(() => {
+            textarea.selectionStart = textarea.selectionEnd = nextHistoryValue.current.length;
+          });
+        } else {
+          setHistoryIndex(newIndex);
+          setValue(inputHistory[newIndex]);
+          requestAnimationFrame(() => {
+            textarea.selectionStart = textarea.selectionEnd = inputHistory[newIndex].length;
+          });
+        }
       }
     },
-    [value, onSubmit, disabled]
+    [historyIndex, inputHistory, value],
+  );
+
+  const submitValue = useCallback(() => {
+    if (value.trim() && !disabled) {
+      onSubmit(value.trim());
+      setValue("");
+      setSelectedOptions([]);
+      setInputHistory(prev => {
+        const trimmed = value.trim();
+        if (!trimmed) return prev;
+        if (prev[prev.length - 1] === trimmed) return prev;
+        return [...prev, trimmed];
+      });
+      setHistoryIndex(null);
+      nextHistoryValue.current = "";
+    }
+  }, [value, onSubmit, disabled]);
+
+  const handleSubmit = useCallback(
+    (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      submitValue();
+    },
+    [submitValue],
   );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        handleSubmit(e as any);
+        submitValue();
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        if (historyIndex !== null || textareaRef.current?.selectionStart === 0) {
+          e.preventDefault();
+          navigateHistory("prev");
+        }
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        if (historyIndex !== null || textareaRef.current?.selectionEnd === (textareaRef.current?.value.length ?? 0)) {
+          e.preventDefault();
+          navigateHistory("next");
+        }
       }
     },
-    [handleSubmit]
+    [submitValue, navigateHistory, historyIndex]
   );
 
   const selectOption = useCallback(
@@ -372,20 +452,16 @@ export function ChatInput({
 
   const triggerVision = useCallback(
     async (jobId: string) => {
-      try {
-        await triggerVisionJob({ jobId, provider: visionProvider });
-        const statusResponse = await fetchJobStatus(jobId);
-        const providerUsed = statusResponse.result?.vision_provider as "gpt4o" | "gemini" | null;
-        updateJob(jobId, {
-          visionSummary: statusResponse.result?.vision_summary ?? null,
-          visionMetadata: statusResponse.result?.vision_metadata ?? null,
-          visionProvider: providerUsed,
-          updatedAt: statusResponse.job.updated_at,
-        });
-        return providerUsed;
-      } catch (error) {
-        throw error;
-      }
+      await triggerVisionJob({ jobId, provider: visionProvider });
+      const statusResponse = await fetchJobStatus(jobId);
+      const providerUsed = statusResponse.result?.vision_provider as "gpt4o" | "gemini" | null;
+      updateJob(jobId, {
+        visionSummary: statusResponse.result?.vision_summary ?? null,
+        visionMetadata: statusResponse.result?.vision_metadata ?? null,
+        visionProvider: providerUsed,
+        updatedAt: statusResponse.job.updated_at,
+      });
+      return providerUsed;
     },
     [visionProvider, updateJob],
   );

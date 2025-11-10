@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { useToast } from "@/hooks/use-toast";
 import type { Session } from "@supabase/supabase-js";
 import type { StockInsights } from "@/lib/alphaVantage";
+import { generateImages } from "@/lib/api";
 import { parseMcpCommand } from "@/lib/mcp/parser";
 import {
   invokeMcpCommand,
@@ -39,7 +40,23 @@ type TextMessage = BaseMessage & {
   type: "text";
 };
 
-export type Message = TextMessage | StockMessage;
+type ImageMessage = BaseMessage & {
+  role: "assistant";
+  type: "image";
+  images: Array<{
+    base64: string;
+    mimeType: string;
+    width?: number | null;
+    height?: number | null;
+    index?: number;
+  }>;
+  metadata?: {
+    safetyRatings?: unknown[];
+    finishReasons?: unknown[];
+  };
+};
+
+export type Message = TextMessage | StockMessage | ImageMessage;
 
 type ParsedStockCommand = {
   symbol: string;
@@ -50,6 +67,33 @@ const STOCK_COMMAND_REGEX =
   /^\/?\s*(?:quote|stock|ticker)\s+([a-zA-Z.\-:]{1,10})(?:\s+(1m|3m|6m|1y))?\s*$/i;
 
 const MODEL_COMMAND_REGEX = /^\/model\s+(openai|anthropic|gemini)\s*$/i;
+const IMAGE_COMMAND_REGEX = /^\/imagine\s+(.+)/i;
+
+const IMAGE_VERBS = ["create", "make", "generate", "draw", "paint", "design", "render", "illustrate", "produce"];
+const IMAGE_NOUNS = ["image", "picture", "art", "illustration", "drawing", "rendering", "photo", "portrait", "scene", "visual"];
+
+function extractImagePrompt(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  for (const pattern of [
+    /^(?:please\s+)?(?:create|make|generate|draw|paint|design|render|illustrate)\s+(?:me\s+)?(?:an?\s+)?(?:image|picture|art|illustration|drawing|rendering|scene|visual)\s*(?:of|about)?\s*(.+)$/i,
+    /^(?:could|can)\s+you\s+(?:create|make|generate|draw|paint|design|render)\s+(?:me\s+)?(?:an?\s+)?(?:image|picture|art|illustration|drawing|rendering|scene|visual)\s*(?:of|about)?\s*(.+)$/i,
+  ]) {
+    const match = pattern.exec(trimmed);
+    if (match?.[1]) {
+      return match[1].replace(/\s+/g, " ").trim();
+    }
+  }
+
+  const lower = trimmed.toLowerCase();
+  const hasVerb = IMAGE_VERBS.some(verb => lower.includes(verb));
+  const hasNoun = IMAGE_NOUNS.some(noun => lower.includes(noun));
+  if (hasVerb && hasNoun) {
+    return trimmed;
+  }
+  return null;
+}
 
 const SLASH_MCP_PREFIX = "/slashmcp";
 
@@ -518,6 +562,10 @@ function parseElectionOddsIntent(rawInput: string): { marketId: string } | null 
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
+
+  const appendAssistantText = useCallback((text: string) => {
+    setMessages(prev => [...prev, { role: "assistant", type: "text", content: text }]);
+  }, []);
   const [isLoading, setIsLoading] = useState(false);
   const [provider, setProvider] = useState<Provider>("openai");
   const [, setRegistry] = useState<McpRegistryEntry[]>([]);
@@ -669,13 +717,72 @@ export function useChat() {
     }
   }, [toast]);
 
+  const runImageGeneration = useCallback(
+    async (promptText: string) => {
+      const trimmedPrompt = promptText.trim();
+      if (!trimmedPrompt) {
+        appendAssistantText("Image prompts must include a description. Try `/imagine a cozy cabin in the snow`.");
+        return;
+      }
+
+      setIsLoading(true);
+      try {
+        const response = await generateImages({ prompt: trimmedPrompt });
+        const images = response.images ?? [];
+
+        if (images.length === 0) {
+          appendAssistantText("Gemini did not return any images. Try refining your prompt.");
+        } else {
+          setMessages(prev => [
+            ...prev,
+            {
+              role: "assistant",
+              type: "image",
+              content: response.prompt ?? trimmedPrompt,
+              images: images.map(image => ({
+                base64: image.base64,
+                mimeType: image.mimeType,
+                width: image.width ?? null,
+                height: image.height ?? null,
+                index: image.index,
+              })),
+              metadata: {
+                safetyRatings: response.safetyRatings ?? undefined,
+                finishReasons: response.finishReasons ?? undefined,
+              },
+            },
+          ]);
+        }
+      } catch (error) {
+        console.error("Image generation failed", error);
+        appendAssistantText(
+          error instanceof Error
+            ? `Image generation failed: ${error.message}`
+            : "Image generation failed. Please try again.",
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [appendAssistantText],
+  );
+
   const sendMessage = useCallback(async (input: string) => {
     const userMsg: Message = { role: "user", type: "text", content: input };
     setMessages(prev => [...prev, userMsg]);
 
-    const appendAssistantText = (text: string) => {
-      setMessages(prev => [...prev, { role: "assistant", type: "text", content: text }]);
-    };
+    const imagineMatch = IMAGE_COMMAND_REGEX.exec(input.trim());
+    if (imagineMatch) {
+      const promptText = imagineMatch[1]?.trim() ?? "";
+      await runImageGeneration(promptText);
+      return;
+    }
+
+    const naturalImagePrompt = extractImagePrompt(input);
+    if (naturalImagePrompt) {
+      await runImageGeneration(naturalImagePrompt);
+      return;
+    }
 
     const ensureAuthForCommand = (command: SlashMcpCommand): boolean => {
       if (!commandRequiresSession(command)) {
@@ -1198,7 +1305,17 @@ export function useChat() {
       setMessages(prev => prev.slice(0, -1));
       setIsLoading(false);
     }
-  }, [messages, toast, provider, loginPrompt, session, authReady, signInWithGoogle]);
+  }, [
+    messages,
+    toast,
+    provider,
+    loginPrompt,
+    session,
+    authReady,
+    signInWithGoogle,
+    appendAssistantText,
+    runImageGeneration,
+  ]);
 
   return {
     messages,
@@ -1211,5 +1328,6 @@ export function useChat() {
     isAuthLoading,
     signInWithGoogle,
     signOut,
+    appendAssistantText,
   };
 }

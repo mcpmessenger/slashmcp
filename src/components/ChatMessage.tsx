@@ -11,6 +11,7 @@ interface ChatMessageProps {
 export const ChatMessage = memo(({ message }: ChatMessageProps) => {
   const isUser = message.role === "user";
   const isStock = message.type === "stock" && message.role === "assistant";
+  const isImage = message.type === "image" && message.role === "assistant";
 
   return (
     <div className={cn("flex gap-3 animate-fade-in", isUser ? "justify-end" : "justify-start")}>
@@ -22,7 +23,7 @@ export const ChatMessage = memo(({ message }: ChatMessageProps) => {
       <div
         className={cn(
           "max-w-[80%] rounded-2xl",
-          isStock ? "p-0 overflow-hidden" : "px-4 py-3",
+            isStock || isImage ? "p-0 overflow-hidden" : "px-4 py-3",
           isUser
             ? "bg-primary/10 backdrop-blur-xl border border-primary/20 text-foreground"
             : "bg-gradient-glass backdrop-blur-xl border border-glass-border/30 text-foreground/90",
@@ -30,6 +31,33 @@ export const ChatMessage = memo(({ message }: ChatMessageProps) => {
       >
         {isStock && message.type === "stock" ? (
           <StockQuoteCard title={message.content} insights={message.stock} />
+          ) : isImage && message.type === "image" ? (
+            <div className="flex flex-col gap-3 p-3">
+              <div
+                className={cn(
+                  "grid gap-3",
+                  message.images.length === 1 ? "grid-cols-1" : "sm:grid-cols-2",
+                )}
+              >
+                {message.images.map((image, index) => (
+                  <figure
+                    key={index}
+                    className="overflow-hidden rounded-xl border border-glass-border/40 bg-muted/20"
+                  >
+                    <img
+                      src={`data:${image.mimeType};base64,${image.base64}`}
+                      alt={message.content ? `${message.content} (variation ${index + 1})` : `Generated image ${index + 1}`}
+                      className="h-full w-full object-cover"
+                    />
+                  </figure>
+                ))}
+              </div>
+              {message.content && (
+                <p className="text-xs leading-relaxed text-foreground/70">
+                  Prompt: <span className="font-medium text-foreground/80">{message.content}</span>
+                </p>
+              )}
+            </div>
         ) : (
           <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
         )}

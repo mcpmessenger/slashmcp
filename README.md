@@ -6,7 +6,7 @@ Next-gen AI workspace for document intelligence, multimodal upload flows, and co
 - Vision-first analysis with GPT‑4o (Gemini fallback scaffolding is in place)
 - OCR orchestration through AWS Textract
 - Persistent job tracking and status updates via Supabase
-- Planned voice (Whisper / Google Cloud TTS) and image generation (OpenAI or Gemini) services
+- Voice (Whisper / Google Cloud TTS) pipeline scaffolding plus Gemini image generation via `/imagine`
 
 > **Project repo:** https://github.com/mcpmessenger/gloom-light-switch
 
@@ -65,6 +65,7 @@ npx supabase secrets set \
   SERVICE_ROLE_KEY=<supabase-service-role-key> \
   OPENAI_API_KEY=<openai-key> \
   GEMINI_API_KEY=<optional-gemini-key> \
+  GEMINI_IMAGE_MODEL=gemini-2.5-flash-image \
   ALPHAVANTAGE_API_KEY=<alpha-vantage-key> \
   TWELVEDATA_API_KEY=<twelve-data-key> \
   ALPHAVANTAGE_CACHE_TTL_MS=300000 \
@@ -110,7 +111,7 @@ npx supabase functions serve --env-file supabase/.env # optional local function 
 
 5. **Future Scaffolding**
    - Hooks and menu options exist for Whisper ASR and Google TTS pipelines.
-   - `src/lib/api.ts` exposes placeholders for voice/image generation APIs.
+   - Natural language prompts (or `/imagine <prompt>`) funnel through `supabase/functions/image-generator`, which now targets the Gemini 2.5 Flash Image (“Nano Banana”) model for generation.
 6. **Stock Quotes & Charts**
    - Enter `/quote AAPL`, `/stock MSFT 3m`, or `/ticker NVDA 1y` in the chat input to fetch Alpha Vantage data.
    - The assistant renders a price card with daily trend chart, change metrics, and key stats.
@@ -166,7 +167,7 @@ npx supabase functions deploy <function-name> --project-ref <ref>
 - Ensure Supabase migrations have been applied (`analysis_results` vision columns and unique index).
 - Set S3 CORS to allow your dev/prod origins and methods (`GET,PUT,POST,HEAD`).
 - When deploying to new environments, rotate and populate Supabase function secrets before invoking uploads/vision workers.
-- Voice and image generation features will require additional secrets (Whisper, Google TTS, Gemini / OpenAI image endpoints).
+- Voice synthesis (Whisper, Google TTS) still requires additional secrets; Gemini image generation expects `GEMINI_API_KEY` (and optional `GEMINI_IMAGE_MODEL`).
 - MCP gateway should expose a single `/invoke` endpoint compatible with the JSON payload emitted by `src/lib/mcp/client.ts`.
 
 ---
