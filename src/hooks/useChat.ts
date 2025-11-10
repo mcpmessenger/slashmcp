@@ -467,43 +467,96 @@ function detectRangeFromText(rawInput: string): ParsedStockCommand["range"] | un
   return undefined;
 }
 
+const STOCK_INTENT_KEYWORDS = [
+  "stock",
+  "stocks",
+  "shares",
+  "share",
+  "price",
+  "quote",
+  "ticker",
+  "trading",
+  "trade",
+  "market",
+  "worth",
+  "value",
+];
+
+function extractTickerFromTokens(tokens: string[]): string | null {
+  for (const token of tokens) {
+    if (!token) continue;
+    const cleaned = token.replace(/'s$/i, "").replace(/[^a-zA-Z0-9.\-:]/g, "");
+    if (!cleaned) continue;
+    const upper = cleaned.toUpperCase();
+    if (upper.length < 1 || upper.length > 5) continue;
+    if (TICKER_STOP_WORDS.has(upper)) continue;
+    if (/^[A-Z]{1,5}$/.test(upper)) {
+      return upper;
+    }
+  }
+  return null;
+}
+
+function extractTickerFromText(rawInput: string): string | null {
+  const tokens = rawInput.split(/[\s,!?]+/);
+  const tickerFromTokens = extractTickerFromTokens(tokens);
+  if (tickerFromTokens) return tickerFromTokens;
+
+  const lower = rawInput.toLowerCase();
+  for (const [company, ticker] of Object.entries(COMPANY_TICKERS)) {
+    if (lower.includes(company)) {
+      return ticker;
+    }
+  }
+
+  const match = lower.match(/\b(?:for|about|on)\s+([a-z]{1,15})\b/);
+  if (match?.[1]) {
+    const candidate = match[1];
+    const ticker = COMPANY_TICKERS[candidate];
+    if (ticker) return ticker;
+  }
+
+  return null;
+}
+
 function parseNaturalLanguageStockRequest(rawInput: string): ParsedStockCommand | null {
   const lower = rawInput.toLowerCase();
   if (POLYMARKET_KEYWORDS.some(keyword => lower.includes(keyword))) {
     return null;
   }
-  let symbol = "";
+
+  const hasStockIntent = STOCK_INTENT_KEYWORDS.some(keyword => lower.includes(keyword));
+  if (!hasStockIntent) {
+    return null;
+  }
+
+  let symbol = extractTickerFromText(rawInput);
   if (!symbol) {
-    const tokens = rawInput.split(/[\s,!?]+/);
-    for (const token of tokens) {
-      if (!token) continue;
-      if (token !== token.toUpperCase()) continue;
-      const cleaned = token.replace(/'s$/i, "").replace(/[^a-zA-Z0-9.\-:]/g, "");
-      if (!cleaned) continue;
-      const upper = cleaned.toUpperCase();
-      if (upper.length < 1 || upper.length > 5) continue;
-      if (upper !== cleaned.toUpperCase()) continue;
-      if (TICKER_STOP_WORDS.has(upper)) continue;
-      if (/^[A-Z]{1,5}$/.test(upper)) {
-        symbol = upper;
-        break;
+    const upperTokens = rawInput
+      .split(/[\s,!?]+/)
+      .map(token => token.replace(/'s$/i, "").replace(/[^a-zA-Z0-9.\-:]/g, ""))
+      .filter(Boolean);
+    symbol = extractTickerFromTokens(upperTokens) ?? null;
+  }
+
+  if (!symbol) {
+    const fallback = rawInput.match(/\b([A-Z]{1,5})\b/);
+    if (fallback) {
+      const candidate = fallback[1].toUpperCase();
+      if (!TICKER_STOP_WORDS.has(candidate)) {
+        symbol = candidate;
       }
     }
   }
-  const match = rawInput.trim().match(STOCK_COMMAND_REGEX);
-  if (!match) return null;
-  const [, rawSymbol, rawRange] = match;
-  if (symbol) {
-    const normalizedRange = rawRange?.toUpperCase() as ParsedStockCommand["range"] | undefined;
-    return {
-      symbol: symbol,
-      range: normalizedRange,
-    };
+
+  if (!symbol) {
+    return null;
   }
-  const normalizedRange = rawRange?.toUpperCase() as ParsedStockCommand["range"] | undefined;
+
+  const range = detectRangeFromText(rawInput);
   return {
-    symbol: rawSymbol.toUpperCase(),
-    range: normalizedRange,
+    symbol,
+    range,
   };
 }
 
