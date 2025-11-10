@@ -166,7 +166,7 @@ npx supabase functions deploy <function-name> --project-ref <ref>
 - Ensure Supabase migrations have been applied (`analysis_results` vision columns and unique index).
 - Set S3 CORS to allow your dev/prod origins and methods (`GET,PUT,POST,HEAD`).
 - When deploying to new environments, rotate and populate Supabase function secrets before invoking uploads/vision workers.
-- Voice and image generation features will require additional secrets (Whisper, Google TTS, Gemini / OpenAI image endpoints).
+- Voice synthesis (Whisper, Google TTS) still requires additional secrets; Gemini image generation expects `GEMINI_API_KEY` (and optional `GEMINI_IMAGE_MODEL` if you override the default `gemini-2.5-flash-image`). Favicon and logo assets now live under `public/Untitled design.svg` and `public/Untitled design (12/14).png`.
 - MCP gateway should expose a single `/invoke` endpoint compatible with the JSON payload emitted by `src/lib/mcp/client.ts`.
 
 ---
