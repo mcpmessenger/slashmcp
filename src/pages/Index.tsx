@@ -75,7 +75,7 @@ const Index = () => {
               <div className="leading-tight">
                 <p className="font-semibold text-base text-foreground">SlashMCP Assistant</p>
                 <p className="text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
-                  MCP-Powered AI Workspace
+                  MCP-powered AI workspace for document intelligence
                 </p>
               </div>
             </div>
@@ -146,9 +146,7 @@ const Index = () => {
             <div className="text-center mt-20 space-y-3">
               <h1 className="text-4xl font-bold text-foreground">SlashMCP Assistant</h1>
               <p className="text-muted-foreground">
-                MCP-powered AI workspace for document intelligence, multimodal analysis, and
-                conversational insights. Integrates with the official MCP Registry for tool
-                discovery.
+                MCP-powered AI workspace for document intelligence.
               </p>
               <span className="inline-flex items-center justify-center rounded-full border border-border/40 bg-muted/40 px-3 py-1 text-xs uppercase tracking-wide text-foreground/70">
                 Model: {providerLabel}

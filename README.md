@@ -1,6 +1,6 @@
 # Gloom Light Switch
 
-MCP-powered AI workspace for document intelligence, multimodal analysis, and conversational insights. This project wires together Supabase, AWS, and multiple vision/LLM providers—and integrates with the official MCP Registry for tool discovery—to deliver:
+MCP-powered AI workspace for document intelligence.
 
 - Drag-and-drop uploads for PDFs, images, and media
 - Vision-first analysis with GPT‑4o (Gemini fallback scaffolding is in place)
