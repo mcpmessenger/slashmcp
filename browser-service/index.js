@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
+import { install } from '@puppeteer/browsers';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,9 +21,25 @@ let browser = null;
 async function getBrowser() {
   if (!browser) {
     console.log('Launching browser...');
-    // Use regular puppeteer which downloads Chromium automatically
-    // On Render, this will use the bundled Chromium
+    
+    // Try to use system Chromium first, otherwise download it
+    let executablePath = process.env.CHROMIUM_PATH || 
+                        process.env.PUPPETEER_EXECUTABLE_PATH;
+    
+    if (!executablePath) {
+      // Download Chromium if not available
+      console.log('Downloading Chromium...');
+      const browserPath = await install({
+        browser: 'chromium',
+        buildId: 'latest',
+        cacheDir: process.env.HOME || '/tmp'
+      });
+      executablePath = browserPath.executablePath;
+      console.log(`Chromium downloaded to: ${executablePath}`);
+    }
+    
     browser = await puppeteer.launch({
+      executablePath,
       headless: true,
       args: [
         '--no-sandbox',
