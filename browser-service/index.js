@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import puppeteer from 'puppeteer-core';
-import { execSync } from 'child_process';
+import puppeteer from 'puppeteer';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -21,37 +20,9 @@ let browser = null;
 async function getBrowser() {
   if (!browser) {
     console.log('Launching browser...');
-    // Try to find Chromium in common locations
-    const possiblePaths = [
-      process.env.CHROMIUM_PATH,
-      process.env.PUPPETEER_EXECUTABLE_PATH,
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/usr/bin/google-chrome',
-      '/usr/bin/google-chrome-stable'
-    ].filter(Boolean);
-    
-    let executablePath = null;
-    for (const path of possiblePaths) {
-      try {
-        execSync(`which ${path}`, { stdio: 'ignore' });
-        executablePath = path;
-        break;
-      } catch {
-        // Try next path
-      }
-    }
-    
-    // If still not found, try to find it with 'which'
-    if (!executablePath) {
-      try {
-        executablePath = execSync('which chromium || which chromium-browser || which google-chrome', { encoding: 'utf8' }).trim();
-      } catch {
-        // Will use default
-      }
-    }
-    
-    const launchOptions = {
+    // Use regular puppeteer which downloads Chromium automatically
+    // On Render, this will use the bundled Chromium
+    browser = await puppeteer.launch({
       headless: true,
       args: [
         '--no-sandbox',
@@ -62,16 +33,7 @@ async function getBrowser() {
         '--window-size=1920x1080'
       ],
       timeout: 60000
-    };
-    
-    if (executablePath) {
-      launchOptions.executablePath = executablePath;
-      console.log(`Using Chromium at: ${executablePath}`);
-    } else {
-      console.log('Using default Puppeteer Chromium');
-    }
-    
-    browser = await puppeteer.launch(launchOptions);
+    });
     console.log('Browser launched successfully');
   }
   return browser;
