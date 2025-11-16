@@ -1,7 +1,28 @@
 {
-  "name": "vite_react_shadcn_ts",
+  "name": "slashmcp",
+  "version": "1.0.0",
+  "description": "MCP-powered AI workspace for document intelligence, multi-agent orchestration, and dynamic MCP server management",
+  "author": "SlashMCP Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mcpmessenger/slashmcp.git"
+  },
+  "homepage": "https://slashmcp.vercel.app",
+  "bugs": {
+    "url": "https://github.com/mcpmessenger/slashmcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "document-intelligence",
+    "multi-agent",
+    "supabase",
+    "react",
+    "typescript"
+  ],
   "private": true,
-  "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -1,16 +1,23 @@
-# Gloom Light Switch
+# SlashMCP
 
-MCP-powered AI workspace for document intelligence.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18.3-61dafb.svg)](https://reactjs.org/)
+[![Vite](https://img.shields.io/badge/Vite-5.4-646cff.svg)](https://vitejs.dev/)
+
+MCP-powered AI workspace for document intelligence, multi-agent orchestration, and dynamic MCP server management.
+
+**Live Demo:** [slashmcp.vercel.app](https://slashmcp.vercel.app) | **Repository:** [github.com/mcpmessenger/slashmcp](https://github.com/mcpmessenger/slashmcp)
 
 <!-- Trigger Vercel redeploy -->
 
-- Drag-and-drop uploads for PDFs, images, and media
-- Vision-first analysis with GPT‑4o (Gemini fallback scaffolding is in place)
-- OCR orchestration through AWS Textract
-- Persistent job tracking and status updates via Supabase
-- Voice (Whisper / Google Cloud TTS) pipeline scaffolding plus Gemini image generation via `/imagine`
+- 🚀 **Dynamic MCP Server Registry** - Manage and invoke Model Context Protocol servers from the chat interface
+- 📄 **Document Intelligence** - Drag-and-drop uploads with OCR via AWS Textract and vision analysis via GPT‑4o
+- 📊 **Financial Data** - Stock quotes, charts, and prediction market data through integrated MCP servers
+- 🤖 **Multi-Agent Framework** - Orchestrate multiple AI agents with standardized MCP tool access
+- 🔄 **LLM Switching** - Seamlessly switch between OpenAI, Anthropic, and Gemini providers at runtime
 
-> **Project repo:** https://github.com/mcpmessenger/gloom-light-switch
+> **Project repo:** https://github.com/mcpmessenger/slashmcp
 
 ---
 
@@ -39,8 +46,8 @@ MCP-powered AI workspace for document intelligence.
 ### Setup
 
 ```bash
-git clone https://github.com/mcpmessenger/gloom-light-switch.git
-cd gloom-light-switch
+git clone https://github.com/mcpmessenger/slashmcp.git
+cd slashmcp
 npm install
 ```
 
@@ -113,16 +120,19 @@ npx supabase functions serve --env-file supabase/.env # optional local function 
 
 5. **Future Scaffolding**
    - Hooks and menu options exist for Whisper ASR and Google TTS pipelines.
-   - Natural language prompts (or `/imagine <prompt>`) funnel through `supabase/functions/image-generator`, which now targets the Gemini 2.5 Flash Image (“Nano Banana”) model for generation.
+   - Natural language prompts (or `/imagine <prompt>`) funnel through `supabase/functions/image-generator`, which now targets the Gemini 2.5 Flash Image ("Nano Banana") model for generation.
+
 6. **Stock Quotes & Charts**
    - Enter `/quote AAPL`, `/stock MSFT 3m`, or `/ticker NVDA 1y` in the chat input to fetch Alpha Vantage data.
    - The assistant renders a price card with daily trend chart, change metrics, and key stats.
    - MCP endpoint support is scaffolded so `/alphavantage-mcp get_stock_chart symbol=NVDA` uses the same rendering pipeline (Supabase edge function `mcp`).
    - Quotes are cached for 5 minutes and automatically fall back to Twelve Data (if `TWELVEDATA_API_KEY` is set) when Alpha Vantage hits premium/rate limits.
-8. **Prediction Markets**
+
+7. **Prediction Markets**
    - Use `/polymarket-mcp get_market_price market_id=us_election_2024` to pull live odds from Polymarket via the Supabase `mcp` function.
    - Responses include best bid/ask, implied probability, liquidity, and are cached for 2 minutes (configurable via `POLYMARKET_CACHE_TTL_MS`).
-7. **Provider Switching**
+
+8. **Provider Switching**
    - Use `/model openai`, `/model anthropic`, or `/model gemini` to switch the backing LLM at runtime (defaults to OpenAI).
    - Environment variables and Supabase function secrets (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`) must be configured for each provider you plan to use.
 
@@ -193,6 +203,20 @@ npx supabase functions deploy <function-name> --project-ref <ref>
 
 ---
 
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
 ## License
 
-This project currently has no explicit license. Add one before distributing or accepting external contributions.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+---
+
+**Built with ❤️ by the SlashMCP team**
