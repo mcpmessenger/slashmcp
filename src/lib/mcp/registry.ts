@@ -231,6 +231,35 @@ export const MCP_SERVER_REGISTRY: McpServerDefinition[] = [
       },
     ],
   },
+  {
+    id: "search-mcp",
+    label: "Web Search",
+    description: "Open-source web search powered by DuckDuckGo Instant Answer API.",
+    category: "knowledge",
+    install: "See https://github.com/mcpmessenger/search",
+    commands: [
+      {
+        name: "web_search",
+        title: "Web Search",
+        description: "Search the web using DuckDuckGo and return top results with titles, URLs, and snippets.",
+        parameters: [
+          {
+            name: "query",
+            description: "Search query string.",
+            required: true,
+            example: "Model Context Protocol",
+          },
+          {
+            name: "max_results",
+            description: "Maximum number of results to return (default: 5).",
+            required: false,
+            example: "3",
+          },
+        ],
+        example: "/search-mcp web_search query=\"Model Context Protocol\" max_results=3",
+      },
+    ],
+  },
 ];
 
 export function findServerDefinition(serverId: string) {

@@ -91,11 +91,12 @@ serve(async (req) => {
     });
   }
 
+  // Look up server by id OR name (to support friendly names like "search-mcp")
   const { data: server, error } = await supabase
     .from("mcp_servers")
     .select("id, user_id, gateway_url, auth_type, auth_secret, metadata, is_active")
-    .eq("id", serverId)
     .eq("user_id", user.id)
+    .or(`id.eq.${serverId},name.eq.${serverId}`)
     .maybeSingle();
 
   if (error || !server) {

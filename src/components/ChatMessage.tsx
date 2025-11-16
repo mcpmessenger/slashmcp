@@ -8,6 +8,41 @@ interface ChatMessageProps {
   message: Message;
 }
 
+// Convert URLs in text to clickable links
+function linkifyText(text: string): React.ReactNode {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = urlRegex.exec(text)) !== null) {
+    // Add text before the URL
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    // Add the URL as a clickable link
+    const url = match[0];
+    parts.push(
+      <a
+        key={match.index}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary hover:underline break-all"
+      >
+        {url}
+      </a>,
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  // Add remaining text
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return parts.length > 0 ? parts : text;
+}
+
 export const ChatMessage = memo(({ message }: ChatMessageProps) => {
   const isUser = message.role === "user";
   const isStock = message.type === "stock" && message.role === "assistant";
@@ -59,7 +94,7 @@ export const ChatMessage = memo(({ message }: ChatMessageProps) => {
               )}
             </div>
         ) : (
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{message.content}</p>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{linkifyText(message.content)}</p>
         )}
       </div>
       {isUser && (

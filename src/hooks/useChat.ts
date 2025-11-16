@@ -394,11 +394,27 @@ function formatMcpResult(result: McpInvocationResult): string {
   }
 
   if (result.type === "json") {
-    if (result.summary) return result.summary;
     try {
-      return `\`\`\`json\n${JSON.stringify(result.data, null, 2)}\n\`\`\``;
+      const dataStr = JSON.stringify(result.data, null, 2);
+      // For search results, format them nicely
+      if (result.data && typeof result.data === "object" && "results" in result.data) {
+        const searchData = result.data as { query?: string; maxResults?: number; results?: Array<{ title: string; url: string; snippet: string }> };
+        const results = searchData.results ?? [];
+        if (results.length > 0) {
+          const lines = results.map((r, i) => {
+            return `${i + 1}. **${r.title}**\n   ${r.url}\n   ${r.snippet}`;
+          });
+          const header = result.summary ? `${result.summary}\n\n` : "";
+          return `${header}${lines.join("\n\n")}`;
+        }
+      }
+      // For other JSON, show summary if available, otherwise show formatted JSON
+      if (result.summary) {
+        return `${result.summary}\n\n\`\`\`json\n${dataStr}\n\`\`\``;
+      }
+      return `\`\`\`json\n${dataStr}\n\`\`\``;
     } catch {
-      return "Received JSON response from MCP command.";
+      return result.summary || "Received JSON response from MCP command.";
     }
   }
 
@@ -1033,7 +1049,7 @@ export function useChat() {
     ) => {
       setIsLoading(true);
       try {
-        const response = await invokeMcpCommand(invocation);
+        const response = await invokeMcpCommand(invocation, registry);
         const { result } = response;
 
         if (isErrorResult(result)) {

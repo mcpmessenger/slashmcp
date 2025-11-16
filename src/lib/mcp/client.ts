@@ -1,4 +1,4 @@
-import type { McpInvocation, McpInvocationResponse, McpInvocationResult } from "./types";
+import type { McpInvocation, McpInvocationResponse, McpInvocationResult, McpRegistryEntry } from "./types";
 import { supabaseClient } from "../supabaseClient";
 
 const fallbackFunctionsUrl = import.meta.env.VITE_SUPABASE_FUNCTIONS_URL;
@@ -29,8 +29,19 @@ export class McpClientNotConfiguredError extends Error {
   }
 }
 
-export async function invokeMcpCommand(invocation: McpInvocation): Promise<McpInvocationResponse> {
-  const isDynamicServer = invocation.serverId.toLowerCase().startsWith("srv_");
+export async function invokeMcpCommand(
+  invocation: McpInvocation,
+  registry?: McpRegistryEntry[],
+): Promise<McpInvocationResponse> {
+  // Check if this server is registered in the user's registry (by id or name)
+  const isRegistered =
+    registry?.some(
+      entry => entry.id === invocation.serverId || entry.name === invocation.serverId,
+    ) ?? false;
+
+  // Use mcp-proxy if it's a dynamic server (srv_...) OR if it's registered
+  // in the user's registry (even if it's also in the static registry)
+  const isDynamicServer = invocation.serverId.toLowerCase().startsWith("srv_") || isRegistered;
   const targetUrl = isDynamicServer ? MCP_PROXY_URL : MCP_STATIC_GATEWAY_URL;
 
   if (!targetUrl) {
