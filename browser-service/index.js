@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
 import puppeteer from 'puppeteer-core';
-import { install } from '@puppeteer/browsers';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -22,24 +21,30 @@ async function getBrowser() {
   if (!browser) {
     console.log('Launching browser...');
     
-    // Try to use system Chromium first, otherwise download it
-    let executablePath = process.env.CHROMIUM_PATH || 
-                        process.env.PUPPETEER_EXECUTABLE_PATH;
+    // Try common Chromium paths (installed via apt-get in build)
+    const possiblePaths = [
+      process.env.CHROMIUM_PATH,
+      process.env.PUPPETEER_EXECUTABLE_PATH,
+      '/usr/bin/chromium',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/google-chrome',
+      '/usr/bin/google-chrome-stable'
+    ].filter(Boolean);
     
-    if (!executablePath) {
-      // Download Chromium if not available
-      console.log('Downloading Chromium...');
-      const browserPath = await install({
-        browser: 'chromium',
-        buildId: 'latest',
-        cacheDir: process.env.HOME || '/tmp'
-      });
-      executablePath = browserPath.executablePath;
-      console.log(`Chromium downloaded to: ${executablePath}`);
+    let executablePath = null;
+    for (const path of possiblePaths) {
+      try {
+        const { execSync } = await import('child_process');
+        execSync(`which ${path}`, { stdio: 'ignore' });
+        executablePath = path;
+        break;
+      } catch {
+        // Try next path
+      }
     }
     
-    browser = await puppeteer.launch({
-      executablePath,
+    // If no system Chromium found, try channel option (uses system Chrome if available)
+    const launchOptions = {
       headless: true,
       args: [
         '--no-sandbox',
@@ -50,7 +55,18 @@ async function getBrowser() {
         '--window-size=1920x1080'
       ],
       timeout: 60000
-    });
+    };
+    
+    if (executablePath) {
+      launchOptions.executablePath = executablePath;
+      console.log(`Using Chromium at: ${executablePath}`);
+    } else {
+      // Try channel option as fallback
+      launchOptions.channel = 'chrome';
+      console.log('Using channel option (system Chrome/Chromium)');
+    }
+    
+    browser = await puppeteer.launch(launchOptions);
     console.log('Browser launched successfully');
   }
   return browser;
