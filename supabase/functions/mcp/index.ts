@@ -195,11 +195,13 @@ async function fetchPolymarketMarket(marketId: string): Promise<PolymarketMarket
   }
 
   if (!market || !market.id) {
-    throw new Error(
-      errors.length
-        ? `Polymarket market "${marketId}" was not found. Attempts: ${errors.join(" | ")}`
-        : `Polymarket market "${marketId}" was not found.`,
-    );
+    // Provide a more helpful error message
+    const errorMsg = errors.length
+      ? `Polymarket market "${marketId}" was not found. The market ID must match the exact slug from Polymarket.com. ` +
+        `Tried variations: ${errors.slice(0, 3).map(e => e.split('→')[0].trim()).join(', ')}. ` +
+        `Please check Polymarket.com for the correct market slug.`
+      : `Polymarket market "${marketId}" was not found. Please verify the market ID matches the exact slug from Polymarket.com.`;
+    throw new Error(errorMsg);
   }
 
   const normalize = (value: unknown): number | null => {

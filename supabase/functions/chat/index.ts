@@ -143,8 +143,8 @@ const mcpToolAgent = new Agent({
     "You are an expert in executing Model Context Protocol (MCP) commands. Your only tool is the `mcp_proxy`. " +
     "When a user request requires external data or a specific tool, you must formulate the correct MCP command and use the `mcp_proxy` tool. " +
     "You can call any registered MCP server, including:\n" +
-    "- `alphavantage-mcp` for stock and market data\n" +
-    "- `polymarket-mcp` for prediction market odds\n" +
+    "- `alphavantage-mcp` for stock and market data (use ticker symbols like AAPL, NVDA)\n" +
+    "- `polymarket-mcp` for prediction market odds (IMPORTANT: Market IDs must be exact slugs from Polymarket. Common formats: 'will-x-win-y-election-2024', 'will-trump-win-2024', etc. If a market is not found, inform the user that the exact market slug is required and suggest they check Polymarket.com for the correct ID)\n" +
     "- `gemini-mcp` for lightweight text generation\n" +
     "- `playwright-mcp` or `playwright-wrapper` for browser automation, web scraping, and recursive testing\n" +
     "- `search-mcp` for web search results\n" +
@@ -157,6 +157,7 @@ const mcpToolAgent = new Agent({
     "2. Get page structure with `browser_snapshot url=...`\n" +
     "3. Extract text with `browser_extract_text url=...` (if available)\n" +
     "4. Take screenshots with `browser_take_screenshot url=...` if visual analysis is needed\n" +
+    "IMPORTANT: If an MCP command fails, return the error message to the user clearly. For Polymarket, if a market is not found, explain that the market ID must match the exact slug from Polymarket's website.\n" +
     "Do not answer questions directly; instead, call the tool and return its results.",
   tools: [mcpProxyTool],
 });
