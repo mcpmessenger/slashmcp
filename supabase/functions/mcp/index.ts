@@ -195,12 +195,16 @@ async function fetchPolymarketMarket(marketId: string): Promise<PolymarketMarket
   }
 
   if (!market || !market.id) {
-    // Provide a more helpful error message
+    // Provide a more helpful error message with search suggestion
+    const searchTerm = marketId.replace(/[-_]/g, " ").replace(/\s+/g, "+");
+    const searchUrl = `https://polymarket.com/search?q=${encodeURIComponent(marketId.replace(/[-_]/g, " "))}`;
+    
     const errorMsg = errors.length
       ? `Polymarket market "${marketId}" was not found. The market ID must match the exact slug from Polymarket.com. ` +
         `Tried variations: ${errors.slice(0, 3).map(e => e.split('→')[0].trim()).join(', ')}. ` +
-        `Please check Polymarket.com for the correct market slug.`
-      : `Polymarket market "${marketId}" was not found. Please verify the market ID matches the exact slug from Polymarket.com.`;
+        `To find the correct market, try searching on Polymarket.com or use browser automation to navigate to: ${searchUrl}`
+      : `Polymarket market "${marketId}" was not found. Please verify the market ID matches the exact slug from Polymarket.com. ` +
+        `You can search for markets at: ${searchUrl}`;
     throw new Error(errorMsg);
   }
 

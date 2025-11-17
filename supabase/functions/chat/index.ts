@@ -144,10 +144,20 @@ const mcpToolAgent = new Agent({
     "When a user request requires external data or a specific tool, you must formulate the correct MCP command and use the `mcp_proxy` tool. " +
     "You can call any registered MCP server, including:\n" +
     "- `alphavantage-mcp` for stock and market data (use ticker symbols like AAPL, NVDA)\n" +
-    "- `polymarket-mcp` for prediction market odds (IMPORTANT: Market IDs must be exact slugs from Polymarket. Common formats: 'will-x-win-y-election-2024', 'will-trump-win-2024', etc. If a market is not found, inform the user that the exact market slug is required and suggest they check Polymarket.com for the correct ID)\n" +
+    "- `polymarket-mcp` for prediction market odds (IMPORTANT: Market IDs must be exact slugs from Polymarket)\n" +
     "- `gemini-mcp` for lightweight text generation\n" +
     "- `playwright-mcp` or `playwright-wrapper` for browser automation, web scraping, and recursive testing\n" +
     "- `search-mcp` for web search results\n" +
+    "\n" +
+    "CRITICAL POLYMARKET WORKFLOW:\n" +
+    "If a Polymarket market is not found:\n" +
+    "1. First, try the `polymarket-mcp` command with the provided market ID\n" +
+    "2. If it fails with 'market not found', use `playwright-wrapper` to search Polymarket.com:\n" +
+    "   a. Navigate to Polymarket search: `/playwright-wrapper browser_navigate url=https://polymarket.com/search?q=SEARCH_TERM`\n" +
+    "   b. Get page snapshot: `/playwright-wrapper browser_snapshot`\n" +
+    "   c. Extract market slugs from the results\n" +
+    "   d. Try the `polymarket-mcp` command again with the correct slug\n" +
+    "\n" +
     "For browser automation, web scraping, or research tasks:\n" +
     "- Use `playwright-wrapper` (or `srv_...` ID) with commands like `browser_navigate`, `browser_snapshot`, `browser_extract_text`\n" +
     "- For recursive testing of the app itself, navigate to the app URL, get snapshots, and interact with elements\n" +
@@ -157,7 +167,8 @@ const mcpToolAgent = new Agent({
     "2. Get page structure with `browser_snapshot url=...`\n" +
     "3. Extract text with `browser_extract_text url=...` (if available)\n" +
     "4. Take screenshots with `browser_take_screenshot url=...` if visual analysis is needed\n" +
-    "IMPORTANT: If an MCP command fails, return the error message to the user clearly. For Polymarket, if a market is not found, explain that the market ID must match the exact slug from Polymarket's website.\n" +
+    "\n" +
+    "IMPORTANT: If a Polymarket market lookup fails, automatically use browser automation to search Polymarket.com and find the correct market slug. Then retry the market lookup with the correct slug.\n" +
     "Do not answer questions directly; instead, call the tool and return its results.",
   tools: [mcpProxyTool],
 });
@@ -193,6 +204,7 @@ const orchestratorAgent = new Agent({
     "use the `handoff_to_mcp_tool` handoff so the MCP_Tool_Agent can call MCP servers via the `mcp_proxy` tool. " +
     "For example, when the user asks you to visit a website, scrape information from a page, or generate/repair Playwright tests, " +
     "you should trigger `handoff_to_mcp_tool` so it can use the `playwright-mcp` server. " +
+    "For Polymarket queries where the market ID might be unclear, the MCP_Tool_Agent will automatically use browser automation to search if needed. " +
     "If you receive tool results and further synthesis is needed, use the `handoff_to_final_answer` handoff.",
   handoffs: [mcpHandoff, finalHandoff],
 });
