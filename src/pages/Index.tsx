@@ -8,6 +8,8 @@ import { useToast } from "@/components/ui/use-toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { McpEventLog } from "@/components/McpEventLog";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,6 +40,7 @@ const Index = () => {
     appendAssistantText,
     setProvider: setChatProvider,
     registry,
+    mcpEvents,
   } = useChat();
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -203,7 +206,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <div className="px-4 pt-6">
-        <div className="max-w-4xl mx-auto flex flex-col gap-4">
+        <div className="max-w-[1600px] mx-auto flex flex-col gap-4">
           <div className="flex items-center justify-between gap-4 px-1 py-1 sm:px-2">
             <div className="flex items-center gap-3">
               <img src="/Untitled design.svg" alt="SlashMCP logo" className="h-10 w-auto" />
@@ -278,41 +281,56 @@ const Index = () => {
         </div>
       </div>
 
-      {/* Chat Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto space-y-6">
-          {messages.length === 0 ? (
-            <div className="text-center mt-20 space-y-3">
-              <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
-              <p className="text-muted-foreground">
-                MCP-powered AI workspace for document intelligence.
-              </p>
-              {renderModelMenu("initial")}
-            </div>
-          ) : (
-            <div className="flex justify-center">
-              {renderModelMenu("compact")}
-            </div>
-          )}
-          {messages.map((message, index) => (
-            <ChatMessage key={index} message={message} />
-          ))}
-          {isLoading && (
-            <div className="flex gap-3 justify-start animate-fade-in">
-              <div className="h-8 w-8 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
-                <div className="h-2 w-2 bg-foreground/50 rounded-full animate-pulse" />
+      {/* Chat Messages with Dual-Terminal Layout */}
+      <div className="flex-1 overflow-hidden">
+        <ResizablePanelGroup direction="horizontal" className="h-full">
+          {/* Left Pane: Chat */}
+          <ResizablePanel defaultSize={70} minSize={40} className="min-w-0">
+            <div className="h-full overflow-y-auto px-4 py-8">
+              <div className="max-w-4xl mx-auto space-y-6">
+                {messages.length === 0 ? (
+                  <div className="text-center mt-20 space-y-3">
+                    <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
+                    <p className="text-muted-foreground">
+                      MCP-powered AI workspace for document intelligence.
+                    </p>
+                    {renderModelMenu("initial")}
+                  </div>
+                ) : (
+                  <div className="flex justify-center">
+                    {renderModelMenu("compact")}
+                  </div>
+                )}
+                {messages.map((message, index) => (
+                  <ChatMessage key={index} message={message} />
+                ))}
+                {isLoading && (
+                  <div className="flex gap-3 justify-start animate-fade-in">
+                    <div className="h-8 w-8 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
+                      <div className="h-2 w-2 bg-foreground/50 rounded-full animate-pulse" />
+                    </div>
+                    <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
+                      <div className="flex gap-1">
+                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
-              <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
-                <div className="flex gap-1">
-                  <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                  <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                  <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                </div>
-              </div>
             </div>
-          )}
-          <div ref={messagesEndRef} />
-        </div>
+          </ResizablePanel>
+
+          {/* Resizable Handle */}
+          <ResizableHandle withHandle className="hidden lg:flex" />
+
+          {/* Right Pane: MCP Event Log */}
+          <ResizablePanel defaultSize={30} minSize={20} maxSize={50} className="hidden lg:block min-w-0">
+            <McpEventLog events={mcpEvents} className="h-full border-l" />
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
 
       {/* Chat Input */}

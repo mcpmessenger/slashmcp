@@ -280,7 +280,7 @@ const encoder = new TextEncoder();
 const QUOTE_CACHE_TTL_MS = Number(Deno.env.get("ALPHAVANTAGE_CACHE_TTL_MS") ?? 5 * 60 * 1000);
 const POLYMARKET_CACHE_TTL_MS = Number(Deno.env.get("POLYMARKET_CACHE_TTL_MS") ?? 2 * 60 * 1000);
 
-type QuoteProvider = "alphavantage-daily" | "alphavantage-global" | "twelvedata";
+type QuoteProvider = "alphavantage-daily" | "alphavantage-global" | "twelvedata" | "google-finance";
 
 type CachedQuote = {
   stock: StockInsights;
@@ -504,6 +504,87 @@ async function fetchGlobalQuote(symbol: string): Promise<StockInsights> {
   };
 }
 
+async function fetchGoogleFinanceQuote(symbol: string): Promise<StockInsights> {
+  const upperSymbol = symbol.toUpperCase();
+  const url = `https://www.google.com/finance/quote/${upperSymbol}:NASDAQ`;
+  
+  // Try multiple exchanges
+  const exchanges = ["NASDAQ", "NYSE", "NSE", "BSE"];
+  let html = "";
+  let lastError: Error | null = null;
+  
+  for (const exchange of exchanges) {
+    try {
+      const financeUrl = `https://www.google.com/finance/quote/${upperSymbol}:${exchange}`;
+      const response = await fetch(financeUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        },
+      });
+      
+      if (response.ok) {
+        html = await response.text();
+        // Check if we got actual data (not a 404 page)
+        if (html.includes(upperSymbol) && (html.includes("data-last-price") || html.includes("data-price"))) {
+          break;
+        }
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      continue;
+    }
+  }
+  
+  if (!html) {
+    throw lastError || new Error(`Unable to fetch Google Finance data for ${upperSymbol}`);
+  }
+  
+  // Extract price from HTML (Google Finance uses data attributes)
+  const priceMatch = html.match(/data-last-price="([^"]+)"/) || html.match(/data-price="([^"]+)"/);
+  const changeMatch = html.match(/data-change="([^"]+)"/);
+  const changePercentMatch = html.match(/data-change-percent="([^"]+)"/);
+  
+  if (!priceMatch) {
+    throw new Error(`Could not extract price from Google Finance for ${upperSymbol}`);
+  }
+  
+  const price = parseNumeric(priceMatch[1]);
+  if (typeof price !== "number") {
+    throw new Error(`Invalid price format from Google Finance for ${upperSymbol}`);
+  }
+  
+  const change = changeMatch ? parseNumeric(changeMatch[1]) : 0;
+  const changePercent = changePercentMatch 
+    ? parseNumeric(changePercentMatch[1]?.replace("%", "")) 
+    : (change && price ? (change / (price - change)) * 100 : 0);
+  
+  // For Google Finance, we'll create a minimal chart with just the current price
+  // since we don't have historical data easily available
+  return {
+    symbol: upperSymbol,
+    companyName: upperSymbol,
+    price,
+    previousClose: price - (change ?? 0),
+    change: change ?? 0,
+    changePercent: changePercent ?? 0,
+    open: price,
+    high: price,
+    low: price,
+    volume: undefined,
+    currency: "USD",
+    marketCap: undefined,
+    lastRefreshed: new Date().toISOString(),
+    timezone: undefined,
+    range: "1M",
+    chart: [
+      {
+        date: new Date().toISOString().slice(0, 10),
+        close: price,
+      },
+    ],
+  };
+}
+
 async function fetchTwelveDataQuote(symbol: string): Promise<StockInsights> {
   const apiKey = Deno.env.get("TWELVEDATA_API_KEY");
   if (!apiKey) {
@@ -686,6 +767,16 @@ async function handleAlphaVantage(invocation: McpInvocation): Promise<McpInvocat
         } catch (error) {
           errors.push(`[Twelve Data] ${(error as Error)?.message ?? String(error)}`);
         }
+      }
+    }
+
+    // Final fallback: Try Google Finance via browser automation
+    if (!stock) {
+      try {
+        stock = await fetchGoogleFinanceQuote(symbol);
+        provider = "google-finance";
+      } catch (error) {
+        errors.push(`[Google Finance] ${(error as Error)?.message ?? String(error)}`);
       }
     }
 

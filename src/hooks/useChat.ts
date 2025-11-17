@@ -25,6 +25,7 @@ import {
   getStaleKeys,
   checkApiKey,
 } from "@/lib/keyManager";
+import type { McpEvent } from "@/components/McpEventLog";
 
 export type Provider = "openai" | "anthropic" | "gemini";
 
@@ -405,7 +406,74 @@ const COMPANY_TICKERS: Record<string, string> = {
 };
 
 const TICKER_STOP_WORDS = new Set([
+  // Question words
   "WHAT",
+  "WHATS",
+  "WHAT'S",
+  "HOW",
+  "WHEN",
+  "WHERE",
+  "WHY",
+  "WHO",
+  "WHICH",
+  // Common verbs
+  "IS",
+  "ARE",
+  "WAS",
+  "WERE",
+  "BE",
+  "BEEN",
+  "BEING",
+  "HAVE",
+  "HAS",
+  "HAD",
+  "DO",
+  "DOES",
+  "DID",
+  "WILL",
+  "WOULD",
+  "CAN",
+  "COULD",
+  "SHOULD",
+  "MAY",
+  "MIGHT",
+  "MUST",
+  "SHALL",
+  // Articles and determiners
+  "A",
+  "AN",
+  "THE",
+  "THIS",
+  "THAT",
+  "THESE",
+  "THOSE",
+  // Prepositions
+  "FOR",
+  "AND",
+  "OR",
+  "BUT",
+  "WITH",
+  "ABOUT",
+  "INTO",
+  "THROUGH",
+  "DURING",
+  "INCLUDING",
+  "AGAINST",
+  "AMONG",
+  "THROUGHOUT",
+  "DESPITE",
+  "TOWARDS",
+  "UPON",
+  "CONCERNING",
+  "TO",
+  "OF",
+  "IN",
+  "ON",
+  "AT",
+  "BY",
+  "FROM",
+  "UP",
+  // Common request words
   "SHOW",
   "PLEASE",
   "TELL",
@@ -622,18 +690,22 @@ function extractTickerFromTokens(tokens: string[]): string | null {
 }
 
 function extractTickerFromText(rawInput: string): string | null {
-  const tokens = rawInput.split(/[\s,!?]+/);
-  const tickerFromTokens = extractTickerFromTokens(tokens);
-  if (tickerFromTokens) return tickerFromTokens;
-
   const lower = rawInput.toLowerCase();
+  
+  // First, check for company names (before token extraction to avoid false positives)
   for (const [company, ticker] of Object.entries(COMPANY_TICKERS)) {
     if (lower.includes(company)) {
       return ticker;
     }
   }
 
-  const match = lower.match(/\b(?:for|about|on)\s+([a-z]{1,15})\b/);
+  // Then try to extract from tokens (but filter out common words)
+  const tokens = rawInput.split(/[\s,!?]+/);
+  const tickerFromTokens = extractTickerFromTokens(tokens);
+  if (tickerFromTokens) return tickerFromTokens;
+
+  // Try pattern matching for "what/for/about [company]" format
+  const match = lower.match(/\b(?:what|whats|what's|for|about|on|the)\s+(?:price|price\s+of|stock|stock\s+of|trading\s+at)?\s*([a-z]{1,15})\b/);
   if (match?.[1]) {
     const candidate = match[1];
     const ticker = COMPANY_TICKERS[candidate];
@@ -739,6 +811,7 @@ function parseElectionOddsIntent(rawInput: string): { marketId: string } | null 
 
 export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [mcpEvents, setMcpEvents] = useState<McpEvent[]>([]);
 
   const appendAssistantText = useCallback((text: string) => {
     setMessages(prev => [...prev, { role: "assistant", type: "text", content: text }]);
@@ -1319,10 +1392,31 @@ export function useChat() {
       context: "generic" | "stock" = "generic",
     ) => {
       setIsLoading(true);
+      
+      // Log tool call event
+      setMcpEvents(prev => [...prev, {
+        type: "toolCall",
+        timestamp: Date.now(),
+        tool: "mcp_proxy",
+        command: invocation.rawInput || `${invocation.serverId} ${invocation.command}`,
+        metadata: { invocation, context },
+      }]);
+      
       try {
         const response = await invokeMcpCommand(invocation, registry);
         const { result } = response;
 
+        // Log tool result event
+        setMcpEvents(prev => [...prev, {
+          type: isErrorResult(result) ? "error" : "toolResult",
+          timestamp: Date.now(),
+          tool: "mcp_proxy",
+          command: invocation.rawInput || `${invocation.serverId} ${invocation.command}`,
+          result: isTextualResult(result) ? result.content : result,
+          error: isErrorResult(result) ? result.message : undefined,
+          metadata: { invocation, context },
+        }]);
+        
         if (isErrorResult(result)) {
           if (context === "stock") {
             toast({
@@ -1397,6 +1491,17 @@ export function useChat() {
         } else {
           console.error("MCP command error:", error);
           const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          // Log error event
+          setMcpEvents(prev => [...prev, {
+            type: "error",
+            timestamp: Date.now(),
+            tool: "mcp_proxy",
+            command: invocation.rawInput || `${invocation.serverId} ${invocation.command}`,
+            error: errorMessage,
+            metadata: { invocation, context },
+          }]);
+          
           if (context === "stock") {
             let friendlyMessage =
               "Sorry, I wasn't able to retrieve that stock quote. Please try again in a moment.";
@@ -1546,6 +1651,8 @@ export function useChat() {
     }
 
     setIsLoading(true);
+    // Clear previous MCP events when starting a new message
+    setMcpEvents([]);
     let assistantContent = "";
 
     const updateAssistantMessage = (chunk: string) => {
@@ -1645,9 +1752,19 @@ export function useChat() {
 
           try {
             const parsed = JSON.parse(jsonStr);
+            
+            // Handle MCP events
+            if (parsed.mcpEvent) {
+              console.log("Received MCP event:", parsed.mcpEvent);
+              setMcpEvents(prev => [...prev, parsed.mcpEvent as McpEvent]);
+            }
+            
+            // Handle content
             const content = parsed.choices?.[0]?.delta?.content as string | undefined;
             if (content) updateAssistantMessage(content);
-          } catch {
+          } catch (error) {
+            // Log parse errors for debugging
+            console.warn("Failed to parse SSE line:", jsonStr, error);
             textBuffer = line + "\n" + textBuffer;
             break;
           }
@@ -1664,9 +1781,20 @@ export function useChat() {
           if (jsonStr === "[DONE]") continue;
           try {
             const parsed = JSON.parse(jsonStr);
+            
+            // Handle MCP events
+            if (parsed.mcpEvent) {
+              console.log("Received MCP event (buffer):", parsed.mcpEvent);
+              setMcpEvents(prev => [...prev, parsed.mcpEvent as McpEvent]);
+            }
+            
+            // Handle content
             const content = parsed.choices?.[0]?.delta?.content as string | undefined;
             if (content) updateAssistantMessage(content);
-          } catch { /* ignore partial leftovers */ }
+          } catch (error) {
+            // Log parse errors for debugging
+            console.warn("Failed to parse SSE line (buffer):", jsonStr, error);
+          }
         }
       }
 
@@ -1709,5 +1837,6 @@ export function useChat() {
     signInWithGoogle,
     signOut,
     appendAssistantText,
+    mcpEvents,
   };
 }

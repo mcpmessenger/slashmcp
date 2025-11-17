@@ -46,6 +46,49 @@ function respondWithStreamedText(text: string, corsHeaders: Record<string, strin
   });
 }
 
+// Enhanced streaming response that supports both content and MCP events
+function createEventStream(corsHeaders: Record<string, string>) {
+  let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+  
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c;
+    },
+  });
+
+  const sendContent = (content: string) => {
+    if (controller) {
+      const payload = JSON.stringify({ choices: [{ delta: { content } }] });
+      controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+    }
+  };
+
+  const sendEvent = (event: {
+    type: string;
+    timestamp: number;
+    agent?: string;
+    tool?: string;
+    command?: string;
+    result?: unknown;
+    error?: string;
+    metadata?: Record<string, unknown>;
+  }) => {
+    if (controller) {
+      const payload = JSON.stringify({ mcpEvent: event });
+      controller.enqueue(encoder.encode(`data: ${payload}\n\n`));
+    }
+  };
+
+  const close = () => {
+    if (controller) {
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    }
+  };
+
+  return { stream, sendContent, sendEvent, close };
+}
+
 function mapMessagesForAnthropic(messages: Array<{ role: string; content: string }>) {
   return messages.map(message => ({
     role: message.role === "assistant" ? "assistant" : "user",
@@ -319,6 +362,16 @@ serve(async (req) => {
               );
             }
 
+            // Create event stream for real-time MCP event logging
+            const eventStream = createEventStream(corsHeaders);
+            
+            // Send initial event to confirm connection
+            eventStream.sendEvent({
+              type: "system",
+              timestamp: Date.now(),
+              metadata: { message: "Agents SDK Runner started" },
+            });
+            
             // Collect all content from the streaming events.
             let eventCount = 0;
             for await (const event of events as AsyncIterable<{ 
@@ -331,14 +384,67 @@ serve(async (req) => {
               textDelta?: unknown;
               message?: unknown;
               agentMessage?: unknown;
+              agent?: unknown;
+              tool?: unknown;
+              toolCall?: unknown;
+              toolResult?: unknown;
             }>) {
               eventCount++;
               const eventStr = JSON.stringify(event).slice(0, 300);
               console.log(`Event #${eventCount} - Type: ${event.type}`, eventStr);
               
+              // Send MCP event to frontend for logging
+              const timestamp = Date.now();
+              const eventData: {
+                type: string;
+                timestamp: number;
+                agent?: string;
+                tool?: string;
+                command?: string;
+                result?: unknown;
+                error?: string;
+                metadata?: Record<string, unknown>;
+              } = {
+                type: event.type,
+                timestamp,
+              };
+
+              // Extract agent information
+              if ((event as any).agent) {
+                eventData.agent = String((event as any).agent);
+              } else if ((event as any).agentMessage?.agent) {
+                eventData.agent = String((event as any).agentMessage.agent);
+              }
+
+              // Extract tool call information
+              if ((event as any).toolCall) {
+                const toolCall = (event as any).toolCall;
+                eventData.tool = toolCall.name || toolCall.tool;
+                eventData.command = toolCall.input?.command || toolCall.arguments?.command || JSON.stringify(toolCall.input || toolCall.arguments);
+                eventData.metadata = { toolCall };
+              } else if ((event as any).tool) {
+                eventData.tool = String((event as any).tool);
+              }
+
+              // Extract tool result
+              if ((event as any).toolResult) {
+                const toolResult = (event as any).toolResult;
+                eventData.result = toolResult.result || toolResult.output || toolResult;
+                if (toolResult.error) {
+                  eventData.error = String(toolResult.error);
+                }
+              }
+
+              // Extract MCP command from tool calls
+              if (eventData.tool === "mcp_proxy" && eventData.command) {
+                eventData.metadata = { ...eventData.metadata, mcpCommand: eventData.command };
+              }
+
               if (event.type === "error") {
                 errorOccurred = true;
                 errorMessage = event.error instanceof Error ? event.error.message : String(event.error);
+                eventData.error = errorMessage;
+                eventStream.sendEvent(eventData);
                 console.error("Agent runner error:", event.error);
                 break;
               } else if (event.type === "finalOutput") {
@@ -357,6 +463,8 @@ serve(async (req) => {
                     }
                   }
                 }
+                eventData.result = event.output;
+                eventStream.sendEvent(eventData);
               } else if (event.type === "content" || event.type === "text" || event.type === "textDelta" || event.type === "delta") {
                 // Collect streaming content from various event types
                 const content = (event as any).content || (event as any).text || (event as any).textDelta || (event as any).delta;
@@ -367,6 +475,8 @@ serve(async (req) => {
                     console.log("Collected content chunk:", contentStr.slice(0, 50));
                   }
                 }
+                eventData.result = content;
+                eventStream.sendEvent(eventData);
               } else if (event.type === "newMessage" || event.type === "message" || event.type === "agentMessage") {
                 // Some SDK versions use newMessage/message/agentMessage events
                 const message = event as any;
@@ -375,9 +485,15 @@ serve(async (req) => {
                   contentParts.push(messageContent);
                   console.log("Collected message content:", messageContent.slice(0, 50));
                 }
+                eventData.result = messageContent;
+                eventStream.sendEvent(eventData);
+              } else if (event.type === "toolCall" || event.type === "toolResult") {
+                // Explicitly handle tool call events
+                eventStream.sendEvent(eventData);
               } else {
-                // Log all other event types for debugging
+                // Log all other event types for debugging and send to frontend
                 console.log(`Unhandled event type: ${event.type}`, eventStr);
+                eventStream.sendEvent(eventData);
               }
             }
             
@@ -387,11 +503,35 @@ serve(async (req) => {
             if (!finalOutput && contentParts.length > 0) {
               finalOutput = contentParts.join("");
             }
+
+            // Stream the final output
+            if (finalOutput) {
+              eventStream.sendContent(finalOutput);
+            }
+            eventStream.close();
+
+            return new Response(eventStream.stream, {
+              headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+            });
           } catch (runnerError) {
             errorOccurred = true;
             errorMessage = runnerError instanceof Error ? runnerError.message : String(runnerError);
             console.error("Runner execution error:", runnerError);
             console.error("Error stack:", runnerError instanceof Error ? runnerError.stack : "No stack");
+            
+            // Send error event and return stream
+            const errorEventStream = createEventStream(corsHeaders);
+            errorEventStream.sendEvent({
+              type: "error",
+              timestamp: Date.now(),
+              error: errorMessage,
+            });
+            errorEventStream.sendContent(`Error: ${errorMessage}`);
+            errorEventStream.close();
+            
+            return new Response(errorEventStream.stream, {
+              headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+            });
           }
 
           // If Runner succeeded but produced no output, fall back to direct API
@@ -407,7 +547,21 @@ serve(async (req) => {
 
       // Fallback to direct OpenAI API if Agents SDK didn't work
       if (!useAgentsSdk || errorOccurred) {
-        console.log("Using direct OpenAI API");
+        console.log("Using direct OpenAI API (fallback mode)");
+        
+        const eventStream = createEventStream(corsHeaders);
+        eventStream.sendEvent({
+          type: "fallback",
+          timestamp: Date.now(),
+          metadata: { reason: errorOccurred ? "error" : "no_output" },
+        });
+        
+        // Send a content event to indicate we're using direct API
+        eventStream.sendEvent({
+          type: "system",
+          timestamp: Date.now(),
+          metadata: { message: "Using direct OpenAI API (Agents SDK unavailable)" },
+        });
         
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
@@ -428,10 +582,22 @@ serve(async (req) => {
         if (!response.ok) {
           const errorText = await response.text();
           console.error("OpenAI API error:", response.status, errorText);
+          eventStream.sendEvent({
+            type: "error",
+            timestamp: Date.now(),
+            error: `OpenAI API request failed: ${errorText}`,
+          });
+          eventStream.close();
           throw new Error(`OpenAI API request failed: ${errorText}`);
         }
 
         if (!response.body) {
+          eventStream.sendEvent({
+            type: "error",
+            timestamp: Date.now(),
+            error: "No response body from OpenAI API",
+          });
+          eventStream.close();
           throw new Error("No response body from OpenAI API");
         }
 
@@ -455,6 +621,7 @@ serve(async (req) => {
                 const content = data.choices?.[0]?.delta?.content;
                 if (content) {
                   finalOutput += content;
+                  eventStream.sendContent(content);
                 }
               } catch {
                 // Ignore parse errors
@@ -465,9 +632,16 @@ serve(async (req) => {
 
         if (!finalOutput || finalOutput.trim().length === 0) {
           finalOutput = "I was not able to generate a response. Please try rephrasing your question or asking again in a moment.";
+          eventStream.sendContent(finalOutput);
         }
+        
+        eventStream.close();
+        return new Response(eventStream.stream, {
+          headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+        });
       }
 
+      // This should not be reached, but fallback just in case
       return respondWithStreamedText(finalOutput, corsHeaders);
     }
 
