@@ -231,108 +231,170 @@ serve(async (req) => {
         throw new Error("OPENAI_API_KEY is not configured");
       }
 
-      // Create runner with API key for this request
-      const runner = new Runner({
-        model: "gpt-4o-mini",
-        apiKey: apiKey,
-      });
-
-      const lastUserMessage = conversation.length
-        ? conversation[conversation.length - 1]?.content ?? ""
-        : "";
-
-      // Run the multi-agent workflow via the OpenAI Agents SDK.
+      // Try using OpenAI Agents SDK first, fall back to direct API if it fails
+      let useAgentsSdk = true;
       let finalOutput = "";
       let errorOccurred = false;
       let errorMessage = "";
-      const contentParts: string[] = [];
 
-      try {
-        const events = await runner.run(
-          orchestratorAgent,
-          lastUserMessage,
-          {
-            tools: [mcpProxyTool],
-            maxTurns: 15,
-            stream: true,
-          },
-        );
+      if (useAgentsSdk) {
+        try {
+          // Create runner with API key for this request
+          const runner = new Runner({
+            model: "gpt-4o-mini",
+            apiKey: apiKey,
+          });
 
-        // Collect all content from the streaming events.
-        for await (const event of events as AsyncIterable<{ 
-          type: string; 
-          output?: unknown; 
-          error?: unknown;
-          content?: string | unknown;
-          text?: string;
-        }>) {
-          console.log("Event received:", event.type, JSON.stringify(event).slice(0, 200));
-          
-          if (event.type === "error") {
-            errorOccurred = true;
-            errorMessage = event.error instanceof Error ? event.error.message : String(event.error);
-            console.error("Agent runner error:", event.error);
-          } else if (event.type === "finalOutput") {
-            if (event.output !== undefined) {
-              if (typeof event.output === "string") {
-                finalOutput = event.output;
-                contentParts.push(event.output);
-              } else {
-                try {
-                  const outputStr = JSON.stringify(event.output);
-                  finalOutput = outputStr;
-                  contentParts.push(outputStr);
-                } catch {
-                  finalOutput = String(event.output);
-                  contentParts.push(finalOutput);
+          const lastUserMessage = conversation.length
+            ? conversation[conversation.length - 1]?.content ?? ""
+            : "";
+
+          const contentParts: string[] = [];
+
+          try {
+            const events = await runner.run(
+              orchestratorAgent,
+              lastUserMessage,
+              {
+                tools: [mcpProxyTool],
+                maxTurns: 15,
+                stream: true,
+              },
+            );
+
+            // Collect all content from the streaming events.
+            for await (const event of events as AsyncIterable<{ 
+              type: string; 
+              output?: unknown; 
+              error?: unknown;
+              content?: string | unknown;
+              text?: string;
+              delta?: unknown;
+            }>) {
+              console.log("Event received:", event.type, JSON.stringify(event).slice(0, 200));
+              
+              if (event.type === "error") {
+                errorOccurred = true;
+                errorMessage = event.error instanceof Error ? event.error.message : String(event.error);
+                console.error("Agent runner error:", event.error);
+                break;
+              } else if (event.type === "finalOutput") {
+                if (event.output !== undefined) {
+                  if (typeof event.output === "string") {
+                    finalOutput = event.output;
+                    contentParts.push(event.output);
+                  } else {
+                    try {
+                      const outputStr = JSON.stringify(event.output);
+                      finalOutput = outputStr;
+                      contentParts.push(outputStr);
+                    } catch {
+                      finalOutput = String(event.output);
+                      contentParts.push(finalOutput);
+                    }
+                  }
+                }
+              } else if (event.type === "content" || event.type === "text" || event.type === "delta") {
+                // Collect streaming content
+                const content = event.content || event.text || event.delta;
+                if (content) {
+                  const contentStr = typeof content === "string" ? content : String(content);
+                  if (contentStr.trim()) {
+                    contentParts.push(contentStr);
+                  }
+                }
+              } else if (event.type === "newMessage" || event.type === "message") {
+                // Some SDK versions use newMessage/message events
+                const message = event as any;
+                if (message.content && typeof message.content === "string") {
+                  contentParts.push(message.content);
                 }
               }
             }
-          } else if (event.type === "content" || event.type === "text") {
-            // Collect streaming content
-            const content = event.content || event.text;
-            if (content) {
-              const contentStr = typeof content === "string" ? content : String(content);
-              contentParts.push(contentStr);
+            
+            // If we collected content parts but no finalOutput, combine them
+            if (!finalOutput && contentParts.length > 0) {
+              finalOutput = contentParts.join("");
             }
-          } else if (event.type === "newMessage") {
-            // Some SDK versions use newMessage events
-            const message = event as any;
-            if (message.content && typeof message.content === "string") {
-              contentParts.push(message.content);
-            }
+          } catch (runnerError) {
+            errorOccurred = true;
+            errorMessage = runnerError instanceof Error ? runnerError.message : String(runnerError);
+            console.error("Runner execution error:", runnerError);
+            console.error("Error stack:", runnerError instanceof Error ? runnerError.stack : "No stack");
           }
+
+          // If Runner succeeded but produced no output, fall back to direct API
+          if (!errorOccurred && (!finalOutput || finalOutput.trim().length === 0)) {
+            console.warn("No output from Runner, falling back to direct OpenAI API");
+            useAgentsSdk = false;
+          }
+        } catch (sdkError) {
+          console.error("Failed to initialize Runner, falling back to direct API:", sdkError);
+          useAgentsSdk = false;
         }
+      }
+
+      // Fallback to direct OpenAI API if Agents SDK didn't work
+      if (!useAgentsSdk || errorOccurred) {
+        console.log("Using direct OpenAI API");
         
-        // If we collected content parts but no finalOutput, combine them
-        if (!finalOutput && contentParts.length > 0) {
-          finalOutput = contentParts.join("");
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [
+              { role: "system", content: SYSTEM_PROMPT },
+              ...conversation,
+            ],
+            stream: true,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("OpenAI API error:", response.status, errorText);
+          throw new Error(`OpenAI API request failed: ${errorText}`);
         }
-      } catch (runnerError) {
-        errorOccurred = true;
-        errorMessage = runnerError instanceof Error ? runnerError.message : String(runnerError);
-        console.error("Runner execution error:", runnerError);
-        console.error("Error stack:", runnerError instanceof Error ? runnerError.stack : "No stack");
-      }
 
-      if (errorOccurred) {
-        console.error("Agent execution failed:", errorMessage);
-        return new Response(
-          JSON.stringify({ 
-            error: `Agent execution failed: ${errorMessage}`,
-            details: "Check server logs for more information"
-          }), 
-          {
-            status: 500,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
+        if (!response.body) {
+          throw new Error("No response body from OpenAI API");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let textBuffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          textBuffer += decoder.decode(value, { stream: true });
+          
+          const lines = textBuffer.split("\n");
+          textBuffer = lines.pop() || "";
+          
+          for (const line of lines) {
+            if (line.startsWith("data: ") && line !== "data: [DONE]") {
+              try {
+                const data = JSON.parse(line.slice(6));
+                const content = data.choices?.[0]?.delta?.content;
+                if (content) {
+                  finalOutput += content;
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
           }
-        );
-      }
+        }
 
-      if (!finalOutput || finalOutput.trim().length === 0) {
-        console.warn("No output generated from agent runner. Collected parts:", contentParts.length);
-        finalOutput =
-          "I was not able to generate a response. Please try rephrasing your question or asking again in a moment.";
+        if (!finalOutput || finalOutput.trim().length === 0) {
+          finalOutput = "I was not able to generate a response. Please try rephrasing your question or asking again in a moment.";
+        }
       }
 
       return respondWithStreamedText(finalOutput, corsHeaders);
