@@ -1099,6 +1099,573 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
   };
 }
 
+// Helper function to get Google Places API key
+async function getGooglePlacesApiKey(userId?: string): Promise<string | null> {
+  // First check environment variable (Supabase secret)
+  const envKey = Deno.env.get("GOOGLE_PLACES_API_KEY");
+  if (envKey) {
+    return envKey;
+  }
+
+  // If no env key and user is authenticated, check key manager database
+  if (userId) {
+    try {
+      const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL");
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      const ENCRYPTION_KEY = Deno.env.get("ENCRYPTION_KEY") ?? "default-encryption-key-change-in-production";
+
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+        return null;
+      }
+
+      const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+
+      // Look for a key with provider "google_places", "google_places_api_key", or "google_maps" for this user
+      // Try multiple queries to find the key
+      let keyData: { encrypted_key: string } | null = null;
+      let queryError: any = null;
+      
+      // First try: exact provider match
+      console.log(`[Google Places] Query 1: Looking for provider="google_places_api_key"`);
+      const { data: data1, error: error1 } = await supabase
+        .from("api_keys")
+        .select("encrypted_key, provider, name")
+        .eq("user_id", userId)
+        .eq("provider", "google_places_api_key")
+        .eq("is_active", true)
+        .maybeSingle();
+      
+      console.log(`[Google Places] Query 1 result:`, { found: !!data1, error: error1, data: data1 ? { provider: data1.provider, name: data1.name } : null });
+      
+      if (!error1 && data1) {
+        keyData = { encrypted_key: data1.encrypted_key };
+      } else {
+        queryError = error1;
+        // Second try: other provider names
+        console.log(`[Google Places] Query 2: Looking for provider="google_places" or "google_maps"`);
+        const { data: data2, error: error2 } = await supabase
+          .from("api_keys")
+          .select("encrypted_key, provider, name")
+          .eq("user_id", userId)
+          .or("provider.eq.google_places,provider.eq.google_maps")
+          .eq("is_active", true)
+          .maybeSingle();
+        
+        console.log(`[Google Places] Query 2 result:`, { found: !!data2, error: error2, data: data2 ? { provider: data2.provider, name: data2.name } : null });
+        
+        if (!error2 && data2) {
+          keyData = { encrypted_key: data2.encrypted_key };
+        } else {
+          // Third try: name-based search
+          console.log(`[Google Places] Query 3: Looking for name containing "google_places" or "google_maps"`);
+          const { data: data3, error: error3 } = await supabase
+            .from("api_keys")
+            .select("encrypted_key, provider, name")
+            .eq("user_id", userId)
+            .or("name.ilike.%google_places%,name.ilike.%google_maps%")
+            .eq("is_active", true)
+            .limit(1)
+            .maybeSingle();
+          
+          console.log(`[Google Places] Query 3 result:`, { found: !!data3, error: error3, data: data3 ? { provider: data3.provider, name: data3.name } : null });
+          
+          if (!error3 && data3) {
+            keyData = { encrypted_key: data3.encrypted_key };
+          } else {
+            queryError = error3 || error2 || error1;
+          }
+        }
+      }
+
+      if (!keyData) {
+        // Let's also check what keys exist for this user to help debug
+        const { data: allKeys, error: listError } = await supabase
+          .from("api_keys")
+          .select("id, name, provider, is_active")
+          .eq("user_id", userId);
+        
+        console.log(`[Google Places] All keys for user ${userId}:`, { keys: allKeys, listError });
+        console.log("[Google Places] API key not found. Searched for providers: google_places_api_key, google_places, google_maps");
+        console.log("[Google Places] Query errors:", queryError);
+        
+        // Last resort: try to find any key with "google" in the name or provider
+        if (allKeys && allKeys.length > 0) {
+          const googleKey = allKeys.find((k: any) => 
+            (k.name && (k.name.toLowerCase().includes("google") || k.name.toLowerCase().includes("places"))) ||
+            (k.provider && (k.provider.toLowerCase().includes("google") || k.provider.toLowerCase().includes("places")))
+          );
+          
+          if (googleKey) {
+            console.log(`[Google Places] Found potential Google key:`, googleKey);
+            // Try to get this key
+            const { data: foundKey, error: foundError } = await supabase
+              .from("api_keys")
+              .select("encrypted_key")
+              .eq("id", googleKey.id)
+              .eq("is_active", true)
+              .single();
+            
+            if (!foundError && foundKey) {
+              console.log(`[Google Places] Using fallback key: ${googleKey.name} (provider: ${googleKey.provider})`);
+              keyData = foundKey;
+            }
+          }
+        }
+        
+        if (!keyData) {
+          return null;
+        }
+      }
+
+      // Decrypt the key
+      try {
+        const { data: decryptedKey, error: decryptError } = await supabase.rpc("decrypt_key_value", {
+          key_value: keyData.encrypted_key,
+          encryption_key: ENCRYPTION_KEY,
+        });
+
+        if (decryptError || !decryptedKey) {
+          console.error("Failed to decrypt Google Places API key:", decryptError);
+          return null;
+        }
+
+        console.log("Successfully retrieved Google Places API key from key manager");
+        return decryptedKey;
+      } catch (decryptException) {
+        console.error("Exception decrypting Google Places API key:", decryptException);
+        return null;
+      }
+    } catch (error) {
+      console.error("Error getting Google Places API key from key manager:", error);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function handleGooglePlaces(invocation: McpInvocation, userId?: string): Promise<McpInvocationResponse> {
+  const startedAt = performance.now();
+  const args = invocation.args ?? {};
+  const command = invocation.command ?? "get_place_details";
+
+  // Get API key
+  const apiKey = await getGooglePlacesApiKey(userId);
+  if (!apiKey) {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Google Places API key is not configured. Please set GOOGLE_PLACES_API_KEY as a Supabase secret or add it via the Key Manager Agent.",
+        details: {
+          setup: "Get your API key from Google Cloud Console: https://console.cloud.google.com/",
+          keyManager: "Use the Key Manager Agent: /key add google_places_api_key <name> key=YOUR_API_KEY",
+          envVar: "Or set GOOGLE_PLACES_API_KEY as a Supabase secret",
+          docs: "https://developers.google.com/maps/documentation/places/web-service/get-api-key",
+        },
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  try {
+    if (command === "get_place_details") {
+      const placeId = args.place_id;
+      if (!placeId) {
+        return {
+          invocation,
+          result: {
+            type: "error",
+            message: "Missing required parameter: place_id",
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }
+
+      // Use Places API (New) - Place Details endpoint
+      const url = `https://places.googleapis.com/v1/places/${placeId}`;
+      
+      // Build field mask from requested fields or use defaults
+      const requestedFields = args.fields?.split(",").map((f: string) => f.trim()) || [];
+      const defaultFields = [
+        "id",
+        "displayName",
+        "formattedAddress",
+        "nationalPhoneNumber",
+        "websiteUri",
+        "regularOpeningHours",
+        "rating",
+        "userRatingCount",
+        "location",
+        "photos",
+        "reviews",
+      ];
+      
+      const fieldMask = requestedFields.length > 0 
+        ? requestedFields.join(",")
+        : defaultFields.join(",");
+
+      const response = await fetch(`${url}?fields=${encodeURIComponent(fieldMask)}`, {
+        method: "GET",
+        headers: {
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": fieldMask,
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Google Places API request failed (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      // Handle errors in new API format
+      if (data.error) {
+        throw new Error(`Google Places API error: ${data.error.message || JSON.stringify(data.error)}`);
+      }
+
+      // New API returns place data directly
+      const place = data;
+      
+      // Format result for compatibility
+      const enhancedResult: any = {
+        name: place.displayName?.text || place.name,
+        formatted_address: place.formattedAddress || "",
+        place_id: place.id,
+        rating: place.rating,
+        user_ratings_total: place.userRatingCount,
+        formatted_phone_number: place.nationalPhoneNumber || "",
+        website: place.websiteUri || "",
+        opening_hours: place.regularOpeningHours || null,
+        reviews: place.reviews || [],
+        photos: place.photos || [],
+      };
+      
+      // Generate Google Maps URL if we have coordinates
+      if (place.location) {
+        const lat = place.location.latitude;
+        const lng = place.location.longitude;
+        enhancedResult.map_url = `https://www.google.com/maps?q=${lat},${lng}`;
+        enhancedResult.map_embed_url = `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${lat},${lng}`;
+        enhancedResult.geometry = {
+          location: {
+            lat: lat,
+            lng: lng,
+          },
+        };
+      }
+      // Generate place URL if we have place_id
+      if (place.id) {
+        enhancedResult.place_url = `https://www.google.com/maps/place/?q=place_id:${place.id}`;
+      }
+
+      return {
+        invocation,
+        result: {
+          type: "json",
+          data: enhancedResult,
+          summary: enhancedResult.name 
+            ? `Retrieved details for ${enhancedResult.name}. Map link: ${enhancedResult.map_url || enhancedResult.place_url || "N/A"}` 
+            : "Place not found",
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    } else if (command === "search_places") {
+      const query = args.query;
+      if (!query) {
+        return {
+          invocation,
+          result: {
+            type: "error",
+            message: "Missing required parameter: query",
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }
+
+      // Use Places API (New) - Text Search endpoint
+      const url = "https://places.googleapis.com/v1/places:searchText";
+      
+      const requestBody: any = {
+        textQuery: query,
+      };
+      
+      // Add location bias if provided
+      if (args.location) {
+        const [lat, lng] = args.location.split(",").map(Number);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          requestBody.locationBias = {
+            circle: {
+              center: {
+                latitude: lat,
+                longitude: lng,
+              },
+              radius: 50000.0, // 50km radius
+            },
+          };
+        }
+      }
+
+      // Required field mask for Places API (New)
+      const fieldMask = "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.nationalPhoneNumber,places.websiteUri,places.regularOpeningHours";
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": fieldMask,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Google Places API request failed (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      // Handle errors in new API format
+      if (data.error) {
+        throw new Error(`Google Places API error: ${data.error.message || JSON.stringify(data.error)}`);
+      }
+
+      // New API returns places in data.places array
+      const places = data.places || [];
+      
+      console.log(`[Google Places] Search query: "${query}", Found ${places.length} places`);
+      
+      if (places.length === 0) {
+        return {
+          invocation,
+          result: {
+            type: "json",
+            data: {
+              query,
+              results: [],
+              total_results: 0,
+            },
+            summary: `No places found for "${query}". Try a different search term or check the spelling.`,
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }
+      
+      // Enhance results with map URLs and format for compatibility
+      const enhancedResults = places.map((place: any) => {
+        const result: any = {
+          name: place.displayName?.text || place.name,
+          formatted_address: place.formattedAddress || "",
+          place_id: place.id,
+          rating: place.rating,
+          user_ratings_total: place.userRatingCount,
+          geometry: place.location ? {
+            location: {
+              lat: place.location.latitude,
+              lng: place.location.longitude,
+            },
+          } : null,
+        };
+        
+        // Generate Google Maps URL if we have coordinates
+        if (place.location) {
+          const lat = place.location.latitude;
+          const lng = place.location.longitude;
+          result.map_url = `https://www.google.com/maps?q=${lat},${lng}`;
+          result.map_embed_url = `https://www.google.com/maps/embed/v1/place?key=${apiKey}&q=${lat},${lng}`;
+        }
+        // Generate place URL if we have place_id
+        if (place.id) {
+          result.place_url = `https://www.google.com/maps/place/?q=place_id:${place.id}`;
+        }
+        
+        // Add other available fields
+        if (place.nationalPhoneNumber) {
+          result.formatted_phone_number = place.nationalPhoneNumber;
+        }
+        if (place.websiteUri) {
+          result.website = place.websiteUri;
+        }
+        if (place.regularOpeningHours) {
+          result.opening_hours = place.regularOpeningHours;
+        }
+        
+        return result;
+      });
+
+      // Format opening hours for display
+      const formatOpeningHours = (hours: any): string => {
+        if (!hours || !hours.weekdayDescriptions) return '';
+        const openNow = hours.openNow ? '✅ Open Now' : '❌ Closed';
+        const nextTime = hours.openNow 
+          ? (hours.nextCloseTime ? ` (Closes at ${new Date(hours.nextCloseTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })})` : '')
+          : (hours.nextOpenTime ? ` (Opens at ${new Date(hours.nextOpenTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })})` : '');
+        return `${openNow}${nextTime}\n   ${hours.weekdayDescriptions.slice(0, 3).join('\n   ')}${hours.weekdayDescriptions.length > 3 ? '\n   ...' : ''}`;
+      };
+
+      const summary = enhancedResults.length > 0
+        ? `Found ${enhancedResults.length} location(s) for "${query}":\n\n${enhancedResults.map((r: any, i: number) => {
+            const hours = formatOpeningHours(r.opening_hours);
+            return `${i + 1}. **${r.name}**\n` +
+              `   📍 ${r.formatted_address || 'Address not available'}\n` +
+              (r.formatted_phone_number ? `   📞 ${r.formatted_phone_number}\n` : '') +
+              (r.rating ? `   ⭐ ${r.rating}/5 (${r.user_ratings_total || 0} reviews)\n` : '') +
+              (hours ? `   🕐 ${hours}\n` : '') +
+              (r.map_url ? `   🗺️ [View on Google Maps](${r.map_url}) | [Get Directions](${r.map_url})\n` : '') +
+              (r.website ? `   🌐 [Website](${r.website})\n` : '');
+          }).join('\n')}`
+        : `No results found for "${query}". Try a different search term or check the spelling.`;
+
+      // Create a more user-friendly response format
+      const userFriendlyResponse = {
+        query,
+        total_results: enhancedResults.length,
+        locations: enhancedResults.map((r: any) => ({
+          name: r.name,
+          address: r.formatted_address,
+          phone: r.formatted_phone_number,
+          rating: r.rating ? `${r.rating}/5 (${r.user_ratings_total || 0} reviews)` : null,
+          open_now: r.opening_hours?.openNow ?? null,
+          hours: r.opening_hours?.weekdayDescriptions?.slice(0, 3) || null,
+          map_link: r.map_url,
+          directions_link: r.map_url,
+          website: r.website,
+          place_id: r.place_id,
+        })),
+      };
+
+      return {
+        invocation,
+        result: {
+          type: "json",
+          data: userFriendlyResponse,
+          summary: summary,
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    } else if (command === "autocomplete") {
+      const input = args.input;
+      if (!input) {
+        return {
+          invocation,
+          result: {
+            type: "error",
+            message: "Missing required parameter: input",
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }
+
+      // Use Places API (New) - Autocomplete endpoint
+      const url = "https://places.googleapis.com/v1/places:autocomplete";
+      
+      const requestBody: any = {
+        input: input,
+      };
+      
+      // Add location bias if provided
+      if (args.location) {
+        const [lat, lng] = args.location.split(",").map(Number);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          requestBody.locationBias = {
+            circle: {
+              center: {
+                latitude: lat,
+                longitude: lng,
+              },
+              radius: 50000.0, // 50km radius
+            },
+          };
+        }
+      }
+
+      // Required field mask for Places API (New) - autocomplete
+      const fieldMask = "suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat";
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask": fieldMask,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Google Places API request failed (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      
+      // Handle errors in new API format
+      if (data.error) {
+        throw new Error(`Google Places API error: ${data.error.message || JSON.stringify(data.error)}`);
+      }
+
+      // New API returns suggestions in data.suggestions array
+      const suggestions = data.suggestions || [];
+      
+      // Format predictions for compatibility
+      const predictions = suggestions.map((suggestion: any) => ({
+        place_id: suggestion.placePrediction?.placeId || suggestion.placePrediction?.place?.id,
+        description: suggestion.placePrediction?.text?.text || suggestion.placePrediction?.text,
+        structured_formatting: suggestion.placePrediction?.structuredFormat || null,
+      }));
+
+      return {
+        invocation,
+        result: {
+          type: "json",
+          data: {
+            input,
+            predictions: predictions,
+            total_predictions: predictions.length,
+          },
+          summary: `Found ${predictions.length} suggestion(s) for "${input}"`,
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    } else {
+      return {
+        invocation,
+        result: {
+          type: "error",
+          message: `Unsupported command: ${command}. Supported commands: get_place_details, search_places, autocomplete`,
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[Google Places] Error in ${command}:`, message);
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Google Places API request failed",
+        details: message,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+}
+
 async function handleSearch(invocation: McpInvocation): Promise<McpInvocationResponse> {
   const startedAt = performance.now();
   const args = invocation.args ?? {};
@@ -1947,6 +2514,13 @@ serve(async req => {
     }
     if (invocation.serverId === "search-mcp") {
       const response = await handleSearch(invocation);
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (invocation.serverId === "google-places-mcp") {
+      const response = await handleGooglePlaces(invocation, userId);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

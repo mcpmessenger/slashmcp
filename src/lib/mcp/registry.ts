@@ -344,6 +344,154 @@ export const MCP_SERVER_REGISTRY: McpServerDefinition[] = [
       },
     ],
   },
+  {
+    id: "google-earth-engine-mcp",
+    label: "Google Earth Engine",
+    description: "Geospatial data analysis and satellite imagery processing using Google Earth Engine.",
+    category: "geospatial",
+    install: "npm install -g planetary-mcp-server@1.0.0",
+    environment: ["GOOGLE_EARTH_ENGINE_CREDENTIALS"],
+    docUrl: "https://mcpmarket.com/server/google-earth-engine",
+    commands: [
+      {
+        name: "search_datasets",
+        title: "Search Datasets",
+        description: "Search for available satellite datasets in Google Earth Engine catalog.",
+        parameters: [
+          {
+            name: "query",
+            description: "Search query for dataset names or keywords.",
+            required: true,
+            example: "Landsat",
+          },
+        ],
+        example: "/google-earth-engine-mcp search_datasets query=\"Landsat\"",
+      },
+      {
+        name: "get_image",
+        title: "Get Image",
+        description: "Retrieve satellite imagery for a specific location and time period.",
+        parameters: [
+          {
+            name: "dataset",
+            description: "Dataset name (e.g., 'LANDSAT/LC08/C02/T1_L2').",
+            required: true,
+            example: "LANDSAT/LC08/C02/T1_L2",
+          },
+          {
+            name: "location",
+            description: "Location coordinates or place name.",
+            required: true,
+            example: "San Francisco, CA",
+          },
+          {
+            name: "start_date",
+            description: "Start date (YYYY-MM-DD).",
+            required: false,
+            example: "2024-01-01",
+          },
+          {
+            name: "end_date",
+            description: "End date (YYYY-MM-DD).",
+            required: false,
+            example: "2024-12-31",
+          },
+        ],
+        example: "/google-earth-engine-mcp get_image dataset=\"LANDSAT/LC08/C02/T1_L2\" location=\"San Francisco\" start_date=\"2024-01-01\"",
+      },
+      {
+        name: "analyze_vegetation",
+        title: "Analyze Vegetation",
+        description: "Calculate NDVI (Normalized Difference Vegetation Index) for an area.",
+        parameters: [
+          {
+            name: "location",
+            description: "Location coordinates or place name.",
+            required: true,
+            example: "Amazon Rainforest",
+          },
+          {
+            name: "date",
+            description: "Date for analysis (YYYY-MM-DD).",
+            required: false,
+            example: "2024-06-01",
+          },
+        ],
+        example: "/google-earth-engine-mcp analyze_vegetation location=\"Amazon Rainforest\" date=\"2024-06-01\"",
+      },
+    ],
+  },
+  {
+    id: "google-places-mcp",
+    label: "Google Places",
+    description: "Access business details, locations, reviews, and place information via Google Places API.",
+    category: "location",
+    install: "Built-in (requires Google Maps API key)",
+    environment: ["GOOGLE_PLACES_API_KEY"],
+    docUrl: "https://developers.google.com/maps/documentation/places/web-service",
+    commands: [
+      {
+        name: "get_place_details",
+        title: "Get Place Details",
+        description: "Get detailed information about a place using its Place ID.",
+        parameters: [
+          {
+            name: "place_id",
+            description: "The Place ID from Google Places API.",
+            required: true,
+            example: "ChIJN1t_tDeuEmsRUsoyG83frY4",
+          },
+          {
+            name: "fields",
+            description: "Comma-separated list of fields to return (e.g., 'name,address,phone,website,opening_hours,reviews,photos,geometry').",
+            required: false,
+            example: "name,address,phone,website",
+          },
+        ],
+        example: "/google-places-mcp get_place_details place_id=\"ChIJN1t_tDeuEmsRUsoyG83frY4\" fields=\"name,address,phone\"",
+      },
+      {
+        name: "search_places",
+        title: "Search Places",
+        description: "Search for places by text query (business name, address, etc.).",
+        parameters: [
+          {
+            name: "query",
+            description: "Search query (business name, address, or location).",
+            required: true,
+            example: "Starbucks near Times Square",
+          },
+          {
+            name: "location",
+            description: "Latitude,longitude for location bias (optional).",
+            required: false,
+            example: "40.7580,-73.9855",
+          },
+        ],
+        example: "/google-places-mcp search_places query=\"Starbucks near Times Square\"",
+      },
+      {
+        name: "autocomplete",
+        title: "Place Autocomplete",
+        description: "Get place suggestions as user types (returns place_id).",
+        parameters: [
+          {
+            name: "input",
+            description: "The text string on which to search.",
+            required: true,
+            example: "Starbucks",
+          },
+          {
+            name: "location",
+            description: "Latitude,longitude for location bias (optional).",
+            required: false,
+            example: "40.7580,-73.9855",
+          },
+        ],
+        example: "/google-places-mcp autocomplete input=\"Starbucks\" location=\"40.7580,-73.9855\"",
+      },
+    ],
+  },
 ];
 
 export function findServerDefinition(serverId: string) {
