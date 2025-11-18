@@ -1671,12 +1671,26 @@ export function useChat() {
     try {
       const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
       const history = [...messages, userMsg].map(({ role, content }) => ({ role, content }));
+      
+      // Get session token for authentication
+      const {
+        data: { session },
+      } = await supabaseClient.auth.getSession();
+      
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      
+      // Use session token if available, otherwise fall back to anon key
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      } else if (import.meta.env.VITE_SUPABASE_ANON_KEY) {
+        headers.Authorization = `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`;
+      }
+      
       const response = await fetch(CHAT_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
+        headers,
         body: JSON.stringify({ messages: history, provider }),
       });
 

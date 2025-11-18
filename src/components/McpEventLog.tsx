@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { Search, Filter, X, AlertCircle, CheckCircle2, Loader2, Terminal } from "lucide-react";
+import { Search, Filter, X, AlertCircle, CheckCircle2, Loader2, Terminal, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ interface McpEventLogProps {
 
 const EVENT_TYPE_COLORS: Record<string, string> = {
   error: "destructive",
+  system: "secondary",
   toolCall: "default",
   toolResult: "secondary",
   finalOutput: "default",
@@ -42,6 +43,7 @@ const EVENT_TYPE_COLORS: Record<string, string> = {
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
   error: "Error",
+  system: "System Log",
   toolCall: "Tool Call",
   toolResult: "Tool Result",
   finalOutput: "Final Output",
@@ -219,6 +221,7 @@ export function McpEventLog({ events, className }: McpEventLogProps) {
               ) : (
                 filteredEvents.map((event, index) => {
                   const isError = event.type === "error" || !!event.error;
+                  const isSystem = event.type === "system";
                   const hasTool = !!event.tool;
                   const hasCommand = !!event.command;
 
@@ -229,6 +232,8 @@ export function McpEventLog({ events, className }: McpEventLogProps) {
                         "rounded-lg border p-2 text-xs transition-colors",
                         isError
                           ? "border-destructive/50 bg-destructive/10"
+                          : isSystem
+                          ? "border-blue-500/30 bg-blue-500/5"
                           : "border-border/50 bg-background/50 hover:bg-background/70"
                       )}
                     >
@@ -254,7 +259,10 @@ export function McpEventLog({ events, className }: McpEventLogProps) {
                           {isError && (
                             <AlertCircle className="h-3.5 w-3.5 text-destructive" />
                           )}
-                          {!isError && event.type === "toolResult" && (
+                          {isSystem && (
+                            <Info className="h-3.5 w-3.5 text-blue-500" />
+                          )}
+                          {!isError && !isSystem && event.type === "toolResult" && (
                             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />
                           )}
                         </div>

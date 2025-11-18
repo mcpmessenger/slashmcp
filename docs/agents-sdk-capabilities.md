@@ -108,7 +108,7 @@ If Agents SDK isn't working:
 2. **Check Logs**: Review function logs for error messages
 3. **Test Direct API**: The fallback should still work for basic chat
 4. **Event Debugging**: Add more logging to see what events are emitted
-5. **Version Check**: Verify `@openai/agents` version (currently 0.0.9)
+5. **Version Check**: Verify `@openai/agents` version (currently 0.3.2, upgraded from 0.0.9 to fix handoff bugs)
 
 ## Future Enhancements
 

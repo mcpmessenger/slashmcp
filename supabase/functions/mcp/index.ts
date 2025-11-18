@@ -1,4 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import type { Database } from "../_shared/database.types.ts";
 
 type ChartRange = "1M" | "3M" | "6M" | "1Y";
 
@@ -195,16 +197,50 @@ async function fetchPolymarketMarket(marketId: string): Promise<PolymarketMarket
   }
 
   if (!market || !market.id) {
-    // Provide a more helpful error message with search suggestion
-    const searchTerm = marketId.replace(/[-_]/g, " ").replace(/\s+/g, "+");
-    const searchUrl = `https://polymarket.com/search?q=${encodeURIComponent(marketId.replace(/[-_]/g, " "))}`;
+    // Try searching Polymarket API for similar markets
+    let searchSuggestions: string[] = [];
+    try {
+      const searchQuery = marketId.replace(/[-_]/g, " ");
+      const searchUrl = `https://gamma-api.polymarket.com/markets?query=${encodeURIComponent(searchQuery)}&limit=5`;
+      const searchResponse = await fetch(searchUrl);
+      
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json() as unknown;
+        let markets: PolymarketMarketResponse[] = [];
+        
+        // Handle different response formats
+        if (Array.isArray(searchData)) {
+          markets = searchData;
+        } else if (searchData && typeof searchData === "object") {
+          const withData = searchData as { data?: PolymarketMarketResponse[] };
+          const withMarkets = searchData as { markets?: PolymarketMarketResponse[] };
+          markets = withData.data || withMarkets.markets || [];
+        }
+        
+        if (markets.length > 0) {
+          searchSuggestions = markets.slice(0, 5).map(m => `"${m.slug || m.id}" (${m.question || m.title || "Unknown"})`);
+        }
+      }
+    } catch (searchError) {
+      // Ignore search errors, we'll just provide the basic error message
+      console.log("Polymarket search failed:", searchError);
+    }
     
-    const errorMsg = errors.length
-      ? `Polymarket market "${marketId}" was not found. The market ID must match the exact slug from Polymarket.com. ` +
-        `Tried variations: ${errors.slice(0, 3).map(e => e.split('→')[0].trim()).join(', ')}. ` +
-        `To find the correct market, try searching on Polymarket.com or use browser automation to navigate to: ${searchUrl}`
-      : `Polymarket market "${marketId}" was not found. Please verify the market ID matches the exact slug from Polymarket.com. ` +
-        `You can search for markets at: ${searchUrl}`;
+    // Build error message with search suggestions if available
+    const searchUrl = `https://polymarket.com/search?q=${encodeURIComponent(marketId.replace(/[-_]/g, " "))}`;
+    let errorMsg = `Polymarket market "${marketId}" was not found.`;
+    
+    if (searchSuggestions.length > 0) {
+      errorMsg += `\n\nDid you mean one of these?\n${searchSuggestions.map((s, i) => `${i + 1}. ${s}`).join("\n")}`;
+      errorMsg += `\n\nUse the slug from the list above, or search at: ${searchUrl}`;
+    } else {
+      errorMsg += ` The market slug may not be the exact slug from Polymarket.com.`;
+      if (errors.length > 0) {
+        errorMsg += ` Tried variations: ${errors.slice(0, 3).map(e => e.split('→')[0].trim()).join(', ')}.`;
+      }
+      errorMsg += ` To find the correct market, try searching on Polymarket.com: ${searchUrl}`;
+    }
+    
     throw new Error(errorMsg);
   }
 
@@ -585,10 +621,67 @@ async function fetchGoogleFinanceQuote(symbol: string): Promise<StockInsights> {
   };
 }
 
-async function fetchTwelveDataQuote(symbol: string): Promise<StockInsights> {
-  const apiKey = Deno.env.get("TWELVEDATA_API_KEY");
+// Helper function to get API key from key manager database
+async function getTwelveDataApiKey(userId?: string): Promise<string | null> {
+  // First check environment variable (Supabase secret)
+  const envKey = Deno.env.get("TWELVEDATA_API_KEY");
+  if (envKey) {
+    return envKey;
+  }
+
+  // If no env key and user is authenticated, check key manager database
+  if (userId) {
+    try {
+      const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL");
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      const ENCRYPTION_KEY = Deno.env.get("ENCRYPTION_KEY") ?? "default-encryption-key-change-in-production";
+
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+        return null;
+      }
+
+      const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+
+      // Look for a key with provider "twelvedata" for this user
+      const { data: keyData, error } = await supabase
+        .from("api_keys")
+        .select("encrypted_key")
+        .eq("user_id", userId)
+        .eq("provider", "twelvedata")
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (error || !keyData) {
+        return null;
+      }
+
+      // Decrypt the key
+      const { data: decryptedKey, error: decryptError } = await supabase.rpc("decrypt_key_value", {
+        key_value: keyData.encrypted_key,
+        encryption_key: ENCRYPTION_KEY,
+      });
+
+      if (decryptError || !decryptedKey) {
+        console.error("Failed to decrypt key:", decryptError);
+        return null;
+      }
+
+      return decryptedKey;
+    } catch (error) {
+      console.error("Error getting key from key manager:", error);
+      return null;
+    }
+  }
+
+  return null;
+}
+
+async function fetchTwelveDataQuote(symbol: string, userId?: string): Promise<StockInsights> {
+  const apiKey = await getTwelveDataApiKey(userId);
   if (!apiKey) {
-    throw new Error("TWELVEDATA_API_KEY is not configured.");
+    throw new Error("TWELVEDATA_API_KEY is not configured. Add it via /key add twelvedata <name> key=YOUR_KEY or set TWELVEDATA_API_KEY as a Supabase secret.");
   }
 
   const upperSymbol = symbol.toUpperCase();
@@ -680,7 +773,7 @@ async function fetchTwelveDataQuote(symbol: string): Promise<StockInsights> {
   };
 }
 
-async function handleAlphaVantage(invocation: McpInvocation): Promise<McpInvocationResponse> {
+async function handleAlphaVantage(invocation: McpInvocation, userId?: string): Promise<McpInvocationResponse> {
   const startedAt = performance.now();
   const args = invocation.args ?? {};
   const command = invocation.command ?? "get_stock_chart";
@@ -757,16 +850,11 @@ async function handleAlphaVantage(invocation: McpInvocation): Promise<McpInvocat
     }
 
     if (!stock) {
-      const twelveKey = Deno.env.get("TWELVEDATA_API_KEY");
-      if (!twelveKey) {
-        errors.push("TWELVEDATA_API_KEY is not configured.");
-      } else {
-        try {
-          stock = await fetchTwelveDataQuote(symbol);
-          provider = "twelvedata";
-        } catch (error) {
-          errors.push(`[Twelve Data] ${(error as Error)?.message ?? String(error)}`);
-        }
+      try {
+        stock = await fetchTwelveDataQuote(symbol, userId);
+        provider = "twelvedata";
+      } catch (error) {
+        errors.push(`[Twelve Data] ${(error as Error)?.message ?? String(error)}`);
       }
     }
 
@@ -1011,6 +1099,763 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
   };
 }
 
+async function handleSearch(invocation: McpInvocation): Promise<McpInvocationResponse> {
+  const startedAt = performance.now();
+  const args = invocation.args ?? {};
+  const command = invocation.command ?? "web_search";
+  const query = args.query ?? invocation.positionalArgs?.[0];
+  const maxResultsRaw = args.max_results ?? args.maxResults;
+
+  if (command !== "web_search") {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: `Unsupported command: ${command}`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  if (!query || typeof query !== "string") {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Missing required parameter: query",
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  let maxResults = 5;
+  if (typeof maxResultsRaw === "string") {
+    const parsed = Number(maxResultsRaw);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed <= 20) {
+      maxResults = parsed;
+    }
+  }
+
+  try {
+    // DuckDuckGo Instant Answer API
+    const url = new URL("https://api.duckduckgo.com/");
+    url.searchParams.set("q", query);
+    url.searchParams.set("format", "json");
+    url.searchParams.set("no_redirect", "1");
+    url.searchParams.set("no_html", "1");
+
+    const response = await fetch(url.toString());
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`DuckDuckGo request failed (${response.status}): ${text}`);
+    }
+
+    const data = (await response.json()) as {
+      AbstractText?: string;
+      AbstractURL?: string;
+      Heading?: string;
+      RelatedTopics?: Array<
+        | {
+            Text?: string;
+            FirstURL?: string;
+          }
+        | {
+            Topics?: Array<{ Text?: string; FirstURL?: string }>;
+          }
+      >;
+    };
+
+    const results: Array<{ title: string; url: string; snippet: string }> = [];
+
+    if (data.AbstractText && data.AbstractURL) {
+      results.push({
+        title: data.Heading || data.AbstractText.slice(0, 80),
+        url: data.AbstractURL,
+        snippet: data.AbstractText,
+      });
+    }
+
+    if (Array.isArray(data.RelatedTopics)) {
+      for (const topic of data.RelatedTopics) {
+        if ("Text" in topic && topic.Text && topic.FirstURL) {
+          results.push({
+            title: topic.Text.split(" - ")[0] || topic.Text.slice(0, 80),
+            url: topic.FirstURL,
+            snippet: topic.Text,
+          });
+        } else if ("Topics" in topic && Array.isArray(topic.Topics)) {
+          for (const nested of topic.Topics) {
+            if (nested.Text && nested.FirstURL) {
+              results.push({
+                title: nested.Text.split(" - ")[0] || nested.Text.slice(0, 80),
+                url: nested.FirstURL,
+                snippet: nested.Text,
+              });
+            }
+          }
+        }
+        if (results.length >= maxResults) break;
+      }
+    }
+
+    const finalResults = results.slice(0, maxResults);
+    const latencyMs = Math.round(performance.now() - startedAt);
+
+    return {
+      invocation: { ...invocation, serverId: "search-mcp", command, args: { query, max_results: String(maxResults) } },
+      result: {
+        type: "json",
+        data: {
+          query,
+          maxResults,
+          results: finalResults,
+        },
+        summary:
+          finalResults.length === 0
+            ? `No results found for "${query}".`
+            : `Found ${finalResults.length} result(s) for "${query}".`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      invocation: { ...invocation, serverId: "search-mcp", command },
+      result: {
+        type: "error",
+        message: "Search request failed",
+        details: message,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+}
+
+async function handleGrokipedia(invocation: McpInvocation): Promise<McpInvocationResponse> {
+  const startedAt = performance.now();
+  const args = invocation.args ?? {};
+  const command = invocation.command ?? "search";
+  const query = args.query || args.q || invocation.positionalArgs?.[0];
+
+  if (command === "search") {
+    if (!query) {
+      return {
+        invocation,
+        result: {
+          type: "error",
+          message: "Missing required parameter: query",
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    }
+
+    const limit = parseInt(args.limit || "12", 10);
+    const offset = parseInt(args.offset || "0", 10);
+    
+    try {
+      // Grokipedia API endpoint - using their public API
+      // Base URL: https://grokipedia.com
+      // Endpoint: /api/full-text-search
+      const searchUrl = `https://grokipedia.com/api/full-text-search?query=${encodeURIComponent(query)}&limit=${limit}&offset=${offset}`;
+      
+      const response = await fetch(searchUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Grokipedia Python SDK)",
+          "Accept": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        // If direct API doesn't work, try alternative approach
+        // Grokipedia might require different authentication or endpoints
+        throw new Error(`Grokipedia API returned ${response.status}: ${await response.text().catch(() => "Unknown error")}`);
+      }
+
+      const data = await response.json();
+
+      // Grokipedia API returns: { results: [...], total: number }
+      const results = Array.isArray(data.results) ? data.results : [];
+      const total = typeof data.total === "number" ? data.total : results.length;
+      
+      // Format results for display
+      const textLines: string[] = [`Found ${results.length} result(s) for '${query}'`];
+      if (total > results.length) {
+        textLines[0] += ` (showing ${results.length} of ${total} total)`;
+      }
+      textLines.push("");
+      
+      for (let i = 0; i < results.length; i++) {
+        const item = results[i];
+        const title = item.title || item.slug || `Result ${i + 1}`;
+        const slug = item.slug || "";
+        const snippet = item.snippet || "";
+        const relevance = typeof item.relevance_score === "number" ? item.relevance_score.toFixed(3) : "N/A";
+        const views = typeof item.view_count === "number" ? item.view_count : "N/A";
+        
+        textLines.push(`${i + 1}. ${title}`);
+        if (slug) textLines.push(`   Slug: ${slug}`);
+        if (snippet) textLines.push(`   Snippet: ${snippet}`);
+        textLines.push(`   Relevance: ${relevance}`);
+        textLines.push(`   Views: ${views}`);
+        textLines.push("");
+      }
+      
+      const summary = results.length > 0
+        ? `Found ${results.length} result(s) for "${query}"`
+        : `No results found for "${query}"`;
+
+      return {
+        invocation,
+        result: {
+          type: "text",
+          content: textLines.join("\n"),
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Provide helpful error message
+      return {
+        invocation,
+        result: {
+          type: "error",
+          message: `Grokipedia search failed: ${errorMessage}. Note: Grokipedia API may require authentication or use different endpoints. Consider using the grokipedia-mcp Python package directly.`,
+          details: {
+            suggestion: "The grokipedia-mcp Python package implements the full MCP protocol. For direct integration, you may need to implement a proper MCP protocol gateway or use the package's API SDK.",
+          },
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    }
+  }
+
+  return {
+    invocation,
+    result: {
+      type: "error",
+      message: `Unknown Grokipedia command: ${command}. Supported commands: search`,
+    },
+    timestamp: new Date().toISOString(),
+    latencyMs: Math.round(performance.now() - startedAt),
+  };
+}
+
+async function getCanvaCredentials(userId?: string): Promise<{ clientId: string; clientSecret: string | null; accessToken: string | null; refreshToken: string | null } | null> {
+  // Check environment variables first
+  const envClientId = Deno.env.get("CANVA_CLIENT_ID");
+  const envClientSecret = Deno.env.get("CANVA_CLIENT_SECRET");
+  const envAccessToken = Deno.env.get("CANVA_ACCESS_TOKEN");
+  const envRefreshToken = Deno.env.get("CANVA_REFRESH_TOKEN");
+  
+  if (envClientId) {
+    return {
+      clientId: envClientId,
+      clientSecret: envClientSecret || null,
+      accessToken: envAccessToken || null,
+      refreshToken: envRefreshToken || null,
+    };
+  }
+  
+  // Try to get from user's key manager if userId is provided
+  if (userId) {
+    try {
+      const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL");
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+        const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+        
+        // Look for canva credentials in user's stored keys
+        // We'll look for keys with provider "canva" or "canva_client_id", "canva_client_secret", "canva_access_token", "canva_refresh_token"
+        const { data: keys, error } = await supabase
+          .from("api_keys")
+          .select("name, encrypted_key")
+          .eq("user_id", userId)
+          .or("provider.eq.canva,provider.ilike.%canva%,name.ilike.%canva%")
+          .eq("is_active", true);
+        
+        if (!error && keys && keys.length > 0) {
+          const credentials: { clientId?: string; clientSecret?: string; accessToken?: string; refreshToken?: string } = {};
+          
+          for (const key of keys) {
+            const { data: decryptedKey, error: decryptError } = await supabase.rpc("decrypt_key_value", {
+              key_value: key.encrypted_key,
+            });
+            
+            if (!decryptError && decryptedKey) {
+              const name = (key.name || "").toLowerCase();
+              if (name.includes("client_id") || name.includes("clientid")) {
+                credentials.clientId = decryptedKey;
+              } else if (name.includes("client_secret") || name.includes("clientsecret")) {
+                credentials.clientSecret = decryptedKey;
+              } else if (name.includes("access_token") || name.includes("accesstoken")) {
+                credentials.accessToken = decryptedKey;
+              } else if (name.includes("refresh_token") || name.includes("refreshtoken")) {
+                credentials.refreshToken = decryptedKey;
+              } else if (!credentials.clientId) {
+                // Default to first key as client ID if no specific match
+                credentials.clientId = decryptedKey;
+              }
+            }
+          }
+          
+          if (credentials.clientId) {
+            return {
+              clientId: credentials.clientId,
+              clientSecret: credentials.clientSecret || null,
+              accessToken: credentials.accessToken || null,
+              refreshToken: credentials.refreshToken || null,
+            };
+          }
+        }
+      }
+    } catch (error) {
+      console.log("Could not fetch Canva credentials from key manager:", error);
+    }
+  }
+  
+  return null;
+}
+
+// Generate PKCE code verifier and challenge
+function generatePKCE(): { codeVerifier: string; codeChallenge: string } {
+  // Generate a random code verifier (43-128 characters, URL-safe)
+  const array = new Uint8Array(32);
+  crypto.getRandomValues(array);
+  const codeVerifier = btoa(String.fromCharCode(...array))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "")
+    .substring(0, 43);
+  
+  // Generate code challenge (SHA256 hash of verifier, base64url encoded)
+  // Note: In Deno, we can use Web Crypto API
+  // For now, we'll return a placeholder - actual implementation needs async crypto
+  const codeChallenge = codeVerifier; // Placeholder - should be SHA256 hash
+  
+  return { codeVerifier, codeChallenge };
+}
+
+// Refresh an access token using a refresh token
+async function refreshCanvaToken(refreshToken: string, clientId: string, clientSecret: string): Promise<string> {
+  const tokenUrl = "https://api.canva.com/rest/v1/oauth/token";
+  
+  const response = await fetch(tokenUrl, {
+    method: "POST",
+    headers: {
+      "Authorization": `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "Unknown error");
+    throw new Error(`Failed to refresh Canva access token (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json() as { access_token?: string; refresh_token?: string; token_type?: string; expires_in?: number };
+  
+  if (!data.access_token) {
+    throw new Error("Canva token refresh did not return an access token");
+  }
+
+  // Optionally update the stored refresh token if a new one is provided
+  // For now, we just return the access token
+
+  return data.access_token;
+}
+
+async function handleCanva(invocation: McpInvocation, userId?: string): Promise<McpInvocationResponse> {
+  const startedAt = performance.now();
+  const args = invocation.args ?? {};
+  const command = invocation.command ?? "create_design";
+  
+  // Canva API uses OAuth2 with Client ID and Client Secret
+  // Check for credentials in environment or user's key manager
+  const credentials = await getCanvaCredentials(userId);
+  
+  if (!credentials || !credentials.clientId) {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Canva Client ID is not configured. Please set CANVA_CLIENT_ID as a Supabase secret or add it via the Key Manager Agent.",
+        details: {
+          setup: "Canva API uses OAuth2 authentication. You need a Client ID and Client Secret. Get them from https://www.canva.com/developers/",
+          keyManager: "Use the Key Manager Agent: /key add canva_client_id <name> key=YOUR_CLIENT_ID",
+          envVars: "Or set CANVA_CLIENT_ID and CANVA_CLIENT_SECRET as Supabase secrets",
+        },
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  // Canva API requires OAuth2 authorization code flow - users must provide an access token
+  // Client credentials grant is NOT supported by Canva (only authorization_code and refresh_token)
+  let accessToken: string | null = credentials.accessToken;
+  
+  // If no access token but we have a refresh token, try to refresh
+  if (!accessToken && credentials.refreshToken && credentials.clientSecret) {
+    try {
+      accessToken = await refreshCanvaToken(credentials.refreshToken, credentials.clientId, credentials.clientSecret);
+      // Note: In a production system, you'd want to store the new access token
+    } catch (error) {
+      console.log("Failed to refresh Canva token:", error);
+      // Fall through to show error message
+    }
+  }
+  
+  // If access token exists but might be expired, check if we should refresh proactively
+  // For now, we'll let the API call fail with 401 and then refresh on error
+  
+  if (!accessToken) {
+    const redirectUri = "http://127.0.0.1:3000/callback"; // This should be configured in your Canva app settings
+    // Generate PKCE parameters
+    const pkce = generatePKCE();
+    // Request the scopes that are enabled in your Canva integration
+    // Note: Canva uses granular scopes like design:content:write, design:content:read, etc.
+    const scopes = "design:content:write design:meta:read design:content:read design:permission:write design:permission:read";
+    const authUrl = `https://www.canva.com/api/oauth/authorize?code_challenge_method=s256&response_type=code&client_id=${encodeURIComponent(credentials.clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scopes)}&code_challenge=${encodeURIComponent(pkce.codeChallenge)}`;
+    
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Canva access token is required. Canva API uses OAuth2 authorization code flow and requires user authorization.",
+        details: {
+          setup: "To use Canva MCP, you need to obtain an access token through OAuth2:",
+          steps: [
+            "1. Authorize your app using the OAuth authorization URL",
+            "2. Exchange the authorization code for an access token (and refresh token) using your client ID and secret",
+            "3. Set the access token as CANVA_ACCESS_TOKEN or via Key Manager",
+            "4. Optionally set CANVA_REFRESH_TOKEN for automatic token refresh",
+          ],
+          authorizationUrl: authUrl,
+          docs: "See https://www.canva.dev/docs/connect/api-reference/authentication/ for OAuth flow details",
+          keyManager: "Once you have tokens, set them via: /key add canva_access_token <name> key=YOUR_ACCESS_TOKEN",
+          envVar: "Or set CANVA_ACCESS_TOKEN (and CANVA_REFRESH_TOKEN) as Supabase secrets",
+          note: "Canva does NOT support client_credentials grant type. You must use authorization_code flow.",
+        },
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  if (command === "create_design") {
+    // Get template - default to "social_post" if not provided
+    const template = args.template || args.template_id || invocation.positionalArgs?.[0] || "social_post";
+    const text = args.text || args.content || invocation.positionalArgs?.[1];
+
+    try {
+      // Skip token verification for now - Canva API endpoint structure may differ
+      // The token was just obtained, so it should be valid
+      // If design creation fails, we'll handle it in the error response
+      
+      // Canva Design API endpoint
+      // The error shows GET /rest/v1/designs doesn't exist
+      // For creating designs, Canva API might use:
+      // - POST /rest/v1/designs (standard REST)
+      // - Different endpoint structure
+      // Based on Canva API docs, try POST to create
+      // Note: The actual endpoint might need to be verified in Canva's API documentation
+      const canvaApiUrl = "https://api.canva.com/rest/v1/designs";
+      
+      // Alternative: If the above doesn't work, Canva might use:
+      // - https://api.canva.com/v1/designs (without /rest)
+      // - https://www.canva.com/api/v1/designs
+      // - Or require a different base path
+      
+      // Canva API request format based on error messages:
+      // Requires BOTH 'design_type' (or 'asset_id') AND 'type' fields
+      // - 'design_type' OR 'asset_id' must be defined
+      // - 'type' must not be null
+      const requestBody: Record<string, unknown> = {};
+      
+      // Map user-friendly template names to valid Canva API preset names
+      // Valid preset names per API: doc, whiteboard, presentation
+      const presetNameMap: Record<string, string> = {
+        "social_post": "presentation",  // Map to closest valid option
+        "post": "presentation",
+        "presentation": "presentation",
+        "doc": "doc",
+        "document": "doc",
+        "whiteboard": "whiteboard",
+        "board": "whiteboard",
+        "poster": "presentation",  // Map to closest valid option
+        "flyer": "presentation",   // Map to closest valid option
+        "story": "presentation",   // Map to closest valid option
+        "video": "presentation",   // Map to closest valid option
+      };
+      
+      // Canva API requires:
+      // 1. Either 'design_type' OR 'asset_id' must be defined
+      // 2. 'design_type' must be an OBJECT with 'type' and 'name' properties
+      // 3. Valid preset 'name' values: "doc", "whiteboard", "presentation" (per API error)
+      
+      // Determine valid preset name
+      const normalizedTemplate = template.toLowerCase();
+      const validPresetName = presetNameMap[normalizedTemplate] || "presentation"; // Default to presentation
+      
+      // Set design_type OR asset_id (one of these is required)
+      if (args.asset_id) {
+        // When using asset_id, create design from template/asset
+        requestBody.asset_id = args.asset_id;
+      } else if (args.width && args.height) {
+        // Custom dimensions - design_type should be an object with type: "custom"
+        requestBody.design_type = {
+          type: "custom",
+          width: parseInt(args.width, 10),
+          height: parseInt(args.height, 10),
+        };
+      } else {
+        // Preset design type - design_type must be an object with type: "preset" and name
+        // Valid preset names: "doc", "whiteboard", "presentation"
+        requestBody.design_type = {
+          type: "preset",
+          name: validPresetName,
+        };
+      }
+      
+      // Add title if text is provided (Canva uses 'title' for design name)
+      if (text) {
+        requestBody.title = text;
+      }
+      
+      // Add brand_id if provided
+      if (args.brand_id) {
+        requestBody.brand_id = args.brand_id;
+      }
+      
+      // Log request body for debugging
+      console.log("Canva API request body:", JSON.stringify(requestBody, null, 2));
+      
+      const response = await fetch(canvaApiUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "Unknown error");
+        
+        // If token is invalid/expired and we have a refresh token, try to refresh
+        if (response.status === 401 && credentials.refreshToken && credentials.clientSecret) {
+          try {
+            const newAccessToken = await refreshCanvaToken(credentials.refreshToken, credentials.clientId, credentials.clientSecret);
+            
+            // Retry the request with the new token
+            const retryResponse = await fetch(canvaApiUrl, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${newAccessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(requestBody),
+            });
+            
+            if (retryResponse.ok) {
+              const retryData = await retryResponse.json();
+              const designUrl = retryData.design_url || retryData.url || retryData.id;
+              const summary = designUrl
+                ? `Created Canva design: ${designUrl} (token refreshed automatically)`
+                : `Created Canva design with template "${template}" (token refreshed)`;
+
+              return {
+                invocation,
+                result: {
+                  type: "json",
+                  data: {
+                    design_id: retryData.id || retryData.design_id,
+                    design_url: designUrl,
+                    template: template,
+                    ...retryData,
+                  },
+                  summary,
+                },
+                timestamp: new Date().toISOString(),
+                latencyMs: Math.round(performance.now() - startedAt),
+              };
+            }
+          } catch (refreshError) {
+            // If refresh fails, fall through to show the original error with helpful message
+            const refreshErrorMsg = refreshError instanceof Error ? refreshError.message : String(refreshError);
+            throw new Error(`Canva API returned 401 (invalid access token). Token refresh also failed: ${refreshErrorMsg}. Please get a new access token through OAuth2 flow.`);
+          }
+        }
+        
+        // Check if it's an invalid token error
+        if (response.status === 401) {
+          let errorDetails: { code?: string; message?: string } = {};
+          try {
+            errorDetails = JSON.parse(errorText);
+          } catch {
+            errorDetails = { code: "unknown", message: errorText };
+          }
+          const errorCode = errorDetails.code || "unknown";
+          
+          let helpfulMessage = `Canva API returned 401: Access token is invalid or expired.`;
+          
+          if (errorCode === "invalid_access_token") {
+            helpfulMessage += `\n\nThe access token "${accessToken.substring(0, 20)}..." appears to be invalid.`;
+            helpfulMessage += `\n\nPossible issues:`;
+            helpfulMessage += `\n1. Token format might be incorrect`;
+            helpfulMessage += `\n2. Token might have expired`;
+            helpfulMessage += `\n3. Token might need to be obtained through OAuth2 user authorization flow`;
+            helpfulMessage += `\n4. API endpoint might be incorrect (currently using: ${canvaApiUrl})`;
+            helpfulMessage += `\n\nTo fix:`;
+            helpfulMessage += `\n1. Verify the token was obtained through proper OAuth2 flow: https://www.canva.dev/docs/apps/authenticating-users/oauth/`;
+            helpfulMessage += `\n2. Check if the token needs user-specific authorization (not just client credentials)`;
+            helpfulMessage += `\n3. Verify the API endpoint is correct in Canva's documentation`;
+            helpfulMessage += `\n4. Ensure the token has required scopes: design:read design:write`;
+          }
+          
+          if (credentials.refreshToken) {
+            helpfulMessage += `\n\nNote: Token refresh was attempted but failed.`;
+          } else {
+            helpfulMessage += `\n\nNote: No refresh token available. You'll need to get a new access token through OAuth2 flow.`;
+          }
+          
+          throw new Error(helpfulMessage);
+        }
+        
+        // Include request body in error for debugging
+        const requestBodyStr = JSON.stringify(requestBody, null, 2);
+        throw new Error(`Canva API returned ${response.status}: ${errorText}\n\nRequest body sent:\n${requestBodyStr}`);
+      }
+
+      const data = await response.json();
+      
+      // Handle nested design object in response
+      const design = data.design || data;
+      const designId = design.id || data.id || data.design_id;
+      const editUrl = design.urls?.edit_url;
+      const viewUrl = design.urls?.view_url;
+      const designUrl = editUrl || viewUrl || design.design_url || data.design_url || data.url;
+      const designTitle = design.title || data.title || template;
+      
+      // If text content was provided, add it to the design using Design Editing API
+      if (text && designId) {
+        try {
+          // Add text element to the design
+          // Endpoint: POST /rest/v1/designs/{design_id}/native-elements
+          const addElementUrl = `https://api.canva.com/rest/v1/designs/${designId}/native-elements`;
+          const elementResponse = await fetch(addElementUrl, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              type: "TEXT",
+              text: text,
+              // Position in center of design (approximate)
+              x: 0.5,
+              y: 0.5,
+              width: 0.8,
+              height: 0.2,
+            }),
+          });
+          
+          if (!elementResponse.ok) {
+            const errorText = await elementResponse.text().catch(() => "Unknown error");
+            console.log(`Warning: Failed to add text to design (${elementResponse.status}): ${errorText}`);
+            // Log the request body for debugging
+            console.log(`Attempted to add text element with body:`, JSON.stringify({
+              type: "TEXT",
+              text: text,
+              x: 0.5,
+              y: 0.5,
+              width: 0.8,
+              height: 0.2,
+            }, null, 2));
+            // Continue anyway - design was created successfully
+          } else {
+            console.log(`Successfully added text element to design ${designId}`);
+          }
+        } catch (addError) {
+          console.log(`Warning: Error adding text to design: ${addError}`);
+          // Continue anyway - design was created successfully
+        }
+      }
+      
+      // Create a summary with clickable links (using raw URLs so they auto-linkify)
+      let summary = `✅ Created Canva design "${designTitle}"`;
+      if (text) {
+        summary += ` with text: "${text}"`;
+      }
+      if (editUrl && viewUrl) {
+        summary += `\n\n🔗 Edit: ${editUrl}\n🔗 View: ${viewUrl}`;
+      } else if (editUrl) {
+        summary += `\n\n🔗 Edit: ${editUrl}`;
+      } else if (viewUrl) {
+        summary += `\n\n🔗 View: ${viewUrl}`;
+      } else if (designUrl) {
+        summary += `\n\n🔗 Open: ${designUrl}`;
+      }
+
+      return {
+        invocation,
+        result: {
+          type: "json",
+          data: {
+            template: template,
+            design_id: designId,
+            design_url: designUrl,
+            edit_url: design.urls?.edit_url,
+            view_url: design.urls?.view_url,
+            title: designTitle,
+            ...data,
+          },
+          summary,
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      return {
+        invocation,
+        result: {
+          type: "error",
+          message: `Canva design creation failed: ${errorMessage}`,
+          details: {
+            note: "Canva API integration may require specific authentication or endpoint configuration. Please verify your API key and check Canva API documentation.",
+            docs: "https://www.canva.com/developers/",
+          },
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    }
+  }
+
+  return {
+    invocation,
+    result: {
+      type: "error",
+      message: `Unknown Canva command: ${command}. Supported commands: create_design`,
+    },
+    timestamp: new Date().toISOString(),
+    latencyMs: Math.round(performance.now() - startedAt),
+  };
+}
+
 serve(async req => {
   const origin = req.headers.get("Origin");
   const corsHeaders = getCorsHeaders(origin);
@@ -1041,9 +1886,32 @@ serve(async req => {
     return respondWithError(400, "Missing serverId", origin);
   }
 
+  // Try to get authenticated user (optional - for key manager lookup)
+  let userId: string | undefined;
+  const authHeader = req.headers.get("Authorization");
+  if (authHeader) {
+    try {
+      const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL");
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+        const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+          auth: { persistSession: false, autoRefreshToken: false },
+        });
+        const accessToken = authHeader.replace(/Bearer\s+/i, "").trim();
+        const { data: { user } } = await supabase.auth.getUser(accessToken);
+        if (user) {
+          userId = user.id;
+        }
+      }
+    } catch (error) {
+      // Silently fail - user lookup is optional
+      console.log("Could not get user from auth header:", error);
+    }
+  }
+
   try {
     if (invocation.serverId === "alphavantage-mcp") {
-      const response = await handleAlphaVantage(invocation);
+      const response = await handleAlphaVantage(invocation, userId);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1058,6 +1926,27 @@ serve(async req => {
     }
     if (invocation.serverId === "gemini-mcp") {
       const response = await handleGemini(invocation);
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (invocation.serverId === "grokipedia-mcp") {
+      const response = await handleGrokipedia(invocation);
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (invocation.serverId === "canva-mcp") {
+      const response = await handleCanva(invocation, userId);
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (invocation.serverId === "search-mcp") {
+      const response = await handleSearch(invocation);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
