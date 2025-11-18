@@ -5,7 +5,7 @@ import {
   type Handoff,
   type Tool,
   Runner,
-} from "https://esm.sh/@openai/agents@0.0.9";
+} from "https://esm.sh/@openai/agents@0.3.2";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createMemoryService } from "../_shared/memory.ts";
 import type { Database } from "../_shared/database.types.ts";
@@ -204,6 +204,101 @@ function createMemoryTools(memoryService: ReturnType<typeof createMemoryService>
   ];
 }
 
+// Helper function to execute MCP commands with optional auth header
+async function executeMcpCommand(
+  command: string,
+  authHeader?: string | null,
+): Promise<string> {
+  if (!MCP_GATEWAY_URL) {
+    return "MCP gateway URL is not configured on the server.";
+  }
+
+  const trimmed = (command ?? "").trim();
+  if (!trimmed.startsWith("/")) {
+    return 'Invalid MCP command format. Expected something like "/alphavantage-mcp get_quote symbol=NVDA".';
+  }
+
+  // Parse command more carefully to handle quoted values with spaces
+  // Format: /server-id command param1="value with spaces" param2=simple
+  // First, extract server-id and command name (before any quoted params)
+  const firstSpace = trimmed.indexOf(' ');
+  if (firstSpace === -1) {
+    // No parameters, just server-id
+    const serverId = trimmed.slice(1);
+    return JSON.stringify({
+      serverId,
+      command: undefined,
+      args: {},
+      positionalArgs: [],
+    });
+  }
+  
+  const serverId = trimmed.slice(1, firstSpace);
+  let remaining = trimmed.slice(firstSpace + 1).trim();
+  
+  // Find command name (first word before any quoted params)
+  const commandMatch = remaining.match(/^(\S+)/);
+  if (!commandMatch) {
+    return 'Invalid MCP command format. Expected something like "/alphavantage-mcp get_quote symbol=NVDA".';
+  }
+  
+  const mcpCommand = commandMatch[1];
+  remaining = remaining.slice(mcpCommand.length).trim();
+  
+  // Parse parameters, handling quoted values
+  const args: Record<string, string> = {};
+  
+  if (remaining) {
+    // Parse key=value pairs, handling quoted values with spaces
+    const paramRegex = /(\w+)=(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+    let match;
+    
+    while ((match = paramRegex.exec(remaining)) !== null) {
+      const key = match[1];
+      // match[2] = double-quoted value, match[3] = single-quoted value, match[4] = unquoted value
+      const value = match[2] || match[3] || match[4] || '';
+      args[key] = value;
+    }
+  }
+
+  try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    
+    // Add authorization header if provided
+    if (authHeader) {
+      headers["Authorization"] = authHeader;
+    }
+
+    const response = await fetch(MCP_GATEWAY_URL, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        serverId,
+        command: mcpCommand,
+        args,
+        positionalArgs: [],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(
+        `MCP gateway request failed with status ${response.status}${
+          errorText ? `: ${errorText.slice(0, 200)}` : ""
+        }`,
+      );
+    }
+
+    const data = await response.json();
+    return JSON.stringify(data, null, 2);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return `Error executing MCP command: ${message}`;
+  }
+}
+
 const mcpProxyTool: Tool = {
   name: "mcp_proxy",
   description:
@@ -219,65 +314,124 @@ const mcpProxyTool: Tool = {
     required: ["command"],
   },
   async run({ command }: { command: string }) {
-    if (!MCP_GATEWAY_URL) {
-      return "MCP gateway URL is not configured on the server.";
-    }
-
-    const trimmed = (command ?? "").trim();
-    if (!trimmed.startsWith("/")) {
-      return 'Invalid MCP command format. Expected something like "/alphavantage-mcp get_quote symbol=NVDA".';
-    }
-
-    const [serverAndSuffix, ...paramTokens] = trimmed.split(/\s+/);
-    const serverId = serverAndSuffix.slice(1); // strip leading "/"
-
-    // Assume the first token after the server id is the MCP command name.
-    let mcpCommand: string | undefined;
-    const args: Record<string, string> = {};
-
-    if (paramTokens.length > 0) {
-      mcpCommand = paramTokens.shift()!;
-    }
-
-    for (const token of paramTokens) {
-      const eqIndex = token.indexOf("=");
-      if (eqIndex <= 0) continue;
-      const key = token.slice(0, eqIndex);
-      const value = token.slice(eqIndex + 1);
-      args[key] = value;
-    }
-
-    try {
-      const response = await fetch(MCP_GATEWAY_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          serverId,
-          command: mcpCommand,
-          args,
-          positionalArgs: [],
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => "");
-        throw new Error(
-          `MCP gateway request failed with status ${response.status}${
-            errorText ? `: ${errorText.slice(0, 200)}` : ""
-          }`,
-        );
-      }
-
-      const data = await response.json();
-      return JSON.stringify(data, null, 2);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return `Error executing MCP command: ${message}`;
-    }
+    // Note: When used by agents SDK, auth header should be passed via context
+    // For now, try without auth (will work for public endpoints)
+    return await executeMcpCommand(command);
   },
 };
+
+// Command Discovery Agent - knows all available MCP commands and can translate AND execute
+function createCommandDiscoveryAgent(mcpToolAgent: Agent): Agent {
+  const allCommands = `
+AVAILABLE MCP COMMANDS:
+
+1. ALPHAVANTAGE-MCP (Financial Data)
+   - get_stock_chart: Get historical stock price data
+     Format: /alphavantage-mcp get_stock_chart symbol=SYMBOL [interval=1day|1wk|1mo] [range=1M|3M|6M|1Y]
+     Example: /alphavantage-mcp get_stock_chart symbol=TSLA interval=1wk range=3M
+   - get_quote: Get latest stock quote and key stats
+     Format: /alphavantage-mcp get_quote symbol=SYMBOL
+     Example: /alphavantage-mcp get_quote symbol=NVDA
+
+2. POLYMARKET-MCP (Prediction Markets)
+   - get_market_price: Get prediction market odds and pricing
+     Format: /polymarket-mcp get_market_price market_id=MARKET_SLUG
+     Example: /polymarket-mcp get_market_price market_id=us_election_2024
+     Note: Market IDs must be exact slugs. If not found, use browser automation to search.
+
+3. GROKIPEDIA-MCP (Knowledge Base)
+   - search: Search Grokipedia knowledge base
+     Format: /grokipedia-mcp search query="QUERY" [limit=NUMBER]
+     Example: /grokipedia-mcp search query="Model Context Protocol" limit=5
+
+4. CANVA-MCP (Design Creation)
+   - create_design: Create a Canva design from template
+     Format: /canva-mcp create_design [template=TEMPLATE] [text="TEXT"]
+     Templates: presentation, doc, whiteboard (default: presentation)
+     Example: /canva-mcp create_design template=presentation text="Hello World"
+
+5. GEMINI-MCP (Text Generation)
+   - generate_text: Generate text using Gemini
+     Format: /gemini-mcp generate_text prompt="PROMPT" [model=MODEL] [temperature=N] [max_output_tokens=N]
+     Example: /gemini-mcp generate_text prompt="Write a product description"
+
+6. PLAYWRIGHT-MCP (Browser Automation)
+   - navigate_and_scrape: Navigate and extract content
+     Format: /playwright-mcp navigate_and_scrape url=URL selector=SELECTOR
+   - screenshot: Capture page screenshot
+     Format: /playwright-mcp screenshot url=URL [selector=SELECTOR]
+
+7. PLAYWRIGHT-WRAPPER (Advanced Browser Automation)
+   - browser_navigate: Navigate to URL
+     Format: /playwright-wrapper browser_navigate url=URL
+   - browser_snapshot: Get page accessibility snapshot
+     Format: /playwright-wrapper browser_snapshot
+   - browser_click: Click element on page
+     Format: /playwright-wrapper browser_click element="DESCRIPTION" ref=SELECTOR
+   - browser_extract_text: Extract all text from page
+     Format: /playwright-wrapper browser_extract_text url=URL
+   - browser_take_screenshot: Capture screenshot
+     Format: /playwright-wrapper browser_take_screenshot [filename=NAME] [fullPage=true|false]
+
+8. SEARCH-MCP (Web Search)
+   - web_search: Search the web using DuckDuckGo
+     Format: /search-mcp web_search query="QUERY" [max_results=N]
+     Example: /search-mcp web_search query="Model Context Protocol" max_results=5
+
+COMMAND TRANSLATION RULES:
+- "Get stock price for AAPL" → /alphavantage-mcp get_quote symbol=AAPL
+- "Show me Tesla's chart" → /alphavantage-mcp get_stock_chart symbol=TSLA
+- "What are the odds for [event]?" → /polymarket-mcp get_market_price market_id=EVENT_SLUG
+- "Search Grokipedia for [topic]" or "Search grokipedia for [topic]" or "Grokipedia [topic]" → /grokipedia-mcp search query="TOPIC"
+- "Search for [topic]" → /grokipedia-mcp search query="TOPIC" (prefer Grokipedia) or /search-mcp web_search query="TOPIC"
+- "Create a design with [text]" → /canva-mcp create_design text="TEXT"
+- "Visit [website]" or "Scrape [website]" → /playwright-wrapper browser_navigate url=URL
+- "Take a screenshot of [url]" → /playwright-wrapper browser_take_screenshot url=URL
+`;
+
+  const executeCommandHandoff: Handoff = {
+    name: "handoff_to_execute_command",
+    description: "Use this handoff when the user wants to actually execute an MCP command (not just see instructions).",
+    targetAgent: mcpToolAgent,
+    inputFilter: (input: AgentInputItem[]) => input,
+  };
+
+  return new Agent({
+    name: "Command_Discovery_Agent",
+    instructions:
+      "You are the Command Discovery Agent - the primary interface for helping users interact with MCP (Model Context Protocol) commands. " +
+      "You are friendly, helpful, and proactive. You can BOTH explain commands AND execute them.\n\n" +
+      "GREETING USERS:\n" +
+      "When a user first greets you or asks 'what can you do?', provide a warm, friendly greeting that:\n" +
+      "1. Introduces yourself as the Command Discovery Agent\n" +
+      "2. Briefly explains that you can help with MCP commands\n" +
+      "3. Mentions key capabilities (stock data, design creation, web search, etc.)\n" +
+      "4. Offers to help them get started\n" +
+      "Example: 'Hello! I'm your Command Discovery Agent. I can help you use MCP commands to get stock prices, create Canva designs, search the web, and much more. Just ask me in plain language what you'd like to do, and I'll handle it for you!'\n\n" +
+      allCommands +
+      "\n" +
+      "WHEN USER ASKS TO EXECUTE A COMMAND:\n" +
+      "1. Identify which MCP server and command matches their request\n" +
+      "2. Extract the required parameters from their request\n" +
+      "3. Use the `handoff_to_execute_command` handoff to execute the command via MCP_Tool_Agent\n" +
+      "4. The MCP_Tool_Agent will execute the command and return results\n" +
+      "5. Keep your response concise - detailed command info is automatically logged to the MCP Event Log\n\n" +
+      "SPECIAL CASES:\n" +
+      "- If user says 'Search Grokipedia for X' or 'Grokipedia X' → Execute /grokipedia-mcp search query=\"X\"\n" +
+      "- If user says 'Search for X' → Prefer Grokipedia: /grokipedia-mcp search query=\"X\"\n" +
+      "- If user mentions 'Brockopedia', 'Broccopedia', or any variation → They mean 'Grokipedia', use /grokipedia-mcp search\n" +
+      "- Common misspellings: Brockopedia, Broccopedia, Grokipedia, Grokypedia → All mean Grokipedia\n\n" +
+      "WHEN USER ASKS ABOUT COMMANDS (how-to, what's available, etc.):\n" +
+      "1. Use the `list_mcp_commands` tool to show available commands\n" +
+      "2. Provide a brief, helpful summary in chat\n" +
+      "3. Detailed command documentation is automatically available in the MCP Event Log\n" +
+      "4. Offer to execute commands if the user wants\n\n" +
+      "IMPORTANT: If the user's intent is clearly to PERFORM an action (e.g., 'get stock price', 'create a design', 'search for X'), " +
+      "you should hand off to MCP_Tool_Agent to execute it. Only provide instructions if they explicitly ask 'how do I...' or 'what commands...'",
+    handoffs: [executeCommandHandoff],
+    tools: [listCommandsTool],
+  });
+}
 
 // MCP Tool Agent will be created dynamically to ensure consistent tool handling
 function createMcpToolAgent(tools: Tool[]): Agent {
@@ -301,14 +455,23 @@ function createMcpToolAgent(tools: Tool[]): Agent {
     name: "MCP_Tool_Agent",
     instructions:
       "You are an expert in executing Model Context Protocol (MCP) commands. Your only tool is the `mcp_proxy`. " +
-      "When a user request requires external data or a specific tool, you must formulate the correct MCP command and use the `mcp_proxy` tool. " +
-      "You can call any registered MCP server, including:\n" +
-      "- `alphavantage-mcp` for stock and market data (use ticker symbols like AAPL, NVDA)\n" +
-      "- `polymarket-mcp` for prediction market odds (IMPORTANT: Market IDs must be exact slugs from Polymarket)\n" +
-      "- `gemini-mcp` for lightweight text generation\n" +
-      "- `playwright-mcp` or `playwright-wrapper` for browser automation, web scraping, and recursive testing\n" +
-      "- `search-mcp` for web search results\n" +
-      "\n" +
+      "When a user request requires external data or a specific tool, you must formulate the correct MCP command and use the `mcp_proxy` tool.\n\n" +
+      "AVAILABLE MCP SERVERS AND COMMANDS:\n" +
+      "1. alphavantage-mcp: get_stock_chart (symbol, interval, range), get_quote (symbol)\n" +
+      "2. polymarket-mcp: get_market_price (market_id)\n" +
+      "3. grokipedia-mcp: search (query, limit) - Search Grokipedia knowledge base\n" +
+      "   IMPORTANT: When user says 'Search Grokipedia for X' or 'Grokipedia X' or mentions 'Brockopedia', use: /grokipedia-mcp search query=\"X\"\n" +
+      "4. canva-mcp: create_design (template, text)\n" +
+      "5. gemini-mcp: generate_text (prompt, model, temperature, max_output_tokens)\n" +
+      "6. playwright-mcp: navigate_and_scrape (url, selector), screenshot (url, selector)\n" +
+      "7. playwright-wrapper: browser_navigate (url), browser_snapshot, browser_click (element, ref), browser_extract_text (url), browser_take_screenshot (filename, fullPage)\n" +
+      "8. search-mcp: web_search (query, max_results)\n\n" +
+      "SEARCH REQUEST PATTERNS:\n" +
+      "- 'Search Grokipedia for [topic]' → /grokipedia-mcp search query=\"[topic]\"\n" +
+      "- 'Grokipedia [topic]' → /grokipedia-mcp search query=\"[topic]\"\n" +
+      "- 'Brockopedia [topic]', 'Broccopedia [topic]', or any similar variation → User means Grokipedia, use /grokipedia-mcp search query=\"[topic]\"\n" +
+      "- 'Search for [topic]' → Prefer Grokipedia: /grokipedia-mcp search query=\"[topic]\"\n" +
+      "- Common misspellings: Brockopedia, Broccopedia, Grokipedia, Grokypedia → All mean Grokipedia\n\n" +
       "CRITICAL POLYMARKET WORKFLOW - FOLLOW EXACTLY:\n" +
       "When a user asks about Polymarket markets:\n" +
       "STEP 1: Try the market lookup first: `/polymarket-mcp get_market_price market_id=GUESSED_SLUG`\n" +
@@ -357,8 +520,81 @@ const finalAnswerAgent = new Agent({
     "and synthesize a concise, helpful, and professional final answer. Do not use any tools.",
 });
 
+// Tool to list available MCP commands
+const listCommandsTool: Tool = {
+  name: "list_mcp_commands",
+  description: "Lists all available MCP commands and their usage. Use this when users ask 'what commands are available' or 'how do I use MCP commands'.",
+  parameters: {
+    type: "object",
+    properties: {
+      category: {
+        type: "string",
+        description: "Optional category filter: financial, prediction, knowledge, design, llm, automation",
+      },
+    },
+    required: [],
+  },
+  async run({ category }: { category?: string }) {
+    const commands = `
+AVAILABLE MCP COMMANDS:
+
+1. ALPHAVANTAGE-MCP (Financial Data)
+   - get_stock_chart: Get historical stock price data
+     Format: /alphavantage-mcp get_stock_chart symbol=SYMBOL [interval=1day|1wk|1mo] [range=1M|3M|6M|1Y]
+     Example: /alphavantage-mcp get_stock_chart symbol=TSLA interval=1wk range=3M
+   - get_quote: Get latest stock quote and key stats
+     Format: /alphavantage-mcp get_quote symbol=SYMBOL
+     Example: /alphavantage-mcp get_quote symbol=NVDA
+
+2. POLYMARKET-MCP (Prediction Markets)
+   - get_market_price: Get prediction market odds and pricing
+     Format: /polymarket-mcp get_market_price market_id=MARKET_SLUG
+     Example: /polymarket-mcp get_market_price market_id=us_election_2024
+
+3. GROKIPEDIA-MCP (Knowledge Base)
+   - search: Search Grokipedia knowledge base
+     Format: /grokipedia-mcp search query="QUERY" [limit=NUMBER]
+     Example: /grokipedia-mcp search query="Model Context Protocol" limit=5
+
+4. CANVA-MCP (Design Creation)
+   - create_design: Create a Canva design from template
+     Format: /canva-mcp create_design [template=TEMPLATE] [text="TEXT"]
+     Templates: presentation, doc, whiteboard (default: presentation)
+     Example: /canva-mcp create_design template=presentation text="Hello World"
+
+5. GEMINI-MCP (Text Generation)
+   - generate_text: Generate text using Gemini
+     Format: /gemini-mcp generate_text prompt="PROMPT" [model=MODEL] [temperature=N] [max_output_tokens=N]
+
+6. PLAYWRIGHT-MCP (Browser Automation)
+   - navigate_and_scrape: Navigate and extract content
+   - screenshot: Capture page screenshot
+
+7. PLAYWRIGHT-WRAPPER (Advanced Browser Automation)
+   - browser_navigate: Navigate to URL
+   - browser_snapshot: Get page accessibility snapshot
+   - browser_click: Click element on page
+   - browser_extract_text: Extract all text from page
+   - browser_take_screenshot: Capture screenshot
+
+8. SEARCH-MCP (Web Search)
+   - web_search: Search the web using DuckDuckGo
+     Format: /search-mcp web_search query="QUERY" [max_results=N]
+`;
+    return commands;
+  },
+};
+
 // Handoffs will be created dynamically with the correct agents
-function createHandoffs(mcpToolAgent: Agent): [Handoff, Handoff] {
+function createHandoffs(mcpToolAgent: Agent, commandDiscoveryAgent: Agent): [Handoff, Handoff, Handoff] {
+  const commandDiscoveryHandoff: Handoff = {
+    name: "handoff_to_command_discovery",
+    description:
+      "Use this handoff when the user asks about available commands, wants to know how to use MCP commands, or needs help translating natural language into MCP command format.",
+    targetAgent: commandDiscoveryAgent,
+    inputFilter: (input: AgentInputItem[]) => input,
+  };
+
   const mcpHandoff: Handoff = {
     name: "handoff_to_mcp_tool",
     description:
@@ -374,7 +610,7 @@ function createHandoffs(mcpToolAgent: Agent): [Handoff, Handoff] {
     inputFilter: (input: AgentInputItem[]) => input,
   };
 
-  return [mcpHandoff, finalHandoff];
+  return [commandDiscoveryHandoff, mcpHandoff, finalHandoff];
 }
 
 
@@ -389,12 +625,51 @@ serve(async (req) => {
     });
   }
 
+  // Create event stream at the very start to ensure we always have one
+  const eventStream = createEventStream(corsHeaders);
+  
+  // Log request start
+  console.log("=== Chat Function Request Start ===");
+  console.log("Method:", req.method);
+  console.log("URL:", req.url);
+  console.log("Headers:", Object.fromEntries(req.headers.entries()));
+  
   try {
-    const { messages, provider } = await req.json();
+    let requestData;
+    try {
+      const requestText = await req.text();
+      console.log("Request body length:", requestText.length);
+      requestData = JSON.parse(requestText);
+      console.log("Parsed request data:", JSON.stringify(requestData).slice(0, 500));
+    } catch (parseError) {
+      console.error("JSON parse error:", parseError);
+      // If JSON parsing fails, return error stream
+      eventStream.sendEvent({
+        type: "error",
+        timestamp: Date.now(),
+        error: "Invalid JSON in request body",
+        metadata: { category: "parse_error", error: parseError instanceof Error ? parseError.message : String(parseError) },
+      });
+      eventStream.sendContent("Invalid request format. Please try again.");
+      eventStream.close();
+      return new Response(eventStream.stream, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      });
+    }
+    
+    const { messages, provider } = requestData;
     if (!Array.isArray(messages)) {
-      return new Response(JSON.stringify({ error: "messages must be an array" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // Return stream even for validation errors
+      eventStream.sendEvent({
+        type: "error",
+        timestamp: Date.now(),
+        error: "messages must be an array",
+        metadata: { category: "validation_error" },
+      });
+      eventStream.sendContent("Invalid request: messages must be an array.");
+      eventStream.close();
+      return new Response(eventStream.stream, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
       });
     }
 
@@ -472,16 +747,15 @@ serve(async (req) => {
     if (selectedProvider === "openai") {
       const apiKey = Deno.env.get("OPENAI_API_KEY");
       if (!apiKey) {
-        const errorStream = createEventStream(corsHeaders);
-        errorStream.sendEvent({
+        eventStream.sendEvent({
           type: "error",
           timestamp: Date.now(),
           error: "OPENAI_API_KEY is not configured",
         });
-        errorStream.sendContent("I apologize, but the OpenAI API key is not configured. Please contact support.");
-        errorStream.close();
+        eventStream.sendContent("I apologize, but the OpenAI API key is not configured. Please contact support.");
+        eventStream.close();
         
-        return new Response(errorStream.stream, {
+        return new Response(eventStream.stream, {
           headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
         });
       }
@@ -493,8 +767,7 @@ serve(async (req) => {
       let errorOccurred = false;
       let errorMessage = "";
 
-      // Create event stream FIRST to ensure we always return a stream, even on errors
-      const eventStream = createEventStream(corsHeaders);
+      // Use the event stream created at the top of the function
 
       if (useAgentsSdk) {
         try {
@@ -514,23 +787,58 @@ serve(async (req) => {
 
           // Create agents dynamically with tools to avoid SDK serialization issues
           let currentMcpToolAgent: Agent;
-          let mcpHandoff: Handoff;
-          let finalHandoff: Handoff;
           
           try {
             currentMcpToolAgent = createMcpToolAgent(tools);
-            [mcpHandoff, finalHandoff] = createHandoffs(currentMcpToolAgent);
           } catch (agentError) {
             console.error("Error creating agents:", agentError);
             // If agent creation fails, fall back to direct API
             useAgentsSdk = false;
             errorOccurred = true;
             errorMessage = agentError instanceof Error ? agentError.message : String(agentError);
+            
+            const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
+            
             eventStream.sendEvent({
               type: "error",
               timestamp: Date.now(),
               error: errorMessage,
+              metadata: { isHostedToolError },
             });
+            
+            if (isHostedToolError) {
+              // Send technical error to MCP Event Log (system log)
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                error: errorMessage,
+                metadata: {
+                  category: "sdk_compatibility",
+                  sdkVersion: "0.3.2",
+                  issue: "hosted_tool_not_supported",
+                  action: "fallback_to_direct_api",
+                  message: "Agents SDK encountered compatibility issue with tool types. Multi-agent handoffs disabled.",
+                },
+              });
+              // User-friendly message in chat
+              eventStream.sendContent(
+                `Switching to direct API mode. Multi-agent features temporarily unavailable.`
+              );
+            } else {
+              // Send technical error to MCP Event Log
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                error: errorMessage,
+                metadata: {
+                  category: "agent_creation_error",
+                  action: "fallback_to_direct_api",
+                },
+              });
+              // User-friendly message in chat
+              eventStream.sendContent(`Switching to direct API mode...`);
+            }
+            
             throw agentError; // Re-throw to be caught by outer catch
           }
 
@@ -538,21 +846,44 @@ serve(async (req) => {
           // This ensures tools are available during handoffs (the SDK needs tools on agents for handoffs)
           // CRITICAL: Ensure tools is always an array, never undefined
           const orchestratorTools: Tool[] = Array.isArray(tools) ? tools : [];
+          // Add command listing tool to orchestrator tools
+          const toolsWithCommands = [...orchestratorTools, listCommandsTool];
+          
+          // Create Command Discovery Agent (needs mcpToolAgent for handoff)
+          const commandDiscoveryAgent = createCommandDiscoveryAgent(currentMcpToolAgent);
+          
+          // Create handoffs including command discovery (returns 3 handoffs)
+          const [commandDiscoveryHandoff, mcpHandoff, finalHandoff] = createHandoffs(currentMcpToolAgent, commandDiscoveryAgent);
+          
           const currentOrchestratorAgent = new Agent({
             name: "Orchestrator_Agent",
             instructions:
-              "Your primary goal is to determine the best course of action to answer the user's question. " +
-              "If the request is a simple chat, answer directly. " +
-              "If the user asks you to remember something (like a password, preference, or fact), use the `store_memory` tool to save it. " +
-              "If the user asks about something they've told you before (like passwords, preferences, or facts), use the `query_memory` tool to retrieve that information. " +
+              "Your primary goal is to route requests to the appropriate specialized agent. " +
+              "\n" +
+              "DEFAULT BEHAVIOR - Route to Command Discovery Agent:\n" +
+              "- For greetings, initial questions, or general 'what can you do?' queries, use `handoff_to_command_discovery` so the Command_Discovery_Agent can greet and help the user.\n" +
+              "- The Command_Discovery_Agent is the default agent and should handle most user interactions.\n" +
+              "\n" +
+              "FOR MEMORY REQUESTS:\n" +
+              "- If the user asks you to remember something (like a password, preference, or fact), use the `store_memory` tool to save it.\n" +
+              "- If the user asks about something they've told you before (like passwords, preferences, or facts), use the `query_memory` tool to retrieve that information.\n" +
+              "\n" +
+              "FOR COMMAND-RELATED REQUESTS:\n" +
+              "- If the user asks HOW to use commands or WHAT commands are available (e.g., 'what commands can I use?', 'how do I get stock prices?'), " +
+              "  use `handoff_to_command_discovery` - the Command_Discovery_Agent will handle it.\n" +
+              "- If the user wants to PERFORM an action in plain language (e.g., 'get stock price for AAPL', 'create a Canva design', 'search for X'), " +
+              "  use `handoff_to_command_discovery` - it will route to MCP_Tool_Agent to execute automatically.\n" +
+              "\n" +
+              "FOR KEY MANAGEMENT:\n" +
+              "- If the user asks about API keys, managing keys, or key-related operations, they should use the `/key` command directly.\n" +
+              "\n" +
+              "FOR DATA/TOOL REQUESTS:\n" +
               "If it requires external data or a tool (like stock prices, prediction markets, document analysis, or browser automation with Playwright), " +
-              "use the `handoff_to_mcp_tool` handoff so the MCP_Tool_Agent can call MCP servers via the `mcp_proxy` tool. " +
-              "For example, when the user asks you to visit a website, scrape information from a page, or generate/repair Playwright tests, " +
-              "you should trigger `handoff_to_mcp_tool` so it can use the `playwright-mcp` server. " +
+              "use the `handoff_to_command_discovery` handoff - it will route appropriately. " +
               "For Polymarket queries where the market ID might be unclear, the MCP_Tool_Agent will automatically use browser automation to search if needed. " +
               "If you receive tool results and further synthesis is needed, use the `handoff_to_final_answer` handoff.",
-            handoffs: [mcpHandoff, finalHandoff],
-            tools: orchestratorTools, // Set tools on the agent so they're available during handoffs - always an array
+            handoffs: [commandDiscoveryHandoff, mcpHandoff, finalHandoff],
+            tools: toolsWithCommands, // Set tools on the agent so they're available during handoffs - always an array
           });
 
           // Pass conversation history - Agents SDK Runner handles full context
@@ -625,7 +956,7 @@ serve(async (req) => {
             
             try {
               // The Runner.run() signature accepts conversation history as AgentInputItem[]
-              // For version 0.0.9, try passing content as string for simple text messages
+              // For version 0.3.2, try passing content as string for simple text messages
               const inputToPass = conversationHistory.map((item) => {
                 // If content is an array with a single text block, simplify to just the text string
                 if (Array.isArray(item.content) && item.content.length === 1 && item.content[0]?.type === "text") {
@@ -1077,13 +1408,47 @@ serve(async (req) => {
             console.error("Error message:", errorMessage);
             console.error("Error stack:", runnerError instanceof Error ? runnerError.stack : 'No stack trace');
             
+            // Check if this is the hosted_tool error
+            const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
+            
             // Send error to stream and fall through to direct API
             eventStream.sendEvent({
               type: "error",
               timestamp: Date.now(),
               error: errorMessage,
+              metadata: { isHostedToolError },
             });
-            eventStream.sendContent(`I encountered an error: ${errorMessage}. Falling back to direct API...`);
+            
+            if (isHostedToolError) {
+              // Send technical error to MCP Event Log (system log)
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                error: errorMessage,
+                metadata: {
+                  category: "sdk_compatibility",
+                  sdkVersion: "0.3.2",
+                  issue: "hosted_tool_not_supported",
+                  action: "fallback_to_direct_api",
+                  message: "Agents SDK runner error: hosted_tool type not supported",
+                },
+              });
+              // User-friendly message in chat
+              eventStream.sendContent(`Switching to direct API mode...`);
+            } else {
+              // Send technical error to MCP Event Log
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                error: errorMessage,
+                metadata: {
+                  category: "runner_error",
+                  action: "fallback_to_direct_api",
+                },
+              });
+              // User-friendly message in chat
+              eventStream.sendContent(`Switching to direct API mode...`);
+            }
           }
 
           // If Runner succeeded but produced no output, fall back to direct API
@@ -1096,11 +1461,46 @@ serve(async (req) => {
           useAgentsSdk = false;
           errorOccurred = true;
           errorMessage = sdkError instanceof Error ? sdkError.message : String(sdkError);
+          
+          const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
+          
           eventStream.sendEvent({
             type: "error",
             timestamp: Date.now(),
             error: errorMessage,
+            metadata: { isHostedToolError },
           });
+          
+          if (isHostedToolError) {
+            // Send technical error to MCP Event Log (system log)
+            eventStream.sendEvent({
+              type: "system",
+              timestamp: Date.now(),
+              error: errorMessage,
+              metadata: {
+                category: "sdk_initialization_error",
+                sdkVersion: "0.3.2",
+                issue: "hosted_tool_not_supported",
+                action: "fallback_to_direct_api",
+                message: "Failed to initialize Agents SDK: hosted_tool type not supported",
+              },
+            });
+            // User-friendly message in chat
+            eventStream.sendContent(`Switching to direct API mode...`);
+          } else {
+            // Send technical error to MCP Event Log
+            eventStream.sendEvent({
+              type: "system",
+              timestamp: Date.now(),
+              error: errorMessage,
+              metadata: {
+                category: "sdk_initialization_error",
+                action: "fallback_to_direct_api",
+              },
+            });
+            // User-friendly message in chat
+            eventStream.sendContent(`Switching to direct API mode...`);
+          }
         }
       }
 
@@ -1124,6 +1524,19 @@ serve(async (req) => {
           metadata: { message: "Using direct OpenAI API (Agents SDK unavailable)" },
         });
         
+        // Enhanced system prompt for fallback mode with MCP command support
+        const fallbackSystemPrompt = systemPrompt + "\n\n" +
+          "IMPORTANT: You can execute MCP (Model Context Protocol) commands to access external data and tools. " +
+          "When the user requests information that requires external data, respond with the appropriate MCP command in this format: " +
+          "`/mcp-server-name command_name param1=value1 param2=value2`\n\n" +
+          "Available MCP commands:\n" +
+          "- Search Grokipedia: `/grokipedia-mcp search query=\"TOPIC\"` (also works for 'Brockopedia', 'Broccopedia' variations)\n" +
+          "- Get stock quote: `/alphavantage-mcp get_quote symbol=SYMBOL`\n" +
+          "- Get stock chart: `/alphavantage-mcp get_stock_chart symbol=SYMBOL interval=1day range=3M`\n" +
+          "- Search web: `/search-mcp web_search query=\"QUERY\"`\n" +
+          "- Create Canva design: `/canva-mcp create_design template=presentation text=\"TEXT\"`\n\n" +
+          "When you need to execute a command, format it exactly as shown above. The system will execute it and return results.";
+        
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
           method: "POST",
           headers: {
@@ -1133,7 +1546,7 @@ serve(async (req) => {
             body: JSON.stringify({
             model: "gpt-4o-mini",
             messages: [
-              { role: "system", content: systemPrompt },
+              { role: "system", content: fallbackSystemPrompt },
               ...conversation,
             ],
             stream: true,
@@ -1204,6 +1617,48 @@ serve(async (req) => {
         if (!finalOutput || finalOutput.trim().length === 0) {
           finalOutput = "I was not able to generate a response. Please try rephrasing your question or asking again in a moment.";
           eventStream.sendContent(finalOutput);
+        } else {
+          // Check if the response contains MCP commands and execute them
+          // Match commands like: /grokipedia-mcp search query="nachos" or `/grokipedia-mcp search query="nachos"`
+          const mcpCommandRegex = /`?(\/[a-z-]+-mcp\s+[^`\n]+?)(?:`|$)/gi;
+          const matches = Array.from(finalOutput.matchAll(mcpCommandRegex)).map(m => m[1].trim());
+          
+          if (matches && matches.length > 0) {
+            // Found MCP commands - execute them
+            for (const match of matches) {
+              const command = match.replace(/`/g, "").trim();
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                metadata: { message: `Executing MCP command: ${command}` },
+              });
+              
+              try {
+                // Execute MCP command with auth header from the original request
+                const result = await executeMcpCommand(command, authHeader);
+                eventStream.sendEvent({
+                  type: "tool",
+                  timestamp: Date.now(),
+                  command: command,
+                  result: result,
+                });
+                
+                // Append result to final output
+                finalOutput += `\n\n**Command Result:**\n${result}`;
+                eventStream.sendContent(`\n\n**Command Result:**\n${result}`);
+              } catch (cmdError) {
+                const errorMsg = cmdError instanceof Error ? cmdError.message : String(cmdError);
+                eventStream.sendEvent({
+                  type: "error",
+                  timestamp: Date.now(),
+                  error: `Failed to execute MCP command: ${errorMsg}`,
+                  metadata: { command },
+                });
+                finalOutput += `\n\n**Error executing command:** ${errorMsg}`;
+                eventStream.sendContent(`\n\n**Error executing command:** ${errorMsg}`);
+              }
+            }
+          }
         }
         
         // Summarize long conversations if user is authenticated (async, don't block response)
@@ -1261,9 +1716,18 @@ serve(async (req) => {
       if (!response.ok) {
         const errorText = await response.text();
         console.error("Anthropic error:", response.status, errorText);
-        return new Response(JSON.stringify({ error: "Anthropic request failed" }), {
-          status: response.status,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        // Return stream even for provider errors
+        const errorStream = createEventStream(corsHeaders);
+        errorStream.sendEvent({
+          type: "error",
+          timestamp: Date.now(),
+          error: `Anthropic request failed: ${errorText}`,
+          metadata: { category: "provider_error", status: response.status },
+        });
+        errorStream.sendContent("I apologize, but there was an error with the Anthropic API. Please try again.");
+        errorStream.close();
+        return new Response(errorStream.stream, {
+          headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
         });
       }
 
@@ -1309,9 +1773,18 @@ serve(async (req) => {
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Gemini error:", response.status, errorText);
-      return new Response(JSON.stringify({ error: "Gemini request failed" }), {
-        status: response.status,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // Return stream even for provider errors
+      const errorStream = createEventStream(corsHeaders);
+      errorStream.sendEvent({
+        type: "error",
+        timestamp: Date.now(),
+        error: `Gemini request failed: ${errorText}`,
+        metadata: { category: "provider_error", status: response.status },
+      });
+      errorStream.sendContent("I apologize, but there was an error with the Gemini API. Please try again.");
+      errorStream.close();
+      return new Response(errorStream.stream, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
       });
     }
 
@@ -1333,20 +1806,30 @@ serve(async (req) => {
 
     return respondWithStreamedText(text, corsHeaders);
   } catch (error) {
-    console.error("chat error:", error);
+    console.error("=== Chat Function Error ===");
+    console.error("Error type:", error instanceof Error ? error.constructor.name : typeof error);
+    console.error("Error message:", error instanceof Error ? error.message : String(error));
+    console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+    console.error("Full error:", JSON.stringify(error, Object.getOwnPropertyNames(error)).slice(0, 1000));
+    
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    const errorStack = error instanceof Error ? error.stack : undefined;
     
     // Always return a stream, even for errors
-    const errorStream = createEventStream(corsHeaders);
-    errorStream.sendEvent({
-      type: "error",
+    eventStream.sendEvent({
+      type: "system",
       timestamp: Date.now(),
       error: errorMessage,
+      metadata: {
+        category: "function_error",
+        stack: errorStack,
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+      },
     });
-    errorStream.sendContent(`I apologize, but I encountered an error: ${errorMessage}. Please try again.`);
-    errorStream.close();
+    eventStream.sendContent(`I apologize, but I encountered an error processing your request. Please try again.`);
+    eventStream.close();
     
-    return new Response(errorStream.stream, {
+    return new Response(eventStream.stream, {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
   }

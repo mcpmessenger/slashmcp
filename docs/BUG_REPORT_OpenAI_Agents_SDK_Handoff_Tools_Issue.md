@@ -303,8 +303,17 @@ Or better yet, ensure tools are always available from the agent context during h
 
 ## Next Steps
 
-1. Investigate SDK source code (if available) around line 36194 in agents-core
-2. Check if there's a newer SDK version that fixes this
-3. Consider reporting to OpenAI if this is confirmed as a bug
-4. Explore alternative SDK usage patterns that avoid handoffs
+1. ✅ **UPGRADED**: Updated SDK from 0.0.9 to 0.3.2 (latest version) - This may resolve the issue
+2. ✅ **REPORTING**: Submitting this bug report to the official openai-agents-js GitHub repository
+3. Investigate SDK source code (if available) around line 36194 in agents-core
+4. Explore alternative SDK usage patterns that avoid handoffs (agents-as-tools pattern)
+
+## Update (After Investigation)
+
+**Action Taken**: Upgraded SDK from version 0.0.9 to 0.3.2 (latest available version as of January 2025). The bug report is being submitted to help:
+- Document the issue for others who might be stuck on older versions
+- Provide visibility to the OpenAI team about this significant bug
+- Help improve the SDK for future versions
+
+**Note**: If the upgrade resolves the issue, this report still serves as valuable documentation of a critical bug in version 0.0.9.
 
