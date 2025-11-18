@@ -421,6 +421,11 @@ COMMAND TRANSLATION RULES:
       "- If user says 'Search for X' → Prefer Grokipedia: /grokipedia-mcp search query=\"X\"\n" +
       "- If user mentions 'Brockopedia', 'Broccopedia', or any variation → They mean 'Grokipedia', use /grokipedia-mcp search\n" +
       "- Common misspellings: Brockopedia, Broccopedia, Grokipedia, Grokypedia → All mean Grokipedia\n\n" +
+      "LOCATION/BUSINESS QUERIES:\n" +
+      "- 'Find [business] in [location]', 'Nearest [business]', 'Where is [business] near [location]' → Execute /google-places-mcp search_places query=\"[business] in [location]\"\n" +
+      "- Examples: 'Find Starbucks in Des Moines' → /google-places-mcp search_places query=\"Starbucks in Des Moines\"\n" +
+      "- Examples: 'Nearest coffee shop' → /google-places-mcp search_places query=\"coffee shop\"\n" +
+      "- Examples: 'Restaurants near me' → /google-places-mcp search_places query=\"restaurants\"\n\n" +
       "WHEN USER ASKS ABOUT COMMANDS (how-to, what's available, etc.):\n" +
       "1. Use the `list_mcp_commands` tool to show available commands\n" +
       "2. Provide a brief, helpful summary in chat\n" +
@@ -465,13 +470,30 @@ function createMcpToolAgent(tools: Tool[]): Agent {
       "5. gemini-mcp: generate_text (prompt, model, temperature, max_output_tokens)\n" +
       "6. playwright-mcp: navigate_and_scrape (url, selector), screenshot (url, selector)\n" +
       "7. playwright-wrapper: browser_navigate (url), browser_snapshot, browser_click (element, ref), browser_extract_text (url), browser_take_screenshot (filename, fullPage)\n" +
-      "8. search-mcp: web_search (query, max_results)\n\n" +
+      "8. search-mcp: web_search (query, max_results)\n" +
+      "9. google-earth-engine-mcp: search_datasets (query), get_image (dataset, location, start_date, end_date), analyze_vegetation (location, date)\n" +
+      "10. google-places-mcp: get_place_details (place_id, fields), search_places (query, location), autocomplete (input, location)\n" +
+      "    IMPORTANT: When google-places-mcp returns results, format them in a friendly, conversational way:\n" +
+      "    - Present each location with name, address, phone, rating, hours, and map links\n" +
+      "    - Use emojis and clear formatting (📍 for address, 📞 for phone, ⭐ for rating, 🗺️ for maps)\n" +
+      "    - Show if places are open now (✅ Open Now / ❌ Closed)\n" +
+      "    - Include clickable map links for each location\n" +
+      "    - Make it easy to scan and find the best option\n\n" +
+      "CRITICAL: Technical messages, system status, and logging information are sent to the MCP Event Log panel (right side), NOT the chat.\n" +
+      "The chat is read aloud, so keep chat responses conversational and user-friendly. All technical details go to the MCP Event Log.\n\n" +
       "SEARCH REQUEST PATTERNS:\n" +
       "- 'Search Grokipedia for [topic]' → /grokipedia-mcp search query=\"[topic]\"\n" +
       "- 'Grokipedia [topic]' → /grokipedia-mcp search query=\"[topic]\"\n" +
       "- 'Brockopedia [topic]', 'Broccopedia [topic]', or any similar variation → User means Grokipedia, use /grokipedia-mcp search query=\"[topic]\"\n" +
       "- 'Search for [topic]' → Prefer Grokipedia: /grokipedia-mcp search query=\"[topic]\"\n" +
       "- Common misspellings: Brockopedia, Broccopedia, Grokipedia, Grokypedia → All mean Grokipedia\n\n" +
+      "LOCATION/BUSINESS QUERIES (USE GOOGLE PLACES, NOT WEB SEARCH):\n" +
+      "- 'Find [business] in [location]', 'Nearest [business] in [location]', 'Where is [business] near [location]' → /google-places-mcp search_places query=\"[business] in [location]\"\n" +
+      "- 'Starbucks near [location]', 'Restaurants in [city]', 'Gas stations near me' → /google-places-mcp search_places query=\"[query]\"\n" +
+      "- Examples: 'Find Starbucks in Des Moines' → /google-places-mcp search_places query=\"Starbucks in Des Moines\"\n" +
+      "- Examples: 'Nearest coffee shop' → /google-places-mcp search_places query=\"coffee shop\"\n" +
+      "- Examples: 'Where's the nearest Starbucks in Des Moines?' → /google-places-mcp search_places query=\"Starbucks in Des Moines\"\n" +
+      "- CRITICAL: For location/business queries, ALWAYS use Google Places API, NOT web search\n\n" +
       "CRITICAL POLYMARKET WORKFLOW - FOLLOW EXACTLY:\n" +
       "When a user asks about Polymarket markets:\n" +
       "STEP 1: Try the market lookup first: `/polymarket-mcp get_market_price market_id=GUESSED_SLUG`\n" +
@@ -820,10 +842,12 @@ serve(async (req) => {
                   message: "Agents SDK encountered compatibility issue with tool types. Multi-agent handoffs disabled.",
                 },
               });
-              // User-friendly message in chat
-              eventStream.sendContent(
-                `Switching to direct API mode. Multi-agent features temporarily unavailable.`
-              );
+              // Send status to MCP Event Log (not chat - chat is read aloud)
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                metadata: { message: "Switching to direct API mode. Multi-agent features temporarily unavailable." },
+              });
             } else {
               // Send technical error to MCP Event Log
               eventStream.sendEvent({
@@ -836,7 +860,11 @@ serve(async (req) => {
                 },
               });
               // User-friendly message in chat
-              eventStream.sendContent(`Switching to direct API mode...`);
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                metadata: { message: "Switching to direct API mode (fallback mode)" },
+              });
             }
             
             throw agentError; // Re-throw to be caught by outer catch
@@ -1434,7 +1462,11 @@ serve(async (req) => {
                 },
               });
               // User-friendly message in chat
-              eventStream.sendContent(`Switching to direct API mode...`);
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                metadata: { message: "Switching to direct API mode (fallback mode)" },
+              });
             } else {
               // Send technical error to MCP Event Log
               eventStream.sendEvent({
@@ -1447,7 +1479,11 @@ serve(async (req) => {
                 },
               });
               // User-friendly message in chat
-              eventStream.sendContent(`Switching to direct API mode...`);
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                metadata: { message: "Switching to direct API mode (fallback mode)" },
+              });
             }
           }
 
@@ -1485,8 +1521,12 @@ serve(async (req) => {
                 message: "Failed to initialize Agents SDK: hosted_tool type not supported",
               },
             });
-            // User-friendly message in chat
-            eventStream.sendContent(`Switching to direct API mode...`);
+            // Send status to MCP Event Log (not chat - chat is read aloud)
+            eventStream.sendEvent({
+              type: "system",
+              timestamp: Date.now(),
+              metadata: { message: "Switching to direct API mode (fallback mode)" },
+            });
           } else {
             // Send technical error to MCP Event Log
             eventStream.sendEvent({
@@ -1496,10 +1536,9 @@ serve(async (req) => {
               metadata: {
                 category: "sdk_initialization_error",
                 action: "fallback_to_direct_api",
+                message: "Switching to direct API mode (fallback mode)",
               },
             });
-            // User-friendly message in chat
-            eventStream.sendContent(`Switching to direct API mode...`);
           }
         }
       }
@@ -1534,7 +1573,17 @@ serve(async (req) => {
           "- Get stock quote: `/alphavantage-mcp get_quote symbol=SYMBOL`\n" +
           "- Get stock chart: `/alphavantage-mcp get_stock_chart symbol=SYMBOL interval=1day range=3M`\n" +
           "- Search web: `/search-mcp web_search query=\"QUERY\"`\n" +
+          "- Find businesses/locations: `/google-places-mcp search_places query=\"Starbucks in Des Moines\"` (returns formatted results with addresses, ratings, hours, and map links)\n" +
+          "  When you receive Google Places results, format them nicely:\n" +
+          "  - List each location with name, address, phone, rating\n" +
+          "  - Show if open now (✅/❌)\n" +
+          "  - Include map links for each location\n" +
+          "  - Use clear formatting with emojis\n\n" +
+          "IMPORTANT: Technical messages and system status go to the MCP Event Log (right panel), NOT the chat.\n" +
+          "The chat is read aloud, so keep responses conversational. Technical details are logged separately.\n" +
           "- Create Canva design: `/canva-mcp create_design template=presentation text=\"TEXT\"`\n\n" +
+          "IMPORTANT: For location/business queries (e.g., 'nearest Starbucks', 'find restaurants in X'), use Google Places API, NOT web search.\n" +
+          "Examples: 'Find Starbucks in Des Moines' → `/google-places-mcp search_places query=\"Starbucks in Des Moines\"`\n\n" +
           "When you need to execute a command, format it exactly as shown above. The system will execute it and return results.";
         
         const response = await fetch("https://api.openai.com/v1/chat/completions", {
