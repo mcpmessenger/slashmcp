@@ -9,6 +9,8 @@ import { listWorkflows, deleteWorkflow } from "@/lib/workflows/client";
 import type { Workflow } from "@/lib/workflows/types";
 import { supabaseClient } from "@/lib/supabaseClient";
 import { cn } from "@/lib/utils";
+import { PageHeader } from "@/components/PageHeader";
+import { Footer } from "@/components/Footer";
 
 export function Workflows() {
   const navigate = useNavigate();
@@ -99,31 +101,23 @@ export function Workflows() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">Workflows</h1>
-              <p className="text-sm text-muted-foreground">
-                Create and manage multi-agent workflows
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate("/")}>
-                Back to Chat
-              </Button>
-              {authReady && (
-                <Button onClick={() => navigate("/workflows/new")}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Workflow
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        title="Workflows"
+        description="Create and manage multi-agent workflows"
+      >
+        <Button variant="outline" onClick={() => navigate("/")} className="hidden sm:flex">
+          Back to Chat
+        </Button>
+        {authReady && (
+          <Button onClick={() => navigate("/workflows/new")}>
+            <Plus className="h-4 w-4 mr-2" />
+            <span className="hidden sm:inline">New Workflow</span>
+            <span className="sm:hidden">New</span>
+          </Button>
+        )}
+      </PageHeader>
 
       {/* Content */}
       <div className="container mx-auto px-4 py-8">
@@ -247,6 +241,9 @@ export function Workflows() {
           </div>
         )}
       </div>
+      
+      {/* Footer */}
+      <Footer />
     </div>
   );
 }

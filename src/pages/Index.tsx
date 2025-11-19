@@ -10,6 +10,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { McpEventLog } from "@/components/McpEventLog";
+import { Footer } from "@/components/Footer";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import {
   DropdownMenu,
@@ -428,6 +429,9 @@ const Index = () => {
           className="px-4 pb-4"
         />
       )}
+      
+      {/* Footer */}
+      <Footer />
     </div>
   );
 };

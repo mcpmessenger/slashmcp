@@ -12,6 +12,8 @@ import { MCP_SERVER_REGISTRY, findServerDefinition } from "@/lib/mcp/registry";
 import { listMcpServers, type McpRegistryEntry } from "@/lib/mcp/registryClient";
 import { supabaseClient } from "@/lib/supabaseClient";
 import { useToast } from "@/components/ui/use-toast";
+import { PageHeader } from "@/components/PageHeader";
+import { Footer } from "@/components/Footer";
 
 type ServerWithStatus = {
   id: string;
@@ -177,37 +179,28 @@ export function Registry() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
-      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">MCP Server Registry</h1>
-              <p className="text-sm text-muted-foreground">
-                Discover and manage Model Context Protocol servers and their tools
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate("/")}>
-                Back to Chat
-              </Button>
-              {authReady && (
-                <>
-                  <Button variant="outline" onClick={() => navigate("/workflows/new")}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    New Workflow
-                  </Button>
-                  <Button onClick={() => navigate("/")}>
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Server
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <PageHeader
+        title="MCP Server Registry"
+        description="Discover and manage Model Context Protocol servers and their tools"
+      >
+        <Button variant="outline" onClick={() => navigate("/")} className="hidden sm:flex">
+          Back to Chat
+        </Button>
+        {authReady && (
+          <>
+            <Button variant="outline" onClick={() => navigate("/workflows/new")} className="hidden md:flex">
+              <Plus className="h-4 w-4 mr-2" />
+              New Workflow
+            </Button>
+            <Button onClick={() => navigate("/")} className="hidden sm:flex">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Server
+            </Button>
+          </>
+        )}
+      </PageHeader>
 
       {/* Filters */}
       <div className="border-b bg-muted/20">
@@ -356,6 +349,9 @@ export function Registry() {
           </div>
         )}
       </div>
+      
+      {/* Footer */}
+      <Footer />
     </div>
   );
 }
