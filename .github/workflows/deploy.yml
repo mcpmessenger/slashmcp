@@ -33,11 +33,13 @@ jobs:
           # Required environment variables
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          # OAuth redirect URL - should be your production domain (e.g., https://your-app.vercel.app)
+          # If not set, falls back to window.location.origin at runtime
+          VITE_SUPABASE_REDIRECT_URL: ${{ secrets.VITE_SUPABASE_REDIRECT_URL }}
           # Optional environment variables (set if needed)
           VITE_SUPABASE_FUNCTIONS_URL: ${{ secrets.VITE_SUPABASE_FUNCTIONS_URL }}
           VITE_ALPHA_VANTAGE_API_KEY: ${{ secrets.VITE_ALPHA_VANTAGE_API_KEY }}
           VITE_MCP_GATEWAY_URL: ${{ secrets.VITE_MCP_GATEWAY_URL }}
-          VITE_SUPABASE_REDIRECT_URL: ${{ secrets.VITE_SUPABASE_REDIRECT_URL }}
 
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25

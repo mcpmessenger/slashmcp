@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Play, Trash2, Edit, Copy, Clock } from "lucide-react";
+import { Plus, Play, Trash2, Edit, Copy, Clock, LogIn, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { listWorkflows, deleteWorkflow } from "@/lib/workflows/client";
 import type { Workflow } from "@/lib/workflows/types";
 import { supabaseClient } from "@/lib/supabaseClient";
+import { cn } from "@/lib/utils";
 
 export function Workflows() {
   const navigate = useNavigate();
@@ -15,6 +16,7 @@ export function Workflows() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [authReady, setAuthReady] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
 
   useEffect(() => {
     supabaseClient.auth.getSession().then(({ data: { session } }) => {
@@ -126,9 +128,55 @@ export function Workflows() {
       {/* Content */}
       <div className="container mx-auto px-4 py-8">
         {!authReady ? (
-          <div className="text-center py-12">
-            <p className="text-muted-foreground mb-4">Please sign in to create and manage workflows</p>
-            <Button onClick={() => navigate("/")}>Sign In</Button>
+          <div className="max-w-2xl mx-auto">
+            <div className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-6 flex items-start gap-4">
+              <AlertCircle className="h-6 w-6 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg text-foreground mb-2">Sign in required</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Please sign in to create and manage workflows. Sign in with Google to access all workflow features including templates, execution, and collaboration.
+                </p>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (isAuthLoading) return;
+                    setIsAuthLoading(true);
+                    try {
+                      const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL ?? window.location.origin;
+                      await supabaseClient.auth.signInWithOAuth({
+                        provider: "google",
+                        options: {
+                          redirectTo,
+                          queryParams: {
+                            access_type: "offline",
+                            prompt: "consent",
+                          },
+                        },
+                      });
+                    } catch (error) {
+                      console.error("Google sign-in failed", error);
+                      toast({
+                        title: "Google sign-in failed",
+                        description: error instanceof Error ? error.message : "Unable to start Google sign-in.",
+                        variant: "destructive",
+                      });
+                    } finally {
+                      setIsAuthLoading(false);
+                    }
+                  }}
+                  disabled={isAuthLoading}
+                  className={cn(
+                    "inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground transition-colors",
+                    isAuthLoading
+                      ? "opacity-60 cursor-not-allowed"
+                      : "hover:bg-primary/90"
+                  )}
+                >
+                  <LogIn className="h-5 w-5" />
+                  <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
+                </button>
+              </div>
+            </div>
           </div>
         ) : workflows.length === 0 ? (
           <div className="text-center py-12">

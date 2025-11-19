@@ -2,7 +2,7 @@ import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
 import { useChat } from "@/hooks/useChat";
 import { useEffect, useRef, useCallback, useMemo } from "react";
-import { Volume2, VolumeX, LogIn, LogOut, ChevronDown, Server, Workflow } from "lucide-react";
+import { Volume2, VolumeX, LogIn, LogOut, ChevronDown, Server, Workflow, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useVoicePlayback } from "@/hooks/useVoicePlayback";
 import { useToast } from "@/components/ui/use-toast";
@@ -208,67 +208,104 @@ const Index = () => {
     <div className="min-h-screen bg-background flex flex-col">
       <div className="px-4 pt-6">
         <div className="max-w-[1600px] mx-auto flex flex-col gap-4">
-          <div className="flex items-center justify-between gap-4 px-1 py-1 sm:px-2">
-            <div className="flex items-center gap-3">
-              <img src="/Untitled design.svg" alt="SlashMCP logo" className="h-10 w-auto" />
+          {/* Sign-in prompt banner */}
+          {authReady && !session && (
+            <div className="mx-4 mb-4 rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 flex items-start gap-3">
+              <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <h3 className="font-semibold text-foreground mb-1">Sign in required</h3>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Please sign in to use SlashMCP. Sign in with Google to access all features including chat, workflows, and MCP tools.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void signInWithGoogle()}
+                  disabled={isAuthLoading}
+                  className={cn(
+                    "inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors",
+                    isAuthLoading
+                      ? "opacity-60 cursor-not-allowed"
+                      : "hover:bg-primary/90"
+                  )}
+                >
+                  <LogIn className="h-4 w-4" />
+                  <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2 px-1 py-1 sm:px-2">
+            {/* Logo - Hide subtitle on mobile */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <img src="/Untitled design.svg" alt="SlashMCP logo" className="h-8 w-auto sm:h-10" />
               <div className="leading-tight">
-                <p className="font-semibold text-base text-foreground">SlashMCP</p>
-                <p className="text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
+                <p className="font-semibold text-sm sm:text-base text-foreground">SlashMCP</p>
+                <p className="hidden sm:block text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
                   MCP-powered AI workspace
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            {/* Navigation - Prioritize avatar, icons only on mobile */}
+            <div className="flex items-center gap-1 sm:gap-2">
               {authReady && (
                 session ? (
-                  <div className="flex items-center gap-2">
-                    <Avatar className="h-8 w-8 border border-border/50 shadow-sm" title={displayName ?? undefined}>
+                  <>
+                    {/* Avatar - Always visible, prioritized */}
+                    <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm flex-shrink-0" title={displayName ?? undefined}>
                       {avatarUrl ? (
                         <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
                       ) : (
-                        <AvatarFallback>{avatarInitial}</AvatarFallback>
+                        <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
                       )}
                     </Avatar>
+                    {/* Sign out - Icon only on mobile */}
                     <button
                       type="button"
                       onClick={() => void signOut()}
-                      className="flex items-center gap-1 rounded-full border border-border/40 bg-muted/40 px-3 py-1 text-xs font-medium text-foreground/80 hover:bg-muted transition-colors"
+                      className="rounded-full border border-border/40 bg-muted/40 p-1.5 sm:px-3 sm:py-1 text-foreground/80 hover:bg-muted transition-colors flex-shrink-0"
+                      title="Sign out"
                     >
-                      <LogOut className="h-3.5 w-3.5" />
-                      <span>Sign out</span>
+                      <LogOut className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                      <span className="hidden sm:inline ml-1 text-xs font-medium">Sign out</span>
                     </button>
-                  </div>
+                  </>
                 ) : (
                   <button
                     type="button"
                     onClick={() => void signInWithGoogle()}
                     disabled={isAuthLoading}
                     className={cn(
-                      "flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium transition-colors",
+                      "rounded-full border border-primary/40 bg-primary/10 p-1.5 sm:px-3 sm:py-1 text-primary transition-colors flex-shrink-0",
                       isAuthLoading
                         ? "opacity-60 cursor-not-allowed"
-                        : "text-primary hover:bg-primary/20 hover:text-primary"
+                        : "hover:bg-primary/20 hover:text-primary"
                     )}
+                    title={isAuthLoading ? "Connecting..." : "Sign in with Google"}
                   >
-                    <LogIn className="h-3.5 w-3.5" />
-                    <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
+                    <LogIn className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                    <span className="hidden sm:inline ml-1 text-xs font-medium">{isAuthLoading ? "Connecting..." : "Sign in"}</span>
                   </button>
                 )
               )}
+              {/* Registry - Icon only on mobile */}
               <Link
                 to="/registry"
-                className="flex items-center gap-2 rounded-full border border-border/40 bg-muted/40 px-3 py-1 text-xs font-medium text-foreground/80 hover:bg-muted transition-colors"
+                className="rounded-full border border-border/40 bg-muted/40 p-1.5 sm:px-3 sm:py-1 text-foreground/80 hover:bg-muted transition-colors flex-shrink-0"
+                title="MCP Registry"
               >
-                <Server className="h-4 w-4" />
-                <span>Registry</span>
+                <Server className="h-4 w-4 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline ml-2 text-xs font-medium">Registry</span>
               </Link>
+              {/* Workflows - Icon only on mobile */}
               <Link
                 to="/workflows"
-                className="flex items-center gap-2 rounded-full border border-border/40 bg-muted/40 px-3 py-1 text-xs font-medium text-foreground/80 hover:bg-muted transition-colors"
+                className="rounded-full border border-border/40 bg-muted/40 p-1.5 sm:px-3 sm:py-1 text-foreground/80 hover:bg-muted transition-colors flex-shrink-0"
+                title="Workflows"
               >
-                <Workflow className="h-4 w-4" />
-                <span>Workflows</span>
+                <Workflow className="h-4 w-4 sm:h-4 sm:w-4" />
+                <span className="hidden sm:inline ml-2 text-xs font-medium">Workflows</span>
               </Link>
+              {/* Theme toggle - Always icon only */}
               <ThemeToggle />
             </div>
           </div>
@@ -303,7 +340,37 @@ const Index = () => {
           <ResizablePanel defaultSize={70} minSize={40} className="min-w-0">
             <div className="h-full overflow-y-auto px-4 py-8">
               <div className="max-w-4xl mx-auto space-y-6">
-                {messages.length === 0 ? (
+                {!authReady || !session ? (
+                  <div className="text-center mt-20 space-y-4">
+                    <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
+                    <p className="text-muted-foreground text-lg">
+                      MCP-powered AI workspace for document intelligence.
+                    </p>
+                    {!authReady ? (
+                      <p className="text-sm text-muted-foreground">Loading...</p>
+                    ) : (
+                      <div className="space-y-4">
+                        <p className="text-muted-foreground">
+                          Sign in to start chatting and using workflows.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void signInWithGoogle()}
+                          disabled={isAuthLoading}
+                          className={cn(
+                            "inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground transition-colors",
+                            isAuthLoading
+                              ? "opacity-60 cursor-not-allowed"
+                              : "hover:bg-primary/90"
+                          )}
+                        >
+                          <LogIn className="h-5 w-5" />
+                          <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : messages.length === 0 ? (
                   <div className="text-center mt-20 space-y-3">
                     <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
                     <p className="text-muted-foreground">
@@ -316,10 +383,10 @@ const Index = () => {
                     {renderModelMenu("compact")}
                   </div>
                 )}
-                {messages.map((message, index) => (
+                {session && messages.map((message, index) => (
                   <ChatMessage key={index} message={message} />
                 ))}
-                {isLoading && (
+                {session && isLoading && (
                   <div className="flex gap-3 justify-start animate-fade-in">
                     <div className="h-8 w-8 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
                       <div className="h-2 w-2 bg-foreground/50 rounded-full animate-pulse" />
@@ -353,12 +420,14 @@ const Index = () => {
       </div>
 
       {/* Chat Input */}
-      <ChatInput
-        onSubmit={sendMessage}
-        onAssistantMessage={appendAssistantText}
-        disabled={isLoading}
-        className="px-4 pb-4"
-      />
+      {authReady && session && (
+        <ChatInput
+          onSubmit={sendMessage}
+          onAssistantMessage={appendAssistantText}
+          disabled={isLoading}
+          className="px-4 pb-4"
+        />
+      )}
     </div>
   );
 };

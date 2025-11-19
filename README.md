@@ -59,7 +59,8 @@ VITE_SUPABASE_FUNCTIONS_URL=https://<your-supabase-ref>.supabase.co/functions/v1
 VITE_SUPABASE_PUBLISHABLE_KEY=<supabase-anon-key>
 VITE_ALPHA_VANTAGE_API_KEY=<alpha-vantage-key>
 VITE_MCP_GATEWAY_URL=http://localhost:8989/invoke # MCP gateway proxy endpoint
-VITE_SUPABASE_REDIRECT_URL=http://localhost:5173          # optional: explicit OAuth redirect target
+VITE_SUPABASE_REDIRECT_URL=http://localhost:5173          # OAuth redirect URL (local dev)
+# For production: Set VITE_SUPABASE_REDIRECT_URL to your production domain in GitHub Secrets
 TWELVEDATA_API_KEY=<twelve-data-key>                # optional fallback provider
 ALPHAVANTAGE_CACHE_TTL_MS=300000 # optional Supabase function cache TTL (5 min)
 POLYMARKET_CACHE_TTL_MS=120000   # optional cache window for Polymarket lookups

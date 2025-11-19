@@ -19,11 +19,16 @@ This workflow automatically deploys your SlashMCP app to production when you pus
    - `VITE_SUPABASE_URL` - Your Supabase URL (required)
    - `VITE_SUPABASE_PUBLISHABLE_KEY` - Your Supabase anon key (required)
    
+   **Recommended secrets** (for OAuth to work correctly):
+   - `VITE_SUPABASE_REDIRECT_URL` - Your production OAuth redirect URL (e.g., `https://your-app.vercel.app`)
+     - **Important**: Set this to your production domain for Google OAuth sign-in to redirect correctly
+     - If not set, the app will use `window.location.origin` at runtime, which works but is less explicit
+     - Must match the redirect URL configured in your Supabase project settings
+   
    **Optional secrets** (set if you need these features):
    - `VITE_SUPABASE_FUNCTIONS_URL` - Your Supabase functions URL (falls back to `${VITE_SUPABASE_URL}/functions/v1` if not set)
    - `VITE_ALPHA_VANTAGE_API_KEY` - Alpha Vantage API key for stock quotes
    - `VITE_MCP_GATEWAY_URL` - MCP gateway proxy endpoint (e.g., `https://your-gateway.com/invoke`)
-   - `VITE_SUPABASE_REDIRECT_URL` - OAuth redirect URL (defaults to deployment URL if not set)
 
 #### Option 2: Netlify
 
