@@ -417,6 +417,7 @@ const Index = () => {
             onAssistantMessage={appendAssistantText}
             disabled={isLoading}
             className="px-4 pb-4"
+            registry={registry}
           />
         )}
       </div>

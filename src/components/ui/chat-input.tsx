@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, memo } from "react";
+import React, { useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
 import { Plus, ArrowUp, Mic, Square, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -10,6 +10,8 @@ import {
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { transcribeAudio } from "@/lib/voice";
+import type { McpRegistryEntry } from "@/lib/mcp/types";
+import { MCP_PROVIDER_PRESETS } from "@/lib/mcp/presets";
 
 type MenuOption =
   | "Upload Files"
@@ -137,6 +139,7 @@ interface ChatInputProps {
   onAssistantMessage?: (content: string) => void;
   disabled?: boolean;
   className?: string;
+  registry?: McpRegistryEntry[];
 }
 
 interface OptionTagProps {
@@ -212,7 +215,6 @@ export function ChatInput({
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
-  const [slashQuery, setSlashQuery] = useState("");
   const [filteredSlashCommands, setFilteredSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
@@ -240,6 +242,47 @@ export function ChatInput({
     mediaStreamRef.current?.getTracks().forEach(track => track.stop());
     mediaStreamRef.current = null;
   }, []);
+
+  const allSlashCommands = useMemo(() => {
+    const map = new Map<string, SlashCommand>();
+
+    // Base commands
+    for (const cmd of SLASH_COMMANDS) {
+      map.set(cmd.value, cmd);
+    }
+
+    // Provider presets (e.g. /gemini, /polygon)
+    for (const preset of Object.values(MCP_PROVIDER_PRESETS)) {
+      const value = `/${preset.id}`;
+      if (!map.has(value)) {
+        map.set(value, {
+          value,
+          label: value,
+          description: preset.description ?? preset.label,
+        });
+      }
+    }
+
+    // Dynamic MCP registry entries (e.g. /alphavantage-mcp:)
+    if (registry && registry.length > 0) {
+      for (const server of registry) {
+        const value = `/${server.id}:`;
+        if (!map.has(value)) {
+          map.set(value, {
+            value,
+            label: value,
+            description: `Invoke ${server.name} tools with ${value}<tool_name>`,
+          });
+        }
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [registry]);
+
+  useEffect(() => {
+    setFilteredSlashCommands(allSlashCommands);
+  }, [allSlashCommands]);
 
   useEffect(() => {
     const supported =
@@ -434,8 +477,7 @@ export function ChatInput({
 
       if (lastSlashIndex === -1) {
         setIsSlashMenuOpen(false);
-        setSlashQuery("");
-        setFilteredSlashCommands(SLASH_COMMANDS);
+        setFilteredSlashCommands(allSlashCommands);
         setSlashActiveIndex(0);
         return;
       }
@@ -443,7 +485,7 @@ export function ChatInput({
       const query = textUpToCursor.slice(lastSlashIndex + 1);
       const normalized = query.toLowerCase();
 
-      const filtered = SLASH_COMMANDS.filter((cmd) => {
+      const filtered = allSlashCommands.filter((cmd) => {
         if (!normalized) return true;
         const valueLower = cmd.value.toLowerCase();
         const labelLower = cmd.label.toLowerCase();
@@ -454,12 +496,11 @@ export function ChatInput({
         );
       });
 
-      setSlashQuery(query);
       setFilteredSlashCommands(filtered);
       setSlashActiveIndex(0);
       setIsSlashMenuOpen(filtered.length > 0);
     },
-    [],
+    [allSlashCommands],
   );
 
   const handleChange = useCallback(
