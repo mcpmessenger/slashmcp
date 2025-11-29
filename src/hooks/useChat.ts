@@ -903,7 +903,10 @@ export function useChat() {
 
     setIsAuthLoading(true);
     try {
-      const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL ?? window.location.origin;
+      // TEMP: Force redirect back to whatever origin loaded the app.
+      // This avoids relying on potentially mismatched VITE_SUPABASE_REDIRECT_URL
+      // while we stabilize OAuth in production. Supabase callback URLs remain unchanged.
+      const redirectTo = window.location.origin;
       console.log("[OAuth] Redirect URL:", redirectTo);
       console.log("[OAuth] Window origin:", window.location.origin);
       console.log("[OAuth] Env var:", import.meta.env.VITE_SUPABASE_REDIRECT_URL);
