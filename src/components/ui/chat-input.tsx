@@ -32,6 +32,105 @@ interface UploadJob {
   visionMetadata?: Record<string, unknown> | null;
 }
 
+type SlashCommand = {
+  value: string;
+  label: string;
+  description?: string;
+};
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    value: "/imagine",
+    label: "/imagine",
+    description: "Generate images with Gemini from a text prompt.",
+  },
+  {
+    value: "/model openai",
+    label: "/model openai",
+    description: "Switch to OpenAI (GPT‑4o Mini).",
+  },
+  {
+    value: "/model anthropic",
+    label: "/model anthropic",
+    description: "Switch to Anthropic (Claude 3 Haiku).",
+  },
+  {
+    value: "/model gemini",
+    label: "/model gemini",
+    description: "Switch to Google Gemini 1.5 Flash.",
+  },
+  {
+    value: "/slashmcp help",
+    label: "/slashmcp help",
+    description: "Show help for managing MCP servers.",
+  },
+  {
+    value: "/slashmcp list",
+    label: "/slashmcp list",
+    description: "List configured MCP servers.",
+  },
+  {
+    value: "/slashmcp add",
+    label: "/slashmcp add",
+    description: "Register a new MCP server or preset.",
+  },
+  {
+    value: "/slashmcp login",
+    label: "/slashmcp login",
+    description: "Sign in to Supabase for MCP registry.",
+  },
+  {
+    value: "/slashmcp remove",
+    label: "/slashmcp remove",
+    description: "Remove a registered MCP server.",
+  },
+  {
+    value: "/key help",
+    label: "/key help",
+    description: "Show help for the Key Manager Agent.",
+  },
+  {
+    value: "/key add",
+    label: "/key add",
+    description: "Securely add an API key to the Key Manager.",
+  },
+  {
+    value: "/key list",
+    label: "/key list",
+    description: "List stored API keys.",
+  },
+  {
+    value: "/key get",
+    label: "/key get",
+    description: "View details for a specific API key.",
+  },
+  {
+    value: "/key check",
+    label: "/key check",
+    description: "Check status and permissions for a key.",
+  },
+  {
+    value: "/key update",
+    label: "/key update",
+    description: "Update metadata, scope, or value of a key.",
+  },
+  {
+    value: "/key delete",
+    label: "/key delete",
+    description: "Delete a stored API key.",
+  },
+  {
+    value: "/key audit",
+    label: "/key audit",
+    description: "View recent audit logs for key usage.",
+  },
+  {
+    value: "/key stale",
+    label: "/key stale",
+    description: "Find keys that haven’t been used recently.",
+  },
+];
+
 interface ChatInputProps {
   placeholder?: string;
   onSubmit?: (value: string) => void;
@@ -96,7 +195,7 @@ const OptionsMenu = memo(({
 });
 
 export function ChatInput({
-  placeholder = "Ask anything...",
+  placeholder = "Try a slash / command",
   onSubmit = (value: string) => console.log("Submitted:", value),
   onAssistantMessage,
   disabled = false,
@@ -112,6 +211,10 @@ export function ChatInput({
   const [visionProvider, setVisionProvider] = useState<"gpt4o" | "gemini">("gpt4o");
   const [inputHistory, setInputHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [filteredSlashCommands, setFilteredSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
+  const [slashActiveIndex, setSlashActiveIndex] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState(false);
@@ -130,6 +233,7 @@ export function ChatInput({
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const slashMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dropdownPlacement: "top" | "bottom" = jobs.length > 0 ? "top" : "bottom";
   const cleanupStream = useCallback(() => {
@@ -296,11 +400,96 @@ export function ChatInput({
     "Voice Assistant",
   ];
 
-  // Close menu when clicking outside
+  const applySlashCommand = useCallback(
+    (command: SlashCommand) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      const current = textarea.value;
+      const cursorPos = textarea.selectionStart ?? current.length;
+      const textUpToCursor = current.slice(0, cursorPos);
+      const lastSlashIndex = textUpToCursor.lastIndexOf("/");
+      if (lastSlashIndex === -1) return;
+
+      const beforeSlash = current.slice(0, lastSlashIndex);
+      const afterCursor = current.slice(cursorPos);
+      const newValue = `${beforeSlash}${command.value} ${afterCursor}`;
+      setValue(newValue);
+      setIsSlashMenuOpen(false);
+      setSlashQuery("");
+
+      requestAnimationFrame(() => {
+        const pos = beforeSlash.length + command.value.length + 1;
+        textarea.selectionStart = textarea.selectionEnd = pos;
+        textarea.focus();
+      });
+    },
+    [],
+  );
+
+  const handleSlashDetection = useCallback(
+    (nextValue: string, selectionStart: number | null) => {
+      const cursorPos = selectionStart ?? nextValue.length;
+      const textUpToCursor = nextValue.slice(0, cursorPos);
+      const lastSlashIndex = textUpToCursor.lastIndexOf("/");
+
+      if (lastSlashIndex === -1) {
+        setIsSlashMenuOpen(false);
+        setSlashQuery("");
+        setFilteredSlashCommands(SLASH_COMMANDS);
+        setSlashActiveIndex(0);
+        return;
+      }
+
+      const query = textUpToCursor.slice(lastSlashIndex + 1);
+      const normalized = query.toLowerCase();
+
+      const filtered = SLASH_COMMANDS.filter((cmd) => {
+        if (!normalized) return true;
+        const valueLower = cmd.value.toLowerCase();
+        const labelLower = cmd.label.toLowerCase();
+        return (
+          valueLower.startsWith("/" + normalized) ||
+          valueLower.includes(normalized) ||
+          labelLower.includes(normalized)
+        );
+      });
+
+      setSlashQuery(query);
+      setFilteredSlashCommands(filtered);
+      setSlashActiveIndex(0);
+      setIsSlashMenuOpen(filtered.length > 0);
+    },
+    [],
+  );
+
+  const handleChange = useCallback(
+    (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+      const nextValue = e.target.value;
+      setValue(nextValue);
+      handleSlashDetection(nextValue, e.target.selectionStart);
+    },
+    [handleSlashDetection],
+  );
+
+  // Close menus when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const menuEl = menuRef.current;
+      const slashEl = slashMenuRef.current;
+      const textareaEl = textareaRef.current;
+
+      if (menuEl && !menuEl.contains(target)) {
         setIsMenuOpen(false);
+      }
+
+      if (
+        slashEl &&
+        !slashEl.contains(target) &&
+        textareaEl &&
+        !textareaEl.contains(target)
+      ) {
+        setIsSlashMenuOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -393,6 +582,35 @@ export function ChatInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (isSlashMenuOpen && filteredSlashCommands.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSlashActiveIndex((prev) => (prev + 1) % filteredSlashCommands.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSlashActiveIndex((prev) =>
+            prev === 0 ? filteredSlashCommands.length - 1 : prev - 1,
+          );
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          const command =
+            filteredSlashCommands[slashActiveIndex] ?? filteredSlashCommands[0];
+          if (command) {
+            applySlashCommand(command);
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setIsSlashMenuOpen(false);
+          return;
+        }
+      }
+
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         submitValue();
@@ -406,13 +624,25 @@ export function ChatInput({
         return;
       }
       if (e.key === "ArrowDown") {
-        if (historyIndex !== null || textareaRef.current?.selectionEnd === (textareaRef.current?.value.length ?? 0)) {
+        if (
+          historyIndex !== null ||
+          textareaRef.current?.selectionEnd ===
+            (textareaRef.current?.value.length ?? 0)
+        ) {
           e.preventDefault();
           navigateHistory("next");
         }
       }
     },
-    [submitValue, navigateHistory, historyIndex]
+    [
+      submitValue,
+      navigateHistory,
+      historyIndex,
+      isSlashMenuOpen,
+      filteredSlashCommands,
+      slashActiveIndex,
+      applySlashCommand,
+    ],
   );
 
   const selectOption = useCallback(
@@ -718,7 +948,7 @@ export function ChatInput({
             <textarea
               ref={textareaRef}
               value={value}
-              onChange={(e) => setValue(e.target.value)}
+              onChange={handleChange}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
               aria-label="Message Input"
@@ -726,6 +956,38 @@ export function ChatInput({
               disabled={disabled}
               className="w-full min-h-8 max-h-24 bg-transparent text-sm font-normal text-foreground placeholder-muted-foreground border-0 outline-none focus:outline-none px-3 pr-10 py-1 resize-none overflow-y-auto"
             />
+
+            {isSlashMenuOpen && filteredSlashCommands.length > 0 && (
+              <div
+                ref={slashMenuRef}
+                className="absolute bottom-full mb-2 left-2 right-10 bg-card/95 backdrop-blur-xl rounded-lg shadow-lg border border-border/60 z-[70]"
+              >
+                <ul className="max-h-60 overflow-y-auto py-1">
+                  {filteredSlashCommands.map((cmd, index) => (
+                    <li
+                      key={cmd.value}
+                      className={cn(
+                        "px-3 py-2 text-sm cursor-pointer flex flex-col gap-0.5",
+                        index === slashActiveIndex
+                          ? "bg-muted text-foreground"
+                          : "text-foreground/80 hover:bg-muted/80",
+                      )}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applySlashCommand(cmd);
+                      }}
+                    >
+                      <span className="font-medium">{cmd.label}</span>
+                      {cmd.description && (
+                        <span className="text-xs text-foreground/60">
+                          {cmd.description}
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {/* Send button */}
             <button
