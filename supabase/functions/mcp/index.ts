@@ -681,6 +681,9 @@ async function getTwelveDataApiKey(userId?: string): Promise<string | null> {
 async function fetchTwelveDataQuote(symbol: string, userId?: string): Promise<StockInsights> {
   const apiKey = await getTwelveDataApiKey(userId);
   if (!apiKey) {
+    if (!userId) {
+      throw new Error("AUTH_REQUIRED:TWELVEDATA_API_KEY is not configured. Please log in to add your API key securely.");
+    }
     throw new Error("TWELVEDATA_API_KEY is not configured. Add it via /key add twelvedata <name> key=YOUR_KEY or set TWELVEDATA_API_KEY as a Supabase secret.");
   }
 
@@ -773,6 +776,42 @@ async function fetchTwelveDataQuote(symbol: string, userId?: string): Promise<St
   };
 }
 
+// Helper function to create authentication required error response (defined before handlers)
+function createAuthRequiredResponse(invocation: McpInvocation, reason: string): McpInvocationResponse {
+  return {
+    invocation,
+    result: {
+      type: "error",
+      message: "Authentication Required",
+      details: {
+        reason: reason,
+        explanation: "This feature requires you to be logged in to access your personal data and settings.",
+        whatIsSaved: {
+          apiKeys: "Your API keys are encrypted and stored securely. Only you can access them.",
+          preferences: "Your preferences (model selection, response style, etc.) are saved across sessions.",
+          conversationHistory: "Your conversation history is saved so the AI can remember context.",
+          memories: "The AI remembers important facts and preferences you've shared.",
+          mcpServers: "Your registered MCP servers and configurations are saved per-user.",
+        },
+        howToLogin: {
+          step1: "Click the 'Sign in' button in the top right corner of the page",
+          step2: "Sign in with Google",
+          step3: "Once logged in, you can use all features including API key management",
+        },
+        benefits: [
+          "Secure storage of your API keys",
+          "Personalized AI responses based on your preferences",
+          "Conversation history and context memory",
+          "Access to user-specific MCP servers",
+          "Cross-device synchronization",
+        ],
+      },
+    },
+    timestamp: new Date().toISOString(),
+    latencyMs: 0,
+  };
+}
+
 async function handleAlphaVantage(invocation: McpInvocation, userId?: string): Promise<McpInvocationResponse> {
   const startedAt = performance.now();
   const args = invocation.args ?? {};
@@ -854,7 +893,15 @@ async function handleAlphaVantage(invocation: McpInvocation, userId?: string): P
         stock = await fetchTwelveDataQuote(symbol, userId);
         provider = "twelvedata";
       } catch (error) {
-        errors.push(`[Twelve Data] ${(error as Error)?.message ?? String(error)}`);
+        const errorMsg = (error as Error)?.message ?? String(error);
+        // Check if this is an auth required error
+        if (errorMsg.includes("AUTH_REQUIRED:")) {
+          return createAuthRequiredResponse(
+            invocation,
+            "Twelve Data API requires an API key. Log in to securely store your API key using the Key Manager."
+          );
+        }
+        errors.push(`[Twelve Data] ${errorMsg}`);
       }
     }
 
@@ -1254,12 +1301,22 @@ async function handleGooglePlaces(invocation: McpInvocation, userId?: string): P
   // Get API key
   const apiKey = await getGooglePlacesApiKey(userId);
   if (!apiKey) {
+    // If user is not authenticated, provide helpful login prompt
+    if (!userId) {
+      return createAuthRequiredResponse(
+        invocation,
+        "Google Places API requires an API key. Log in to securely store your API key using the Key Manager."
+      );
+    }
+    
+    // User is authenticated but no key found
     return {
       invocation,
       result: {
         type: "error",
-        message: "Google Places API key is not configured. Please set GOOGLE_PLACES_API_KEY as a Supabase secret or add it via the Key Manager Agent.",
+        message: "Google Places API key is not configured.",
         details: {
+          explanation: "You need to add your Google Places API key to use this feature.",
           setup: "Get your API key from Google Cloud Console: https://console.cloud.google.com/",
           keyManager: "Use the Key Manager Agent: /key add google_places_api_key <name> key=YOUR_API_KEY",
           envVar: "Or set GOOGLE_PLACES_API_KEY as a Supabase secret",
@@ -2451,6 +2508,42 @@ serve(async req => {
 
   if (!invocation?.serverId) {
     return respondWithError(400, "Missing serverId", origin);
+  }
+
+  // Helper function to create authentication required error response
+  function createAuthRequiredResponse(invocation: McpInvocation, reason: string): McpInvocationResponse {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Authentication Required",
+        details: {
+          reason: reason,
+          explanation: "This feature requires you to be logged in to access your personal data and settings.",
+          whatIsSaved: {
+            apiKeys: "Your API keys are encrypted and stored securely. Only you can access them.",
+            preferences: "Your preferences (model selection, response style, etc.) are saved across sessions.",
+            conversationHistory: "Your conversation history is saved so the AI can remember context.",
+            memories: "The AI remembers important facts and preferences you've shared.",
+            mcpServers: "Your registered MCP servers and configurations are saved per-user.",
+          },
+          howToLogin: {
+            step1: "Click the 'Sign in' button in the top right corner of the page",
+            step2: "Sign in with Google, GitHub, or email",
+            step3: "Once logged in, you can use all features including API key management",
+          },
+          benefits: [
+            "Secure storage of your API keys",
+            "Personalized AI responses based on your preferences",
+            "Conversation history and context memory",
+            "Access to user-specific MCP servers",
+            "Cross-device synchronization",
+          ],
+        },
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: 0,
+    };
   }
 
   // Try to get authenticated user (optional - for key manager lookup)

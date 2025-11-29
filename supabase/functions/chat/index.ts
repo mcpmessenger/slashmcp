@@ -1683,8 +1683,46 @@ serve(async (req) => {
               });
               
               try {
-                // Execute MCP command with auth header from the original request
-                const result = await executeMcpCommand(command, authHeader);
+            // Check if authentication is needed for this command
+            // Some MCP commands require user-specific API keys from the key manager
+            const requiresAuth = command.includes("google-places-mcp") || 
+                                 command.includes("alphavantage-mcp") ||
+                                 command.includes("twelvedata") ||
+                                 command.includes("canva-mcp");
+            
+            if (requiresAuth && !authHeader) {
+              eventStream.sendEvent({
+                type: "error",
+                timestamp: Date.now(),
+                error: "Authentication Required",
+                metadata: {
+                  category: "authentication_required",
+                  command: command,
+                },
+              });
+              
+              eventStream.sendContent(
+                "🔐 **Authentication Required**\n\n" +
+                "This command requires you to be logged in to access your personal API keys and settings.\n\n" +
+                "**Why login?**\n" +
+                "• Your API keys are encrypted and stored securely\n" +
+                "• Your preferences and conversation history are saved\n" +
+                "• The AI can remember context across sessions\n" +
+                "• Your MCP server configurations are personalized\n\n" +
+                "**How to login:**\n" +
+                "1. Click the 'Sign in' button in the top right corner\n" +
+                "2. Sign in with Google\n" +
+                "3. Once logged in, you can use all features including API key management\n\n" +
+                "All your data is encrypted and only accessible by you."
+              );
+              eventStream.close();
+              return new Response(eventStream.stream, {
+                headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+              });
+            }
+            
+            // Execute MCP command with auth header from the original request
+            const result = await executeMcpCommand(command, authHeader);
                 eventStream.sendEvent({
                   type: "tool",
                   timestamp: Date.now(),
