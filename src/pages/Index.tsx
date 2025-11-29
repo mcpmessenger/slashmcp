@@ -2,7 +2,7 @@ import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
 import { useChat } from "@/hooks/useChat";
 import { useEffect, useRef, useCallback, useMemo } from "react";
-import { Volume2, VolumeX, LogIn, LogOut, ChevronDown, Server, Workflow, AlertCircle } from "lucide-react";
+import { Volume2, VolumeX, LogIn, ChevronDown, Server, Workflow, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useVoicePlayback } from "@/hooks/useVoicePlayback";
 import { useToast } from "@/components/ui/use-toast";
@@ -240,22 +240,20 @@ const Index = () => {
         {authReady && (
           session ? (
             <>
-              {/* Avatar - Always visible, prioritized */}
-              <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm flex-shrink-0" title={displayName ?? undefined}>
-                {avatarUrl ? (
-                  <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
-                ) : (
-                  <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
-                )}
-              </Avatar>
-              {/* Sign out - Icon only */}
+              {/* Avatar - Clickable, serves as logout button */}
               <button
                 type="button"
                 onClick={() => void signOut()}
-                className="rounded-full border border-border/40 bg-muted/40 p-1.5 sm:px-3 sm:py-1 text-foreground/80 hover:bg-muted transition-colors flex-shrink-0"
-                title="Sign out"
+                className="flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                title="Click to sign out"
               >
-                <LogOut className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm">
+                  {avatarUrl ? (
+                    <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
+                  ) : (
+                    <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
+                  )}
+                </Avatar>
               </button>
             </>
           ) : (
@@ -264,14 +262,16 @@ const Index = () => {
               onClick={() => void signInWithGoogle()}
               disabled={isAuthLoading}
               className={cn(
-                "rounded-full border border-primary/40 bg-primary/10 p-1.5 sm:px-3 sm:py-1 text-primary transition-colors flex-shrink-0",
-                isAuthLoading
-                  ? "opacity-60 cursor-not-allowed"
-                  : "hover:bg-primary/20 hover:text-primary"
+                "flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity",
+                isAuthLoading && "opacity-60 cursor-not-allowed"
               )}
-              title={isAuthLoading ? "Connecting..." : "Sign in with Google"}
+              title={isAuthLoading ? "Connecting..." : "Click to sign in"}
             >
-              <LogIn className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+              <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm border-dashed">
+                <AvatarFallback className="text-xs sm:text-sm bg-muted/50">
+                  <LogIn className="h-4 w-4" />
+                </AvatarFallback>
+              </Avatar>
             </button>
           )
         )}
