@@ -1,3 +1,5 @@
+import { supabaseClient } from "./supabaseClient";
+
 export type AnalysisTarget = "document-analysis" | "image-ocr" | "image-generation" | "audio-transcription";
 
 export interface UploadJobResponse {
@@ -19,6 +21,35 @@ const FUNCTIONS_URL =
     : undefined);
 
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+/**
+ * Get authentication headers using the signed-in user's session token
+ * This allows edge functions to access the user's OAuth provider tokens
+ */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  // Get the user's session token - this allows edge functions to access OAuth provider tokens
+  const {
+    data: { session },
+  } = await supabaseClient.auth.getSession();
+
+  if (session?.access_token) {
+    // Use the user's session token so edge functions can extract OAuth provider tokens
+    headers.Authorization = `Bearer ${session.access_token}`;
+    if (SUPABASE_ANON_KEY) {
+      headers.apikey = SUPABASE_ANON_KEY;
+    }
+  } else if (SUPABASE_ANON_KEY) {
+    // Fallback to anon key if not signed in
+    headers.apikey = SUPABASE_ANON_KEY;
+    headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
+  }
+
+  return headers;
+}
 
 if (!FUNCTIONS_URL) {
   console.warn("Missing VITE_SUPABASE_FUNCTIONS_URL. Upload API calls will fail until configured.");
@@ -43,12 +74,10 @@ export async function registerUploadJob(params: {
     userId: params.userId,
   };
 
+  const headers = await getAuthHeaders();
   const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}),
-    },
+    headers,
     body: JSON.stringify(body),
   });
 
@@ -65,12 +94,10 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
     throw new Error("Functions URL is not configured");
   }
 
+  const headers = await getAuthHeaders();
   const response = await fetch(`${FUNCTIONS_URL}${textractFunctionPath}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}),
-    },
+    headers,
     body: JSON.stringify({ jobId }),
   });
 
@@ -110,11 +137,10 @@ export async function fetchJobStatus(jobId: string): Promise<JobStatusResponse> 
     throw new Error("Functions URL is not configured");
   }
 
+  const headers = await getAuthHeaders();
   const response = await fetch(`${FUNCTIONS_URL}${jobStatusPath}?jobId=${encodeURIComponent(jobId)}`, {
     method: "GET",
-    headers: {
-      ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}),
-    },
+    headers,
   });
 
   if (!response.ok) {
@@ -133,14 +159,10 @@ export async function triggerVisionJob(params: {
     throw new Error("Functions URL is not configured");
   }
 
+  const headers = await getAuthHeaders();
   const response = await fetch(`${FUNCTIONS_URL}${visionPath}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(SUPABASE_ANON_KEY
-        ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` }
-        : {}),
-    },
+    headers,
     body: JSON.stringify({ jobId: params.jobId, provider: params.provider }),
   });
 
@@ -180,12 +202,10 @@ export async function generateImages(params: {
     throw new Error("Functions URL is not configured");
   }
 
+  const headers = await getAuthHeaders();
   const response = await fetch(`${FUNCTIONS_URL}${imageGenerationPath}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(SUPABASE_ANON_KEY ? { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}),
-    },
+    headers,
     body: JSON.stringify(params),
   });
 
