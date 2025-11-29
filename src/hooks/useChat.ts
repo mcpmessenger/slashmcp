@@ -674,6 +674,20 @@ const STOCK_INTENT_KEYWORDS = [
   "value",
 ];
 
+// Stronger indicators that the user is explicitly asking about a stock,
+// not just mentioning prices or markets in a general/e‑commerce context.
+const STRONG_STOCK_INTENT_KEYWORDS = [
+  "stock",
+  "stocks",
+  "stock price",
+  "share price",
+  "stock quote",
+  "ticker",
+  "stock ticker",
+  "share",
+  "shares",
+];
+
 function extractTickerFromTokens(tokens: string[]): string | null {
   for (const token of tokens) {
     if (!token) continue;
@@ -721,8 +735,19 @@ function parseNaturalLanguageStockRequest(rawInput: string): ParsedStockCommand 
     return null;
   }
 
-  const hasStockIntent = STOCK_INTENT_KEYWORDS.some(keyword => lower.includes(keyword));
-  if (!hasStockIntent) {
+  // Avoid treating long, complex instructions (e.g. agent workflows, e‑commerce
+  // price comparison tasks) as stock lookups unless there is a *strong* stock signal.
+  const trimmed = rawInput.trim();
+  if (trimmed.length > 220) {
+    return null;
+  }
+
+  const hasStrongStockIntent = STRONG_STOCK_INTENT_KEYWORDS.some(keyword => lower.includes(keyword));
+  const hasStockIntent = hasStrongStockIntent || STOCK_INTENT_KEYWORDS.some(keyword => lower.includes(keyword));
+
+  // Require at least one strong stock keyword so phrases like "Amazon prices"
+  // don't accidentally trigger the stock widget instead of normal agent mode.
+  if (!hasStockIntent || !hasStrongStockIntent) {
     return null;
   }
 
@@ -1603,16 +1628,24 @@ export function useChat() {
       return;
     }
 
+    // Explicit stock commands (e.g. "/stock AMZN 1m" or "quote TSLA 3m")
     const stockCommand = parseStockCommand(input);
     if (stockCommand) {
       await runStockLookup(stockCommand);
       return;
     }
 
-    const naturalStockCommand = parseNaturalLanguageStockRequest(input);
-    if (naturalStockCommand) {
-      await runStockLookup(naturalStockCommand);
-      return;
+    // Natural-language stock detection is disabled by default to avoid
+    // hijacking complex prompts (e.g. e‑commerce / scraping workflows)
+    // and forcing them into the stock widget. Enable only if you
+    // explicitly turn it on via VITE_ENABLE_NL_STOCK=true.
+    const enableNaturalLanguageStocks = import.meta.env.VITE_ENABLE_NL_STOCK === "true";
+    if (enableNaturalLanguageStocks) {
+      const naturalStockCommand = parseNaturalLanguageStockRequest(input);
+      if (naturalStockCommand) {
+        await runStockLookup(naturalStockCommand);
+        return;
+      }
     }
 
     const lowerInput = input.toLowerCase();
