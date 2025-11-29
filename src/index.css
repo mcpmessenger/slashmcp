@@ -105,3 +105,28 @@ All colors MUST be HSL.
     @apply font-heading tracking-tight text-balance;
   }
 }
+
+/* Thinking runner animation for chat loading state */
+@keyframes thinking-runner {
+  0% {
+    transform: translateX(0);
+  }
+  50% {
+    transform: translateX(8px);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+.thinking-runner-icon {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: hsl(145 65% 49%); /* approx emerald-500 in HSL */
+}
+
+.thinking-runner-icon svg {
+  width: 100%;
+  height: 100%;
+  animation: thinking-runner 0.9s ease-in-out infinite;
+}
