@@ -18,7 +18,7 @@ export const CTA = () => {
           </h2>
           
           <p className="text-xl text-muted-foreground">
-            Join the next generation of AI-powered research assistants. Start building with SlashMCP today.
+            Join the next generation of AI-powered research assistants. Start building with MCP Messenger today.
           </p>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
