@@ -203,6 +203,7 @@ export function ChatInput({
   onAssistantMessage,
   disabled = false,
   className,
+  registry = [],
 }: ChatInputProps) {
   const { toast } = useToast();
   const [value, setValue] = useState("");
