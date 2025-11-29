@@ -248,7 +248,7 @@ const Index = () => {
                   <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
                 )}
               </Avatar>
-              {/* Sign out - Icon only on mobile */}
+              {/* Sign out - Icon only */}
               <button
                 type="button"
                 onClick={() => void signOut()}
@@ -256,7 +256,6 @@ const Index = () => {
                 title="Sign out"
               >
                 <LogOut className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                <span className="hidden sm:inline ml-1 text-xs font-medium">Sign out</span>
               </button>
             </>
           ) : (
@@ -273,56 +272,28 @@ const Index = () => {
               title={isAuthLoading ? "Connecting..." : "Sign in with Google"}
             >
               <LogIn className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-              <span className="hidden sm:inline ml-1 text-xs font-medium">{isAuthLoading ? "Connecting..." : "Sign in"}</span>
             </button>
           )
         )}
-        {/* Registry - Icon only on mobile */}
+        {/* Registry - Icon only */}
         <Link
           to="/registry"
           className="rounded-full border border-border/40 bg-muted/40 p-1.5 sm:px-3 sm:py-1 text-foreground/80 hover:bg-muted transition-colors flex-shrink-0"
           title="MCP Registry"
         >
           <Server className="h-4 w-4 sm:h-4 sm:w-4" />
-          <span className="hidden sm:inline ml-2 text-xs font-medium">Registry</span>
         </Link>
-        {/* Workflows - Icon only on mobile */}
+        {/* Workflows - Icon only */}
         <Link
           to="/workflows"
           className="rounded-full border border-border/40 bg-muted/40 p-1.5 sm:px-3 sm:py-1 text-foreground/80 hover:bg-muted transition-colors flex-shrink-0"
           title="Workflows"
         >
           <Workflow className="h-4 w-4 sm:h-4 sm:w-4" />
-          <span className="hidden sm:inline ml-2 text-xs font-medium">Workflows</span>
         </Link>
       </PageHeader>
       
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="px-4 pt-6">
-          <div className="max-w-[1600px] mx-auto flex flex-col gap-4">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <button
-                type="button"
-                onClick={handleToggleVoice}
-                className="flex items-center gap-2 rounded-full border border-border/40 bg-muted/40 px-3 py-1 text-xs font-medium text-foreground/80 hover:bg-muted transition-colors"
-              >
-                {voicePlaybackEnabled ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                <span>Voice replies {voicePlaybackEnabled ? "on" : "off"}</span>
-              </button>
-              {voicePlaybackEnabled && (
-                <div className="flex items-center gap-2 text-xs text-foreground/60">
-                  <span
-                    className={cn(
-                      "h-2 w-2 rounded-full",
-                      isSpeaking ? "bg-primary animate-ping" : "bg-muted-foreground/60",
-                    )}
-                  />
-                  <span>{isSpeaking ? "Speaking..." : "Ready to speak"}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
 
         {/* Chat Messages with Dual-Terminal Layout */}
         <div className="flex-1 overflow-hidden">
@@ -451,6 +422,9 @@ const Index = () => {
             disabled={isLoading}
             className="px-4 pb-4"
             registry={registry}
+            voicePlaybackEnabled={voicePlaybackEnabled}
+            onToggleVoicePlayback={handleToggleVoice}
+            isSpeaking={isSpeaking}
           />
         )}
       </div>

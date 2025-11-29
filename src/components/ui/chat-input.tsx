@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
-import { Plus, ArrowUp, Mic, Square, Loader2 } from "lucide-react";
+import { Plus, ArrowUp, Mic, Square, Loader2, Volume2, VolumeX } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   registerUploadJob,
@@ -140,6 +140,9 @@ interface ChatInputProps {
   disabled?: boolean;
   className?: string;
   registry?: McpRegistryEntry[];
+  voicePlaybackEnabled?: boolean;
+  onToggleVoicePlayback?: () => void;
+  isSpeaking?: boolean;
 }
 
 interface OptionTagProps {
@@ -204,6 +207,9 @@ export function ChatInput({
   disabled = false,
   className,
   registry = [],
+  voicePlaybackEnabled = false,
+  onToggleVoicePlayback,
+  isSpeaking = false,
 }: ChatInputProps) {
   const { toast } = useToast();
   const [value, setValue] = useState("");
@@ -984,6 +990,28 @@ export function ChatInput({
               <Mic className="h-4 w-4" strokeWidth={2.5} />
             )}
           </button>
+
+          {/* Voice playback toggle */}
+          {onToggleVoicePlayback && (
+            <button
+              type="button"
+              onClick={onToggleVoicePlayback}
+              aria-label={voicePlaybackEnabled ? "Disable voice replies" : "Enable voice replies"}
+              className={cn(
+                "ml-1 mr-1 h-8 w-8 flex items-center justify-center rounded-full transition-all",
+                voicePlaybackEnabled
+                  ? "bg-primary/20 text-primary hover:bg-primary/30"
+                  : "bg-muted/50 hover:bg-muted text-foreground/70 hover:text-foreground"
+              )}
+              title={voicePlaybackEnabled ? "Voice replies on" : "Voice replies off"}
+            >
+              {voicePlaybackEnabled ? (
+                <Volume2 className="h-4 w-4" strokeWidth={2.5} />
+              ) : (
+                <VolumeX className="h-4 w-4" strokeWidth={2.5} />
+              )}
+            </button>
+          )}
 
           {/* Textarea */}
           <div className="flex-1 relative flex items-center">

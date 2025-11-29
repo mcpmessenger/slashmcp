@@ -11,7 +11,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, description, children, className }: PageHeaderProps) {
   return (
-    <div className={cn("border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60", className)}>
+    <div className={cn("bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60", className)}>
       <div className="container mx-auto px-4 py-4">
         <div className="flex items-center justify-between gap-4">
           {/* Logo and Title */}
@@ -41,7 +41,7 @@ export function PageHeader({ title, description, children, className }: PageHead
         </div>
         {/* Mobile title/description */}
         {(title || description) && (
-          <div className="md:hidden mt-3 pt-3 border-t border-border/40">
+          <div className="md:hidden mt-3 pt-3">
             {title && <h1 className="text-xl font-bold">{title}</h1>}
             {description && <p className="text-sm text-muted-foreground mt-1">{description}</p>}
           </div>
