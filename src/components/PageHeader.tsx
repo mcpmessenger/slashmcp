@@ -21,7 +21,7 @@ export function PageHeader({ title, description, children, className }: PageHead
               <div className="leading-tight hidden sm:block">
                 <p className="font-semibold text-sm sm:text-base text-foreground">MCP Messenger</p>
                 <p className="text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
-                  Scrape anything with MCP Messenger
+                  MCP Powered AI Workspace
                 </p>
               </div>
             </Link>
