@@ -1055,11 +1055,34 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
   const startedAt = performance.now();
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) {
-    throw new Error("GEMINI_API_KEY is not configured.");
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Gemini API key is not configured on the server. Please contact the administrator.",
+        details: "GEMINI_API_KEY environment variable is missing.",
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
   }
 
   const args = invocation.args ?? {};
   const command = invocation.command ?? "generate_text";
+
+  // If no command is provided, provide helpful error message
+  if (!command || command === "") {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Missing command. Use: /gemini-mcp generate_text prompt=\"YOUR_PROMPT\" [model=MODEL_NAME]",
+        details: "Available commands: generate_text",
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
 
   if (command !== "generate_text") {
     return {
@@ -1067,8 +1090,10 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
       result: {
         type: "error",
         message: `Unsupported Gemini command: ${command}`,
+        details: "Available commands: generate_text",
       },
       timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
     };
   }
 
@@ -1079,12 +1104,38 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
       result: {
         type: "error",
         message: "Missing required parameter: prompt",
+        details: "Usage: /gemini-mcp generate_text prompt=\"YOUR_PROMPT\" [model=gemini-1.5-flash]",
       },
       timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
     };
   }
 
   const model = args.model ?? invocation.positionalArgs?.[1] ?? "gemini-1.5-flash";
+  
+  // Validate model name - only Gemini models are supported
+  const validGeminiModels = [
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+    "gemini-1.5-flash-latest",
+    "gemini-1.5-pro-latest",
+    "gemini-pro",
+    "gemini-pro-vision",
+  ];
+  
+  if (!validGeminiModels.includes(model.toLowerCase())) {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: `Invalid model: ${model}. This is a Gemini MCP server and only supports Gemini models.`,
+        details: `Valid models: ${validGeminiModels.join(", ")}. You specified: ${model}`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
   const temperature = parseOptionalNumber(args.temperature, 0, 1);
   const maxOutputTokens = parseOptionalNumber(args.max_output_tokens, 1, 8192);
   const systemInstruction = args.system?.trim();
@@ -1114,36 +1165,90 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
     };
   }
 
-  const response = await fetch(url.toString(), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+  try {
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini request failed (${response.status}): ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      let errorMessage = `Gemini API request failed (${response.status})`;
+      let errorDetails = errorText;
+      
+      // Provide user-friendly error messages
+      if (response.status === 404) {
+        errorMessage = `Model "${model}" not found. Please check the model name.`;
+        errorDetails = `The model "${model}" does not exist in the Gemini API. Valid models: ${validGeminiModels.join(", ")}`;
+      } else if (response.status === 400) {
+        errorMessage = "Invalid request to Gemini API";
+        try {
+          const errorJson = JSON.parse(errorText);
+          if (errorJson.error?.message) {
+            errorDetails = errorJson.error.message;
+          }
+        } catch {
+          // Keep original error text
+        }
+      } else if (response.status === 401 || response.status === 403) {
+        errorMessage = "Gemini API authentication failed";
+        errorDetails = "The API key may be invalid or expired. Please contact the administrator.";
+      }
+      
+      return {
+        invocation,
+        result: {
+          type: "error",
+          message: errorMessage,
+          details: errorDetails,
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    }
+
+    const payload = (await response.json()) as GeminiResponse;
+    const text = extractGeminiText(payload);
+
+    if (!text) {
+      return {
+        invocation,
+        result: {
+          type: "error",
+          message: "Gemini response did not include any text content",
+          details: "The API returned a response but it did not contain any generated text.",
+        },
+        timestamp: new Date().toISOString(),
+        latencyMs: Math.round(performance.now() - startedAt),
+      };
+    }
+
+    return {
+      invocation,
+      result: {
+        type: "text",
+        content: text,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+      raw: payload,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Failed to communicate with Gemini API",
+        details: message,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
   }
-
-  const payload = (await response.json()) as GeminiResponse;
-  const text = extractGeminiText(payload);
-
-  if (!text) {
-    throw new Error("Gemini response did not include any text candidates.");
-  }
-
-  return {
-    invocation,
-    result: {
-      type: "text",
-      content: text,
-    },
-    timestamp: new Date().toISOString(),
-    latencyMs: Math.round(performance.now() - startedAt),
-    raw: payload,
-  };
 }
 
 // Helper function to get Google Places API key
@@ -1763,64 +1868,128 @@ async function handleSearch(invocation: McpInvocation): Promise<McpInvocationRes
   }
 
   try {
-    // DuckDuckGo Instant Answer API
-    const url = new URL("https://api.duckduckgo.com/");
-    url.searchParams.set("q", query);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("no_redirect", "1");
-    url.searchParams.set("no_html", "1");
+    // Use DuckDuckGo HTML search which works better for general queries
+    // than the Instant Answer API which only works for specific topics
+    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    
+    const response = await fetch(searchUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+      },
+    });
 
-    const response = await fetch(url.toString());
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`DuckDuckGo request failed (${response.status}): ${text}`);
+      throw new Error(`DuckDuckGo request failed (${response.status})`);
     }
 
-    const data = (await response.json()) as {
-      AbstractText?: string;
-      AbstractURL?: string;
-      Heading?: string;
-      RelatedTopics?: Array<
-        | {
-            Text?: string;
-            FirstURL?: string;
-          }
-        | {
-            Topics?: Array<{ Text?: string; FirstURL?: string }>;
-          }
-      >;
-    };
-
+    const html = await response.text();
     const results: Array<{ title: string; url: string; snippet: string }> = [];
 
-    if (data.AbstractText && data.AbstractURL) {
-      results.push({
-        title: data.Heading || data.AbstractText.slice(0, 80),
-        url: data.AbstractURL,
-        snippet: data.AbstractText,
-      });
+    // Parse HTML results - DuckDuckGo HTML structure
+    // Try multiple patterns to handle different HTML structures
+    const patterns = [
+      // Pattern 1: Modern DuckDuckGo structure with result__a
+      /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g,
+      // Pattern 2: Alternative structure
+      /<a[^>]*class="[^"]*result[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g,
+      // Pattern 3: Generic link in result div
+      /<div[^>]*class="[^"]*result[^"]*"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g,
+    ];
+
+    for (const pattern of patterns) {
+      let match;
+      pattern.lastIndex = 0; // Reset regex
+      
+      while ((match = pattern.exec(html)) !== null && results.length < maxResults) {
+        const url = match[1];
+        let title = match[2].replace(/<[^>]+>/g, "").trim();
+        
+        // Skip if we've already seen this URL
+        if (results.some(r => r.url === url)) continue;
+        
+        // Clean up the URL (remove tracking parameters)
+        const cleanUrl = url.split("&uddg=")[0].split("&rut=")[0].split("?uddg=")[0];
+        
+        // Try to extract snippet from nearby text
+        let snippet = "";
+        const resultContext = html.substring(Math.max(0, match.index - 500), match.index + 1000);
+        const snippetMatch = resultContext.match(/<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([^<]+)<\/a>/i) ||
+                           resultContext.match(/<div[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([^<]+)<\/div>/i);
+        if (snippetMatch) {
+          snippet = snippetMatch[1].replace(/<[^>]+>/g, "").trim();
+        }
+        
+        if (title && cleanUrl && cleanUrl.startsWith("http")) {
+          results.push({
+            title: title.slice(0, 200),
+            url: cleanUrl,
+            snippet: snippet.slice(0, 300) || `Search result for: ${query}`,
+          });
+        }
+      }
+      
+      // If we found results with this pattern, stop trying others
+      if (results.length > 0) break;
     }
 
-    if (Array.isArray(data.RelatedTopics)) {
-      for (const topic of data.RelatedTopics) {
-        if ("Text" in topic && topic.Text && topic.FirstURL) {
+    // Fallback: If HTML parsing didn't work, try Instant Answer API
+    if (results.length === 0) {
+      const instantAnswerUrl = new URL("https://api.duckduckgo.com/");
+      instantAnswerUrl.searchParams.set("q", query);
+      instantAnswerUrl.searchParams.set("format", "json");
+      instantAnswerUrl.searchParams.set("no_redirect", "1");
+      instantAnswerUrl.searchParams.set("no_html", "1");
+
+      const instantAnswerResponse = await fetch(instantAnswerUrl.toString());
+      if (instantAnswerResponse.ok) {
+        const data = (await instantAnswerResponse.json()) as {
+          AbstractText?: string;
+          AbstractURL?: string;
+          Heading?: string;
+          RelatedTopics?: Array<
+            | {
+                Text?: string;
+                FirstURL?: string;
+              }
+            | {
+                Topics?: Array<{ Text?: string; FirstURL?: string }>;
+              }
+          >;
+        };
+
+        if (data.AbstractText && data.AbstractURL) {
           results.push({
-            title: topic.Text.split(" - ")[0] || topic.Text.slice(0, 80),
-            url: topic.FirstURL,
-            snippet: topic.Text,
+            title: data.Heading || data.AbstractText.slice(0, 80),
+            url: data.AbstractURL,
+            snippet: data.AbstractText,
           });
-        } else if ("Topics" in topic && Array.isArray(topic.Topics)) {
-          for (const nested of topic.Topics) {
-            if (nested.Text && nested.FirstURL) {
+        }
+
+        if (Array.isArray(data.RelatedTopics)) {
+          for (const topic of data.RelatedTopics) {
+            if (results.length >= maxResults) break;
+            if ("Text" in topic && topic.Text && topic.FirstURL) {
               results.push({
-                title: nested.Text.split(" - ")[0] || nested.Text.slice(0, 80),
-                url: nested.FirstURL,
-                snippet: nested.Text,
+                title: topic.Text.split(" - ")[0] || topic.Text.slice(0, 80),
+                url: topic.FirstURL,
+                snippet: topic.Text,
               });
+            } else if ("Topics" in topic && Array.isArray(topic.Topics)) {
+              for (const nested of topic.Topics) {
+                if (results.length >= maxResults) break;
+                if (nested.Text && nested.FirstURL) {
+                  results.push({
+                    title: nested.Text.split(" - ")[0] || nested.Text.slice(0, 80),
+                    url: nested.FirstURL,
+                    snippet: nested.Text,
+                  });
+                }
+              }
             }
           }
         }
-        if (results.length >= maxResults) break;
       }
     }
 
@@ -1850,7 +2019,7 @@ async function handleSearch(invocation: McpInvocation): Promise<McpInvocationRes
       invocation: { ...invocation, serverId: "search-mcp", command },
       result: {
         type: "error",
-        message: "Search request failed",
+        message: "Web search failed. Please try again or rephrase your query.",
         details: message,
       },
       timestamp: new Date().toISOString(),

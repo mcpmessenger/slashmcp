@@ -75,63 +75,128 @@ function respondWithError(
 }
 
 async function performDuckDuckGoSearch(query: string, maxResults: number): Promise<SearchResult[]> {
-  const url = new URL("https://api.duckduckgo.com/");
-  url.searchParams.set("q", query);
-  url.searchParams.set("format", "json");
-  url.searchParams.set("no_redirect", "1");
-  url.searchParams.set("no_html", "1");
+  // Use DuckDuckGo HTML search which works better for general queries
+  // than the Instant Answer API which only works for specific topics
+  const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  
+  const response = await fetch(searchUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.5",
+    },
+  });
 
-  const response = await fetch(url.toString());
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`DuckDuckGo request failed (${response.status}): ${text}`);
+    throw new Error(`DuckDuckGo request failed (${response.status})`);
   }
 
-  const data = (await response.json()) as {
-    AbstractText?: string;
-    AbstractURL?: string;
-    Heading?: string;
-    RelatedTopics?: Array<
-      | {
-          Text?: string;
-          FirstURL?: string;
-        }
-      | {
-          Topics?: Array<{ Text?: string; FirstURL?: string }>;
-        }
-    >;
-  };
-
+  const html = await response.text();
   const results: SearchResult[] = [];
 
-  if (data.AbstractText && data.AbstractURL) {
-    results.push({
-      title: data.Heading || data.AbstractText.slice(0, 80),
-      url: data.AbstractURL,
-      snippet: data.AbstractText,
-    });
+  // Parse HTML results - DuckDuckGo HTML structure
+  // Try multiple patterns to handle different HTML structures
+  const patterns = [
+    // Pattern 1: Modern DuckDuckGo structure with result__a
+    /<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g,
+    // Pattern 2: Alternative structure
+    /<a[^>]*class="[^"]*result[^"]*"[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g,
+    // Pattern 3: Generic link in result div
+    /<div[^>]*class="[^"]*result[^"]*"[^>]*>[\s\S]*?<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/g,
+  ];
+
+  for (const pattern of patterns) {
+    let match;
+    pattern.lastIndex = 0; // Reset regex
+    
+    while ((match = pattern.exec(html)) !== null && results.length < maxResults) {
+      const url = match[1];
+      let title = match[2].replace(/<[^>]+>/g, "").trim();
+      
+      // Skip if we've already seen this URL
+      if (results.some(r => r.url === url)) continue;
+      
+      // Clean up the URL (remove tracking parameters)
+      const cleanUrl = url.split("&uddg=")[0].split("&rut=")[0].split("?uddg=")[0];
+      
+      // Try to extract snippet from nearby text
+      let snippet = "";
+      const resultContext = html.substring(Math.max(0, match.index - 500), match.index + 1000);
+      const snippetMatch = resultContext.match(/<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([^<]+)<\/a>/i) ||
+                         resultContext.match(/<div[^>]*class="[^"]*result__snippet[^"]*"[^>]*>([^<]+)<\/div>/i);
+      if (snippetMatch) {
+        snippet = snippetMatch[1].replace(/<[^>]+>/g, "").trim();
+      }
+      
+      if (title && cleanUrl && cleanUrl.startsWith("http")) {
+        results.push({
+          title: title.slice(0, 200),
+          url: cleanUrl,
+          snippet: snippet.slice(0, 300) || `Search result for: ${query}`,
+        });
+      }
+    }
+    
+    // If we found results with this pattern, stop trying others
+    if (results.length > 0) break;
   }
 
-  if (Array.isArray(data.RelatedTopics)) {
-    for (const topic of data.RelatedTopics) {
-      if ("Text" in topic && topic.Text && topic.FirstURL) {
+  // Fallback: If HTML parsing didn't work, try Instant Answer API
+  if (results.length === 0) {
+    const instantAnswerUrl = new URL("https://api.duckduckgo.com/");
+    instantAnswerUrl.searchParams.set("q", query);
+    instantAnswerUrl.searchParams.set("format", "json");
+    instantAnswerUrl.searchParams.set("no_redirect", "1");
+    instantAnswerUrl.searchParams.set("no_html", "1");
+
+    const instantAnswerResponse = await fetch(instantAnswerUrl.toString());
+    if (instantAnswerResponse.ok) {
+      const data = (await instantAnswerResponse.json()) as {
+        AbstractText?: string;
+        AbstractURL?: string;
+        Heading?: string;
+        RelatedTopics?: Array<
+          | {
+              Text?: string;
+              FirstURL?: string;
+            }
+          | {
+              Topics?: Array<{ Text?: string; FirstURL?: string }>;
+            }
+        >;
+      };
+
+      if (data.AbstractText && data.AbstractURL) {
         results.push({
-          title: topic.Text.split(" - ")[0] || topic.Text.slice(0, 80),
-          url: topic.FirstURL,
-          snippet: topic.Text,
+          title: data.Heading || data.AbstractText.slice(0, 80),
+          url: data.AbstractURL,
+          snippet: data.AbstractText,
         });
-      } else if ("Topics" in topic && Array.isArray(topic.Topics)) {
-        for (const nested of topic.Topics) {
-          if (nested.Text && nested.FirstURL) {
+      }
+
+      if (Array.isArray(data.RelatedTopics)) {
+        for (const topic of data.RelatedTopics) {
+          if (results.length >= maxResults) break;
+          if ("Text" in topic && topic.Text && topic.FirstURL) {
             results.push({
-              title: nested.Text.split(" - ")[0] || nested.Text.slice(0, 80),
-              url: nested.FirstURL,
-              snippet: nested.Text,
+              title: topic.Text.split(" - ")[0] || topic.Text.slice(0, 80),
+              url: topic.FirstURL,
+              snippet: topic.Text,
             });
+          } else if ("Topics" in topic && Array.isArray(topic.Topics)) {
+            for (const nested of topic.Topics) {
+              if (results.length >= maxResults) break;
+              if (nested.Text && nested.FirstURL) {
+                results.push({
+                  title: nested.Text.split(" - ")[0] || nested.Text.slice(0, 80),
+                  url: nested.FirstURL,
+                  snippet: nested.Text,
+                });
+              }
+            }
           }
         }
       }
-      if (results.length >= maxResults) break;
     }
   }
 
@@ -239,7 +304,7 @@ serve(async req => {
       invocation: { ...invocation, serverId: "search-mcp", command },
       result: {
         type: "error",
-        message: "Search request failed",
+        message: "Web search failed. Please try again or rephrase your query.",
         details: message,
       },
       timestamp: new Date().toISOString(),
