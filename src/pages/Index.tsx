@@ -378,15 +378,48 @@ const Index = () => {
                   <ChatMessage key={index} message={message} />
                 ))}
                 {session && isLoading && (
-                  <div className="flex gap-3 justify-start animate-fade-in">
-                    <div className="h-8 w-8 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
-                      <div className="h-2 w-2 bg-foreground/50 rounded-full animate-pulse" />
+                  <div className="flex gap-3 justify-start items-center animate-fade-in">
+                    <div className="h-9 w-9 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
+                      <div className="thinking-runner-icon">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <circle cx="8" cy="5" r="2" fill="currentColor" />
+                          <path
+                            d="M7 7.5c1.5.5 2.8 1.4 3.6 2.7l1.1 1.9c.3.5.9.9 1.5 1l2.3.4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          <path
+                            d="M6 11.5l2.2-1.6L9 12l-1.2 2"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                          <path
+                            d="M11 14.5l-1.2 2.2L7.5 16 6 17.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </div>
                     </div>
                     <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
-                      <div className="flex gap-1">
-                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                      <div className="flex flex-col gap-1">
+                        <div className="flex gap-1">
+                          <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                          <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                          <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
+                        <span className="text-xs text-foreground/60">
+                          Thinking hard on your request...
+                        </span>
                       </div>
                     </div>
                   </div>
