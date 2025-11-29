@@ -9,6 +9,7 @@ import NotFound from "./pages/NotFound";
 import { Registry } from "./pages/Registry";
 import { WorkflowBuilder } from "./pages/WorkflowBuilder";
 import { Workflows } from "./pages/Workflows";
+import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 
 const queryClient = new QueryClient();
 
@@ -25,6 +26,7 @@ const App = () => (
             <Route path="/workflows" element={<Workflows />} />
             <Route path="/workflows/new" element={<WorkflowBuilder />} />
             <Route path="/workflows/:id" element={<WorkflowBuilder />} />
+            <Route path="/privacy" element={<PrivacyPolicy />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

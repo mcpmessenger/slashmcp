@@ -1060,12 +1060,15 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
       result: {
         type: "error",
         message: "Gemini API key is not configured on the server. Please contact the administrator.",
-        details: "GEMINI_API_KEY environment variable is missing.",
+        details: "GEMINI_API_KEY environment variable is missing. The administrator needs to set this in Supabase Edge Function secrets.",
       },
       timestamp: new Date().toISOString(),
       latencyMs: Math.round(performance.now() - startedAt),
     };
   }
+  
+  // Log for debugging (will appear in Supabase function logs)
+  console.log(`[Gemini MCP] API key present: ${apiKey ? "Yes" : "No"}, length: ${apiKey?.length || 0}`);
 
   const args = invocation.args ?? {};
   const command = invocation.command ?? "generate_text";
@@ -1104,151 +1107,306 @@ async function handleGemini(invocation: McpInvocation): Promise<McpInvocationRes
       result: {
         type: "error",
         message: "Missing required parameter: prompt",
-        details: "Usage: /gemini-mcp generate_text prompt=\"YOUR_PROMPT\" [model=gemini-1.5-flash]",
+        details: "Usage: /gemini-mcp generate_text prompt=\"YOUR_PROMPT\" [model=gemini-1.5-flash-001]",
       },
       timestamp: new Date().toISOString(),
       latencyMs: Math.round(performance.now() - startedAt),
     };
   }
 
-  const model = args.model ?? invocation.positionalArgs?.[1] ?? "gemini-1.5-flash";
+  let model = args.model ?? invocation.positionalArgs?.[1] ?? "gemini-2.5-flash";
   
-  // Validate model name - only Gemini models are supported
+  // Normalize model name - handle common variations and map to API-compatible versions
+  const modelLower = model.toLowerCase().trim();
+  
+  // Map common model name aliases
+  // Note: If availableModels is populated, we'll filter to only use available models
+  // Map older model names to newer available ones
+  const modelMap: Record<string, string[]> = {
+    // Map 1.5 models to 2.0/2.5 equivalents (since API key only has access to 2.0+)
+    "gemini-1.5-flash": ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"],
+    "gemini-1.5-pro": ["gemini-2.5-pro", "gemini-2.0-flash-exp"],
+    "gemini-1.5-flash-latest": ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"],
+    "gemini-1.5-pro-latest": ["gemini-2.5-pro", "gemini-2.0-flash-exp"],
+    "gemini-1.5-flash-001": ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"],
+    "gemini-1.5-pro-001": ["gemini-2.5-pro", "gemini-2.0-flash-exp"],
+    // Direct mappings for 2.0/2.5 models
+    "gemini-2.5-flash": ["gemini-2.5-flash"],
+    "gemini-2.0-flash": ["gemini-2.0-flash", "gemini-2.0-flash-001"],
+    "gemini-2.5-pro": ["gemini-2.5-pro"],
+    "gemini-2.0-flash-exp": ["gemini-2.0-flash-exp"],
+    "gemini-pro": ["gemini-2.5-pro", "gemini-2.0-flash-exp"],
+    "gemini-pro-vision": ["gemini-2.5-pro"],
+    "gemini-2.5-flash-image": ["gemini-2.0-flash-exp-image-generation"],
+  };
+  
+  // First, try to get the list of available models from the API
+  let availableModels: string[] = [];
+  try {
+    const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const listResponse = await fetch(listUrl);
+    if (listResponse.ok) {
+      const listData = await listResponse.json() as { models?: Array<{ name: string }> };
+      if (listData.models) {
+        availableModels = listData.models.map(m => m.name.replace('models/', ''));
+        console.log(`[Gemini MCP] Available models: ${availableModels.join(", ")}`);
+      }
+    }
+  } catch (err) {
+    console.log(`[Gemini MCP] Could not fetch model list: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  
+  // Get candidate model names to try
+  const candidateModels = modelMap[modelLower] || [model];
+  
+  // If we have the list of available models, filter candidates to only try available ones
+  const modelsToTry = availableModels.length > 0
+    ? candidateModels.filter(m => availableModels.includes(m) || availableModels.some(am => am.includes(m.replace('models/', ''))))
+    : candidateModels;
+  
+  if (modelsToTry.length === 0 && availableModels.length > 0) {
+    // Suggest the best alternative model
+    const suggestedModel = availableModels.find(m => m.includes("flash")) || availableModels[0];
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: `Model "${model}" is not available for your API key.`,
+        details: `The model "${model}" is not in the list of available models. ` +
+          `Available models: ${availableModels.join(", ")}. ` +
+          `Try using "${suggestedModel}" instead, or specify one of the available models. ` +
+          `Note: If you requested a Gemini 1.5 model, your API key only has access to Gemini 2.0+ models.`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+  
+  // List of valid Gemini API model names for validation (used only if we don't have available models list)
   const validGeminiModels = [
     "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-1.5-flash-001",
     "gemini-1.5-flash-latest",
+    "gemini-1.5-pro",
+    "gemini-1.5-pro-001",
     "gemini-1.5-pro-latest",
     "gemini-pro",
     "gemini-pro-vision",
+    "gemini-2.0-flash-exp",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-001",
   ];
   
-  if (!validGeminiModels.includes(model.toLowerCase())) {
+  // Check if it's a non-Gemini model (like gpt-4o-mini)
+  const isNonGeminiModel = modelLower.includes("gpt") || 
+                           modelLower.includes("claude") || 
+                           modelLower.includes("anthropic") ||
+                           modelLower.includes("openai");
+  
+  if (isNonGeminiModel) {
     return {
       invocation,
       result: {
         type: "error",
         message: `Invalid model: ${model}. This is a Gemini MCP server and only supports Gemini models.`,
-        details: `Valid models: ${validGeminiModels.join(", ")}. You specified: ${model}`,
+        details: `You specified "${model}" which is not a Gemini model. ` +
+          (availableModels.length > 0 
+            ? `Available Gemini models: ${availableModels.join(", ")}.`
+            : `Valid Gemini models: ${validGeminiModels.join(", ")}.`),
       },
       timestamp: new Date().toISOString(),
       latencyMs: Math.round(performance.now() - startedAt),
     };
   }
+  
+  // If we have the available models list, skip the hardcoded validation
+  // and let the API call determine if the model is valid
+  if (availableModels.length > 0) {
+    // Check if the requested model (or any candidate) is in the available models
+    const isAvailable = candidateModels.some(m => availableModels.includes(m));
+    if (!isAvailable && !modelMap[modelLower]) {
+      // Model not in available list and not in our mapping - but still try it in case it's a new model
+      console.log(`[Gemini MCP] Model "${model}" not in available list, but will try it anyway`);
+    }
+  }
+  
+  // No need to validate further - let the API call determine if the model is valid
+  // If we have available models, we've already filtered. If not, we'll try the model anyway.
 
   const temperature = parseOptionalNumber(args.temperature, 0, 1);
   const maxOutputTokens = parseOptionalNumber(args.max_output_tokens, 1, 8192);
   const systemInstruction = args.system?.trim();
 
-  const url = new URL(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`);
-  url.searchParams.set("key", apiKey);
+  // Try each candidate model name until one works
+  let lastError: Error | null = null;
+  let lastResponse: Response | null = null;
+  let lastErrorText = "";
+  
+  // Use modelsToTry if we filtered by available models, otherwise use all candidates
+  const finalModelsToTry = modelsToTry.length > 0 ? modelsToTry : candidateModels;
+  
+  console.log(`[Gemini MCP] Will try models: ${finalModelsToTry.join(", ")}`);
+  
+  for (const candidateModel of finalModelsToTry) {
+    // Try v1beta first (this is what the working chat function uses), then v1
+    const apiVersions = ["v1beta", "v1"];
+    
+    for (const apiVersion of apiVersions) {
+      try {
+        // Construct URL exactly like the working chat function does
+        const url = `https://generativelanguage.googleapis.com/${apiVersion}/models/${candidateModel}:generateContent?key=${apiKey}`;
 
-  const body: Record<string, unknown> = {
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }],
-      },
-    ],
-  };
+        const body: Record<string, unknown> = {
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: prompt }],
+            },
+          ],
+        };
 
-  const generationConfig: Record<string, unknown> = {};
-  if (typeof temperature === "number") generationConfig.temperature = temperature;
-  if (typeof maxOutputTokens === "number") generationConfig.maxOutputTokens = Math.round(maxOutputTokens);
-  if (Object.keys(generationConfig).length > 0) {
-    body.generationConfig = generationConfig;
-  }
-  if (systemInstruction) {
-    body.systemInstruction = {
-      role: "system",
-      parts: [{ text: systemInstruction }],
-    };
-  }
-
-  try {
-    const response = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      let errorMessage = `Gemini API request failed (${response.status})`;
-      let errorDetails = errorText;
-      
-      // Provide user-friendly error messages
-      if (response.status === 404) {
-        errorMessage = `Model "${model}" not found. Please check the model name.`;
-        errorDetails = `The model "${model}" does not exist in the Gemini API. Valid models: ${validGeminiModels.join(", ")}`;
-      } else if (response.status === 400) {
-        errorMessage = "Invalid request to Gemini API";
-        try {
-          const errorJson = JSON.parse(errorText);
-          if (errorJson.error?.message) {
-            errorDetails = errorJson.error.message;
-          }
-        } catch {
-          // Keep original error text
+        const generationConfig: Record<string, unknown> = {};
+        if (typeof temperature === "number") generationConfig.temperature = temperature;
+        if (typeof maxOutputTokens === "number") generationConfig.maxOutputTokens = Math.round(maxOutputTokens);
+        if (Object.keys(generationConfig).length > 0) {
+          body.generationConfig = generationConfig;
         }
-      } else if (response.status === 401 || response.status === 403) {
-        errorMessage = "Gemini API authentication failed";
-        errorDetails = "The API key may be invalid or expired. Please contact the administrator.";
+        // Use system_instruction (snake_case) like the working chat function
+        if (systemInstruction) {
+          body.system_instruction = {
+            parts: [{ text: systemInstruction }],
+          };
+        }
+
+        console.log(`[Gemini MCP] Trying model: ${candidateModel}, API version: ${apiVersion}, URL: ${url.substring(0, 100)}...`);
+        
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        
+        console.log(`[Gemini MCP] Response status: ${response.status} for model: ${candidateModel}, API: ${apiVersion}`);
+        
+        if (response.ok) {
+          // Success! Use this model and response
+          const payload = (await response.json()) as GeminiResponse;
+          const text = extractGeminiText(payload);
+
+          if (!text) {
+            return {
+              invocation,
+              result: {
+                type: "error",
+                message: "Gemini response did not include any text content",
+                details: "The API returned a response but it did not contain any generated text.",
+              },
+              timestamp: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - startedAt),
+            };
+          }
+
+          return {
+            invocation,
+            result: {
+              type: "text",
+              content: text,
+            },
+            timestamp: new Date().toISOString(),
+            latencyMs: Math.round(performance.now() - startedAt),
+            raw: payload,
+          };
+        }
+        
+        // Save the response for error reporting (even 404s, so we can show what was tried)
+        lastResponse = response;
+        const errorText = await response.text();
+        console.log(`[Gemini MCP] Error response for ${candidateModel} (${apiVersion}):`, errorText.substring(0, 500));
+        lastErrorText = errorText;
+        
+        if (response.status === 404) {
+          // For 404s, try next model/version
+        } else {
+          // For other errors, break (don't try more)
+          break;
+        }
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        // Continue to next attempt, but save the error
+        if (!lastErrorText) {
+          lastErrorText = err instanceof Error ? err.message : String(err);
+        }
+      }
+    }
+    
+    // If we got a non-404 error, don't try more models
+    if (lastResponse && lastResponse.status !== 404) {
+      break;
+    }
+  }
+  
+  // If we get here, all attempts failed
+  let errorMessage = "Failed to communicate with Gemini API";
+  let errorDetails = `Tried ${candidateModels.length} model name variation(s): ${candidateModels.join(", ")} with API versions v1 and v1beta, but all failed.`;
+  
+  if (lastResponse) {
+    const errorText = lastErrorText || "Unknown error";
+    errorMessage = `Gemini API request failed (${lastResponse.status})`;
+    errorDetails = errorText;
+    
+    // Provide user-friendly error messages
+    if (lastResponse.status === 404) {
+      // Try to get more details from the error response
+      let apiErrorDetails = "";
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.error?.message) {
+          apiErrorDetails = errorJson.error.message;
+        }
+      } catch {
+        // Keep original error text
       }
       
-      return {
-        invocation,
-        result: {
-          type: "error",
-          message: errorMessage,
-          details: errorDetails,
-        },
-        timestamp: new Date().toISOString(),
-        latencyMs: Math.round(performance.now() - startedAt),
-      };
+      errorMessage = `Model "${model}" not found. Tried multiple model name variations but none were recognized by the Gemini API.`;
+      errorDetails = `Tried model names: ${candidateModels.join(", ")} with API versions v1 and v1beta. ` +
+        `API error: ${apiErrorDetails || errorText}. ` +
+        `Please check that your GEMINI_API_KEY has access to Gemini models, or try a different model name.`;
+    } else if (lastResponse.status === 400) {
+      errorMessage = "Invalid request to Gemini API";
+      try {
+        const errorJson = JSON.parse(errorText);
+        if (errorJson.error?.message) {
+          errorDetails = errorJson.error.message;
+        }
+      } catch {
+        // Keep original error text
+      }
+    } else if (lastResponse.status === 401 || lastResponse.status === 403) {
+      errorMessage = "Gemini API authentication failed";
+      errorDetails = "The API key may be invalid or expired. Please contact the administrator.";
     }
-
-    const payload = (await response.json()) as GeminiResponse;
-    const text = extractGeminiText(payload);
-
-    if (!text) {
-      return {
-        invocation,
-        result: {
-          type: "error",
-          message: "Gemini response did not include any text content",
-          details: "The API returned a response but it did not contain any generated text.",
-        },
-        timestamp: new Date().toISOString(),
-        latencyMs: Math.round(performance.now() - startedAt),
-      };
-    }
-
-    return {
-      invocation,
-      result: {
-        type: "text",
-        content: text,
-      },
-      timestamp: new Date().toISOString(),
-      latencyMs: Math.round(performance.now() - startedAt),
-      raw: payload,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return {
-      invocation,
-      result: {
-        type: "error",
-        message: "Failed to communicate with Gemini API",
-        details: message,
-      },
-      timestamp: new Date().toISOString(),
-      latencyMs: Math.round(performance.now() - startedAt),
-    };
+  } else if (lastError) {
+    errorMessage = "Network error communicating with Gemini API";
+    errorDetails = lastError.message || String(lastError);
+  } else {
+    // This shouldn't happen, but provide a helpful message
+    errorDetails += " No response or error was captured. This may indicate a network connectivity issue or the API endpoint is unreachable.";
   }
+  
+  return {
+    invocation,
+    result: {
+      type: "error",
+      message: errorMessage,
+      details: errorDetails,
+    },
+    timestamp: new Date().toISOString(),
+    latencyMs: Math.round(performance.now() - startedAt),
+  };
 }
 
 // Helper function to get Google Places API key

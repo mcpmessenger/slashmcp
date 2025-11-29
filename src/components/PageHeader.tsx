@@ -17,11 +17,11 @@ export function PageHeader({ title, description, children, className }: PageHead
           {/* Logo and Title */}
           <div className="flex items-center gap-4 flex-1 min-w-0">
             <Link to="/" className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              <img src="/Untitled design.svg" alt="SlashMCP logo" className="h-8 w-auto sm:h-10" />
+              <img src="/Untitled design.svg" alt="MCP Messenger logo" className="h-8 w-auto sm:h-10" />
               <div className="leading-tight hidden sm:block">
-                <p className="font-semibold text-sm sm:text-base text-foreground">SlashMCP</p>
+                <p className="font-semibold text-sm sm:text-base text-foreground">MCP Messenger</p>
                 <p className="text-[0.7rem] uppercase tracking-[0.35em] text-muted-foreground">
-                  MCP-powered AI workspace
+                  Scrape anything with MCP Messenger
                 </p>
               </div>
             </Link>

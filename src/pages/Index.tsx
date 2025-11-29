@@ -215,7 +215,7 @@ const Index = () => {
           <div className="flex-1">
             <h3 className="font-semibold text-foreground mb-1">Sign in required</h3>
             <p className="text-sm text-muted-foreground mb-3">
-              Please sign in to use SlashMCP. Sign in with Google to access all features including chat, workflows, and MCP tools.
+              Please sign in to use MCP Messenger. Sign in with Google to access all features including chat, workflows, and MCP tools.
             </p>
             <button
               type="button"
@@ -304,9 +304,9 @@ const Index = () => {
               <div className="max-w-4xl mx-auto space-y-6">
                 {!authReady || !session ? (
                   <div className="text-center mt-20 space-y-4">
-                    <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
+                    <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
                     <p className="text-muted-foreground text-lg">
-                      MCP-powered AI workspace for document intelligence.
+                      Scrape anything with MCP Messenger
                     </p>
                     {!authReady ? (
                       <p className="text-sm text-muted-foreground">Loading...</p>
@@ -334,9 +334,9 @@ const Index = () => {
                   </div>
                 ) : messages.length === 0 ? (
                   <div className="text-center mt-20 space-y-3">
-                    <h1 className="text-4xl font-bold text-foreground">SlashMCP</h1>
+                    <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
                     <p className="text-muted-foreground">
-                      MCP-powered AI workspace for document intelligence.
+                      Scrape anything with MCP Messenger
                     </p>
                     {renderModelMenu("initial")}
                   </div>
