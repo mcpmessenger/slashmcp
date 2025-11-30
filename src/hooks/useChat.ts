@@ -942,6 +942,8 @@ export function useChat() {
           queryParams: {
             access_type: "offline",
             prompt: "consent",
+            // Request Gmail and Calendar scopes
+            scope: "openid email profile https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar",
           },
         },
       });

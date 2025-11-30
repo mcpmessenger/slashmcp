@@ -284,6 +284,16 @@ AVAILABLE MCP COMMANDS:
 8. SEARCH-MCP (Web Search)
    - web_search: Search the web using DuckDuckGo
      Format: /search-mcp web_search query="QUERY" [max_results=N]
+     Example: /search-mcp web_search query="Model Context Protocol" max_results=5
+
+9. EMAIL-MCP (Email Sending)
+   - send_test_email: Send a test email to the logged-in user
+     Format: /email-mcp send_test_email [subject="SUBJECT"] [body="BODY"]
+     IMPORTANT: Automatically uses logged-in user's email - no need to ask for it
+     Defaults: subject="Test Email", body="test"
+     Example: /email-mcp send_test_email
+     Example: /email-mcp send_test_email subject="Test" body="test"
+     When user says "send a test email" or "send me a test email", use this command
 `;
     return commands;
   },
