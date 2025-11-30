@@ -492,6 +492,35 @@ export const MCP_SERVER_REGISTRY: McpServerDefinition[] = [
       },
     ],
   },
+  {
+    id: "email-mcp",
+    label: "Email",
+    description: "Send test emails to the logged-in user. Email address is automatically retrieved from the user's session.",
+    category: "communication",
+    install: "Built-in (Supabase Edge Function)",
+    commands: [
+      {
+        name: "send_test_email",
+        title: "Send Test Email",
+        description: "Send a test email to the logged-in user. Email address, subject, and body are automatically handled.",
+        parameters: [
+          {
+            name: "subject",
+            description: "Email subject (optional, defaults to 'Test Email').",
+            required: false,
+            example: "Test",
+          },
+          {
+            name: "body",
+            description: "Email body content (optional, defaults to 'test').",
+            required: false,
+            example: "test",
+          },
+        ],
+        example: "/email-mcp send_test_email",
+      },
+    ],
+  },
 ];
 
 export function findServerDefinition(serverId: string) {
