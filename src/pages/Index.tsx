@@ -1,7 +1,8 @@
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
+import { FileUploadStatus } from "@/components/FileUploadStatus";
 import { useChat } from "@/hooks/useChat";
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import { Volume2, VolumeX, LogIn, ChevronDown, Server, Workflow, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useVoicePlayback } from "@/hooks/useVoicePlayback";
@@ -27,6 +28,19 @@ import {
 import type { Provider } from "@/hooks/useChat";
 import type { McpRegistryEntry } from "@/lib/mcp/types";
 
+type UploadJob = {
+  id: string;
+  fileName: string;
+  status: "uploading" | "queued" | "processing" | "completed" | "failed";
+  message?: string | null;
+  error?: string | null;
+  resultText?: string | null;
+  updatedAt?: string;
+  visionSummary?: string | null;
+  visionProvider?: "gpt4o" | "gemini" | null;
+  visionMetadata?: Record<string, unknown> | null;
+};
+
 const Index = () => {
   const {
     messages,
@@ -48,6 +62,8 @@ const Index = () => {
   const { toast } = useToast();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastSpokenRef = useRef<string>("");
+  const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
+  const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const { enabled: voicePlaybackEnabled, toggle: toggleVoicePlayback, speak, stop, isSpeaking } = useVoicePlayback();
 
   const sortedRegistry = useMemo(
@@ -414,6 +430,15 @@ const Index = () => {
         </ResizablePanelGroup>
         </div>
 
+        {/* File Upload Status - Separated from chat input */}
+        {authReady && session && (
+          <FileUploadStatus
+            jobs={uploadJobs}
+            isRegisteringUpload={isRegisteringUpload}
+            className="px-4 pt-2"
+          />
+        )}
+
         {/* Chat Input */}
         {authReady && session && (
           <ChatInput
@@ -425,6 +450,10 @@ const Index = () => {
             voicePlaybackEnabled={voicePlaybackEnabled}
             onToggleVoicePlayback={handleToggleVoice}
             isSpeaking={isSpeaking}
+            onJobsChange={(jobs, isRegistering) => {
+              setUploadJobs(jobs);
+              setIsRegisteringUpload(isRegistering);
+            }}
           />
         )}
       </div>

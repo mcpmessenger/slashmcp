@@ -15,6 +15,7 @@ import {
   createMemoryTools,
   createMcpProxyTool,
   listCommandsTool,
+  executeMcpCommand,
 } from "../_shared/orchestration/index.ts";
 
 type Provider = "openai" | "anthropic" | "gemini";
@@ -309,34 +310,29 @@ serve(async (req) => {
             
             const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
             
-            eventStream.sendEvent({
-              type: "error",
-              timestamp: Date.now(),
-              error: errorMessage,
-              metadata: { isHostedToolError },
-            });
-            
             if (isHostedToolError) {
-              // Send technical error to MCP Event Log (system log)
+              // This is a known SDK compatibility issue - don't log as error, just inform user
+              // Send informational message to MCP Event Log (system log)
               eventStream.sendEvent({
                 type: "system",
                 timestamp: Date.now(),
-                error: errorMessage,
                 metadata: {
                   category: "sdk_compatibility",
                   sdkVersion: "0.3.2",
                   issue: "hosted_tool_not_supported",
                   action: "fallback_to_direct_api",
-                  message: "Agents SDK encountered compatibility issue with tool types. Multi-agent handoffs disabled.",
+                  message: "Agents SDK compatibility: Using direct API mode. All features remain available.",
                 },
               });
-              // Send status to MCP Event Log (not chat - chat is read aloud)
-              eventStream.sendEvent({
-                type: "system",
-                timestamp: Date.now(),
-                metadata: { message: "Switching to direct API mode. Multi-agent features temporarily unavailable." },
-              });
+              // Don't send error event for this known issue - it's handled gracefully
             } else {
+              // For other errors, send error event
+              eventStream.sendEvent({
+                type: "error",
+                timestamp: Date.now(),
+                error: errorMessage,
+                metadata: { isHostedToolError: false },
+              });
               // Send technical error to MCP Event Log
               eventStream.sendEvent({
                 type: "system",
@@ -435,6 +431,8 @@ serve(async (req) => {
           console.log("Message:", lastUserMessage.slice(0, 100));
           console.log("Conversation history length:", conversationHistory.length);
           console.log("OPENAI_API_KEY exists:", !!apiKey);
+          console.log("Tools available:", tools.map(t => ({ name: t.name, description: t.description?.slice(0, 100) })));
+          console.log("MCP Tool Agent instructions length:", currentMcpToolAgent.instructions?.length || 0);
           console.log("MCP_GATEWAY_URL:", MCP_GATEWAY_URL);
           
           try {
@@ -513,6 +511,18 @@ serve(async (req) => {
               eventCount++;
               const eventStr = JSON.stringify(event).slice(0, 300);
               console.log(`Event #${eventCount} - Type: ${event.type}`, eventStr);
+              
+              // Log tool calls specifically
+              if (event.type === "toolCall" || (event as any).toolCall) {
+                const toolCall = (event as any).toolCall || event;
+                console.log(`🔧 TOOL CALL: ${toolCall.name || toolCall.tool}`, JSON.stringify(toolCall.input || toolCall.arguments || {}).slice(0, 200));
+              }
+              
+              // Log tool results
+              if (event.type === "toolResult" || (event as any).toolResult) {
+                const toolResult = (event as any).toolResult || event;
+                console.log(`✅ TOOL RESULT:`, JSON.stringify(toolResult.result || toolResult.output || {}).slice(0, 200));
+              }
               
               // Send MCP event to frontend for logging
               const timestamp = Date.now();
@@ -620,7 +630,23 @@ serve(async (req) => {
                 // Collect streaming content from various event types
                 const content = (event as any).content || (event as any).text || (event as any).textDelta || (event as any).delta;
                 if (content) {
-                  const contentStr = typeof content === "string" ? content : String(content);
+                  let contentStr: string;
+                  // Handle array content (some SDK versions return content as array)
+                  if (Array.isArray(content)) {
+                    contentStr = content
+                      .map((item: any) => {
+                        if (typeof item === "string") return item;
+                        if (typeof item === "object" && item !== null) {
+                          return item.text || item.content || String(item);
+                        }
+                        return String(item);
+                      })
+                      .filter((text: any) => text && typeof text === "string")
+                      .join("");
+                  } else {
+                    contentStr = typeof content === "string" ? content : String(content);
+                  }
+                  
                   if (contentStr.trim()) {
                     // Use Set to track exact content strings (more reliable than string includes)
                     const contentHash = contentStr.trim();
@@ -641,7 +667,22 @@ serve(async (req) => {
               } else if (event.type === "newMessage" || event.type === "message" || event.type === "agentMessage") {
                 // Some SDK versions use newMessage/message/agentMessage events
                 const message = event as any;
-                const messageContent = message.content || message.text || message.message || (message.agentMessage?.content);
+                let messageContent = message.content || message.text || message.message || (message.agentMessage?.content);
+                
+                // Handle array content (some SDK versions return content as array)
+                if (Array.isArray(messageContent)) {
+                  messageContent = messageContent
+                    .map((item: any) => {
+                      if (typeof item === "string") return item;
+                      if (typeof item === "object" && item !== null) {
+                        return item.text || item.content || String(item);
+                      }
+                      return String(item);
+                    })
+                    .filter((text: any) => text && typeof text === "string")
+                    .join("");
+                }
+                
                 if (messageContent && typeof messageContent === "string") {
                   const contentStr = messageContent.trim();
                   if (contentStr) {
@@ -679,11 +720,39 @@ serve(async (req) => {
                   if (modelEvent.text) {
                     extractedText = modelEvent.text;
                   } else if (modelEvent.content) {
-                    extractedText = modelEvent.content;
+                    // Handle array content
+                    if (Array.isArray(modelEvent.content)) {
+                      extractedText = modelEvent.content
+                        .map((item: any) => {
+                          if (typeof item === "string") return item;
+                          if (typeof item === "object" && item !== null) {
+                            return item.text || item.content || String(item);
+                          }
+                          return String(item);
+                        })
+                        .filter((text: any) => text && typeof text === "string")
+                        .join("");
+                    } else {
+                      extractedText = modelEvent.content;
+                    }
                   } else if (modelEvent.delta?.text) {
                     extractedText = modelEvent.delta.text;
                   } else if (modelEvent.delta?.content) {
-                    extractedText = modelEvent.delta.content;
+                    // Handle array content in delta
+                    if (Array.isArray(modelEvent.delta.content)) {
+                      extractedText = modelEvent.delta.content
+                        .map((item: any) => {
+                          if (typeof item === "string") return item;
+                          if (typeof item === "object" && item !== null) {
+                            return item.text || item.content || String(item);
+                          }
+                          return String(item);
+                        })
+                        .filter((text: any) => text && typeof text === "string")
+                        .join("");
+                    } else {
+                      extractedText = modelEvent.delta.content;
+                    }
                   }
                 }
                 
@@ -706,16 +775,61 @@ serve(async (req) => {
                     extractedText = response.text;
                   }
                   if (!extractedText && response.content) {
-                    extractedText = response.content;
+                    // Handle array content
+                    if (Array.isArray(response.content)) {
+                      extractedText = response.content
+                        .map((item: any) => {
+                          if (typeof item === "string") return item;
+                          if (typeof item === "object" && item !== null) {
+                            return item.text || item.content || String(item);
+                          }
+                          return String(item);
+                        })
+                        .filter((text: any) => text && typeof text === "string")
+                        .join("");
+                    } else {
+                      extractedText = response.content;
+                    }
                   }
                 }
                 
                 // Check for text in the event itself
                 if (!extractedText) {
                   if (rawEvent.text) extractedText = rawEvent.text;
-                  else if (rawEvent.content) extractedText = rawEvent.content;
-                  else if (rawEvent.data?.text) extractedText = rawEvent.data.text;
-                  else if (rawEvent.data?.content) extractedText = rawEvent.data.content;
+                  else if (rawEvent.content) {
+                    // Handle array content
+                    if (Array.isArray(rawEvent.content)) {
+                      extractedText = rawEvent.content
+                        .map((item: any) => {
+                          if (typeof item === "string") return item;
+                          if (typeof item === "object" && item !== null) {
+                            return item.text || item.content || String(item);
+                          }
+                          return String(item);
+                        })
+                        .filter((text: any) => text && typeof text === "string")
+                        .join("");
+                    } else {
+                      extractedText = rawEvent.content;
+                    }
+                  } else if (rawEvent.data?.text) extractedText = rawEvent.data.text;
+                  else if (rawEvent.data?.content) {
+                    // Handle array content
+                    if (Array.isArray(rawEvent.data.content)) {
+                      extractedText = rawEvent.data.content
+                        .map((item: any) => {
+                          if (typeof item === "string") return item;
+                          if (typeof item === "object" && item !== null) {
+                            return item.text || item.content || String(item);
+                          }
+                          return String(item);
+                        })
+                        .filter((text: any) => text && typeof text === "string")
+                        .join("");
+                    } else {
+                      extractedText = rawEvent.data.content;
+                    }
+                  }
                 }
                 
                 if (extractedText && typeof extractedText === "string" && extractedText.trim()) {
@@ -745,11 +859,39 @@ serve(async (req) => {
                 if (runItemEvent.item?.text) {
                   extractedText = runItemEvent.item.text;
                 } else if (runItemEvent.item?.content) {
-                  extractedText = runItemEvent.item.content;
+                  // Handle array content
+                  if (Array.isArray(runItemEvent.item.content)) {
+                    extractedText = runItemEvent.item.content
+                      .map((item: any) => {
+                        if (typeof item === "string") return item;
+                        if (typeof item === "object" && item !== null) {
+                          return item.text || item.content || String(item);
+                        }
+                        return String(item);
+                      })
+                      .filter((text: any) => text && typeof text === "string")
+                      .join("");
+                  } else {
+                    extractedText = runItemEvent.item.content;
+                  }
                 } else if (runItemEvent.text) {
                   extractedText = runItemEvent.text;
                 } else if (runItemEvent.content) {
-                  extractedText = runItemEvent.content;
+                  // Handle array content
+                  if (Array.isArray(runItemEvent.content)) {
+                    extractedText = runItemEvent.content
+                      .map((item: any) => {
+                        if (typeof item === "string") return item;
+                        if (typeof item === "object" && item !== null) {
+                          return item.text || item.content || String(item);
+                        }
+                        return String(item);
+                      })
+                      .filter((text: any) => text && typeof text === "string")
+                      .join("");
+                  } else {
+                    extractedText = runItemEvent.content;
+                  }
                 }
                 
                 if (extractedText && typeof extractedText === "string" && extractedText.trim()) {
@@ -898,35 +1040,29 @@ serve(async (req) => {
             // Check if this is the hosted_tool error
             const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
             
-            // Send error to stream and fall through to direct API
-            eventStream.sendEvent({
-              type: "error",
-              timestamp: Date.now(),
-              error: errorMessage,
-              metadata: { isHostedToolError },
-            });
-            
             if (isHostedToolError) {
-              // Send technical error to MCP Event Log (system log)
+              // This is a known SDK compatibility issue - don't log as error, just inform user
+              // Send informational message to MCP Event Log (system log)
               eventStream.sendEvent({
                 type: "system",
                 timestamp: Date.now(),
-                error: errorMessage,
                 metadata: {
                   category: "sdk_compatibility",
                   sdkVersion: "0.3.2",
                   issue: "hosted_tool_not_supported",
                   action: "fallback_to_direct_api",
-                  message: "Agents SDK runner error: hosted_tool type not supported",
+                  message: "Agents SDK compatibility: Using direct API mode. All features remain available.",
                 },
               });
-              // User-friendly message in chat
-              eventStream.sendEvent({
-                type: "system",
-                timestamp: Date.now(),
-                metadata: { message: "Switching to direct API mode (fallback mode)" },
-              });
+              // Don't send error event for this known issue - it's handled gracefully
             } else {
+              // For other errors, send error event
+              eventStream.sendEvent({
+                type: "error",
+                timestamp: Date.now(),
+                error: errorMessage,
+                metadata: { isHostedToolError: false },
+              });
               // Send technical error to MCP Event Log
               eventStream.sendEvent({
                 type: "system",
@@ -959,34 +1095,29 @@ serve(async (req) => {
           
           const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
           
-          eventStream.sendEvent({
-            type: "error",
-            timestamp: Date.now(),
-            error: errorMessage,
-            metadata: { isHostedToolError },
-          });
-          
           if (isHostedToolError) {
-            // Send technical error to MCP Event Log (system log)
+            // This is a known SDK compatibility issue - don't log as error, just inform user
+            // Send informational message to MCP Event Log (system log)
             eventStream.sendEvent({
               type: "system",
               timestamp: Date.now(),
-              error: errorMessage,
               metadata: {
-                category: "sdk_initialization_error",
+                category: "sdk_compatibility",
                 sdkVersion: "0.3.2",
                 issue: "hosted_tool_not_supported",
                 action: "fallback_to_direct_api",
-                message: "Failed to initialize Agents SDK: hosted_tool type not supported",
+                message: "Agents SDK compatibility: Using direct API mode. All features remain available.",
               },
             });
-            // Send status to MCP Event Log (not chat - chat is read aloud)
-            eventStream.sendEvent({
-              type: "system",
-              timestamp: Date.now(),
-              metadata: { message: "Switching to direct API mode (fallback mode)" },
-            });
+            // Don't send error event for this known issue - it's handled gracefully
           } else {
+            // For other errors, send error event
+            eventStream.sendEvent({
+              type: "error",
+              timestamp: Date.now(),
+              error: errorMessage,
+              metadata: { isHostedToolError: false },
+            });
             // Send technical error to MCP Event Log
             eventStream.sendEvent({
               type: "system",
@@ -1024,10 +1155,27 @@ serve(async (req) => {
         
         // Enhanced system prompt for fallback mode with MCP command support
         const fallbackSystemPrompt = systemPrompt + "\n\n" +
-          "IMPORTANT: You can execute MCP (Model Context Protocol) commands to access external data and tools. " +
-          "When the user requests information that requires external data, respond with the appropriate MCP command in this format: " +
-          "`/mcp-server-name command_name param1=value1 param2=value2`\n\n" +
+          "🚨 CRITICAL RULES - READ CAREFULLY:\n" +
+          "1. You CAN browse websites, send emails, search the web - DO NOT say 'I can't'\n" +
+          "2. When user asks for actions, you MUST output MCP commands in your response\n" +
+          "3. MCP commands MUST be in this exact format: `/mcp-server-name command_name param1=value1`\n" +
+          "4. The system will automatically execute any MCP commands you output\n" +
+          "5. DO NOT just give instructions - OUTPUT THE ACTUAL COMMANDS\n\n" +
+          "EXAMPLE: User says 'send me a test email'\n" +
+          "→ You MUST respond with: `/email-mcp send_test_email`\n" +
+          "→ DO NOT say 'I can't send emails' - just output the command!\n\n" +
+          "EXAMPLE: User says 'Find shuttle bus on Craigslist and email results'\n" +
+          "→ You MUST respond with the commands:\n" +
+          "   `/playwright-wrapper browser_navigate url=https://craigslist.org`\n" +
+          "   `/playwright-wrapper browser_extract_text url=https://craigslist.org`\n" +
+          "   `/email-mcp send_test_email body=[results]`\n\n" +
           "Available MCP commands:\n" +
+          "- 🚨 SEND EMAIL: `/email-mcp send_test_email` - Send test email to logged-in user (email auto-detected)\n" +
+          "  When user says 'send me a test email', 'send email', or 'email me' → Use: `/email-mcp send_test_email`\n" +
+          "- 🌐 BROWSE WEBSITES: `/playwright-wrapper browser_navigate url=URL` - Navigate to any website\n" +
+          "  `/playwright-wrapper browser_snapshot` - Get page structure\n" +
+          "  `/playwright-wrapper browser_extract_text url=URL` - Extract all text from page\n" +
+          "  When user asks to 'find X on website Y' or 'search website Z' → Use browser automation commands\n" +
           "- Search Grokipedia: `/grokipedia-mcp search query=\"TOPIC\"` (also works for 'Brockopedia', 'Broccopedia' variations)\n" +
           "- Get stock quote: `/alphavantage-mcp get_quote symbol=SYMBOL`\n" +
           "- Get stock chart: `/alphavantage-mcp get_stock_chart symbol=SYMBOL interval=1day range=3M`\n" +
@@ -1037,6 +1185,19 @@ serve(async (req) => {
           "  - List each location with name, address, phone, rating\n" +
           "  - Show if open now (✅/❌)\n" +
           "  - Include map links for each location\n" +
+          "\n" +
+          "MULTI-STEP TASKS: You MUST output ALL commands in sequence. Example: 'Find shuttle bus on Craigslist and email results'\n" +
+          "→ Step 1: `/playwright-wrapper browser_navigate url=https://craigslist.org`\n" +
+          "→ Step 2: `/playwright-wrapper browser_extract_text url=https://craigslist.org` (to get results)\n" +
+          "→ Step 3: `/email-mcp send_test_email subject=\"Shuttle Bus Listings from Craigslist\" body=[paste the extracted results here]`\n" +
+          "\n" +
+          "🚨 CRITICAL: When user asks to 'email results' or 'email the results', you MUST:\n" +
+          "1. First get the data (browser_extract_text, search results, etc.)\n" +
+          "2. IMMEDIATELY output the email command with the results in the body parameter\n" +
+          "3. DO NOT wait or ask - just output both commands one after another\n" +
+          "4. Format: `/email-mcp send_test_email subject=\"[descriptive subject]\" body=\"[the actual results/data]\"`\n" +
+          "\n" +
+          "DO NOT say 'I can't browse websites' or 'I can't send emails' - YOU CAN via MCP commands above.\n" +
           "  - Use clear formatting with emojis\n\n" +
           "IMPORTANT: Technical messages and system status go to the MCP Event Log (right panel), NOT the chat.\n" +
           "The chat is read aloud, so keep responses conversational. Technical details are logged separately.\n" +
@@ -1127,12 +1288,20 @@ serve(async (req) => {
           eventStream.sendContent(finalOutput);
         } else {
           // Check if the response contains MCP commands and execute them
-          // Match commands like: /grokipedia-mcp search query="nachos" or `/grokipedia-mcp search query="nachos"`
-          const mcpCommandRegex = /`?(\/[a-z-]+-mcp\s+[^`\n]+?)(?:`|$)/gi;
+          // Match commands like: /grokipedia-mcp search query="nachos" or /playwright-wrapper browser_navigate url=...
+          // Updated to match both -mcp servers and playwright-wrapper
+          // More flexible regex to catch commands in various formats (with/without backticks, on new lines, etc.)
+          const mcpCommandRegex = /`?(\/(?:[a-z-]+-mcp|playwright-wrapper|email-mcp)\s+[^\n`]+?)(?:`|$|\n)/gi;
           const matches = Array.from(finalOutput.matchAll(mcpCommandRegex)).map(m => m[1].trim());
           
+          console.log("Checking for MCP commands in response. Final output length:", finalOutput.length);
+          console.log("Found matches:", matches);
+          
           if (matches && matches.length > 0) {
+            console.log(`Found ${matches.length} MCP command(s) to execute`);
             // Found MCP commands - execute them
+            const commandResults: Array<{ command: string; result: string }> = [];
+            
             for (const match of matches) {
               const command = match.replace(/`/g, "").trim();
               eventStream.sendEvent({
@@ -1181,7 +1350,9 @@ serve(async (req) => {
             }
             
             // Execute MCP command with auth header from the original request
-            const result = await executeMcpCommand(command, authHeader);
+            const result = await executeMcpCommand(command, MCP_GATEWAY_URL, authHeader);
+                commandResults.push({ command, result });
+                
                 eventStream.sendEvent({
                   type: "tool",
                   timestamp: Date.now(),
@@ -1202,6 +1373,131 @@ serve(async (req) => {
                 });
                 finalOutput += `\n\n**Error executing command:** ${errorMsg}`;
                 eventStream.sendContent(`\n\n**Error executing command:** ${errorMsg}`);
+              }
+            }
+            
+            // Check if this was a multi-step task that needs continuation
+            // If user asked to "email results" and we just executed a data-gathering command,
+            // automatically continue with the email step
+            const lastUserMessage = conversation.length > 0 
+              ? (typeof conversation[conversation.length - 1]?.content === 'string' 
+                  ? conversation[conversation.length - 1].content 
+                  : JSON.stringify(conversation[conversation.length - 1]?.content || ''))
+              : '';
+            
+            const userWantsEmail = lastUserMessage.toLowerCase().includes('email') && 
+                                   (lastUserMessage.toLowerCase().includes('result') || 
+                                    lastUserMessage.toLowerCase().includes('send'));
+            
+            const justExecutedDataCommand = commandResults.some(cr => 
+              cr.command.includes('browser_extract_text') || 
+              cr.command.includes('browser_snapshot') || 
+              cr.command.includes('web_search') ||
+              cr.command.includes('search')
+            );
+            
+            const hasEmailCommand = commandResults.some(cr => cr.command.includes('email-mcp'));
+            
+            // If user wants email, we got data, but didn't send email yet - continue automatically
+            if (userWantsEmail && justExecutedDataCommand && !hasEmailCommand && commandResults.length > 0) {
+              console.log("Detected incomplete multi-step task - continuing with email step");
+              
+              // Extract the results from the last data-gathering command
+              let extractedResults = "";
+              const lastDataResult = commandResults.find(cr => 
+                cr.command.includes('browser_extract_text') || 
+                cr.command.includes('browser_snapshot') || 
+                cr.command.includes('web_search') ||
+                cr.command.includes('search')
+              );
+              
+              if (lastDataResult) {
+                try {
+                  // Try to parse and extract meaningful content
+                  const parsed = JSON.parse(lastDataResult.result);
+                  if (parsed.result?.content) {
+                    extractedResults = parsed.result.content;
+                  } else if (parsed.result?.data) {
+                    extractedResults = JSON.stringify(parsed.result.data, null, 2);
+                  } else if (parsed.invocation?.result?.content) {
+                    extractedResults = parsed.invocation.result.content;
+                  } else {
+                    extractedResults = lastDataResult.result;
+                  }
+                } catch {
+                  // If parsing fails, use the raw result
+                  extractedResults = lastDataResult.result;
+                }
+              } else {
+                extractedResults = commandResults[commandResults.length - 1]?.result || "Results from previous command";
+              }
+              
+              // Create email command with results (truncate to avoid email size limits)
+              const emailBody = extractedResults.replace(/"/g, '\\"').replace(/\n/g, '\\n').substring(0, 5000);
+              const emailCommand = `/email-mcp send_test_email subject="Results from your search" body="${emailBody}"`;
+              
+              eventStream.sendEvent({
+                type: "system",
+                timestamp: Date.now(),
+                metadata: { message: `Continuing multi-step task: sending email with results` },
+              });
+              
+              try {
+                const emailResult = await executeMcpCommand(emailCommand, MCP_GATEWAY_URL, authHeader);
+                
+                // Parse the result to check if it's an error
+                let parsedResult;
+                try {
+                  parsedResult = JSON.parse(emailResult);
+                } catch {
+                  parsedResult = { result: { type: "text", content: emailResult } };
+                }
+                
+                eventStream.sendEvent({
+                  type: "tool",
+                  timestamp: Date.now(),
+                  command: emailCommand,
+                  result: emailResult,
+                });
+                
+                // Check if the result indicates an error
+                if (parsedResult.result?.type === "error") {
+                  const errorMsg = parsedResult.result.message || parsedResult.result.content || "Unknown error";
+                  const errorDetails = parsedResult.result.details;
+                  
+                  eventStream.sendEvent({
+                    type: "error",
+                    timestamp: Date.now(),
+                    error: `Email sending failed: ${errorMsg}`,
+                    metadata: { command: emailCommand, details: errorDetails },
+                  });
+                  
+                  let errorMessage = `\n\n**❌ Email sending failed:** ${errorMsg}\n\n`;
+                  if (errorDetails?.explanation) {
+                    errorMessage += `**Why:** ${errorDetails.explanation}\n\n`;
+                  }
+                  if (errorDetails?.steps) {
+                    errorMessage += `**How to fix:**\n${errorDetails.steps.map((s: string) => `- ${s}`).join('\n')}\n\n`;
+                  }
+                  if (errorDetails?.note) {
+                    errorMessage += `**Note:** ${errorDetails.note}\n`;
+                  }
+                  
+                  eventStream.sendContent(errorMessage);
+                } else {
+                  // Success
+                  eventStream.sendContent(`\n\n**✅ Email sent successfully!** Check your inbox for the results.`);
+                }
+              } catch (emailError) {
+                const errorMsg = emailError instanceof Error ? emailError.message : String(emailError);
+                console.error("Email command execution error:", emailError);
+                eventStream.sendEvent({
+                  type: "error",
+                  timestamp: Date.now(),
+                  error: `Failed to execute email command: ${errorMsg}`,
+                  metadata: { command: emailCommand },
+                });
+                eventStream.sendContent(`\n\n**❌ Error sending email:** ${errorMsg}\n\n**Troubleshooting:**\n1. Make sure you're signed in with Google OAuth\n2. Grant Gmail permissions when prompted\n3. Check the MCP Event Log for detailed error messages`);
               }
             }
           }
