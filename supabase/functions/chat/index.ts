@@ -120,7 +120,7 @@ function mapMessagesForGemini(messages: Array<{ role: string; content: string }>
   }));
 }
 
-const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "indexed", "injected", "failed"] as const;
 type JobStage = typeof JOB_STAGES[number];
 type StageHistoryEntry = { stage: JobStage; at: string };
 
@@ -326,15 +326,42 @@ serve(async (req) => {
       if (!DOC_CONTEXT_URL) {
         console.warn("Document context provided but DOC_CONTEXT_URL is not configured");
       } else if (jobIds.length > 0) {
+        // Extract user query from the last message for vector search
+        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+        const userQuery = lastMessage && lastMessage.role === "user" 
+          ? (typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content ?? ""))
+          : "";
+
+        // Determine if we should use vector search
+        // Use vector search if query is substantial (not just greetings/short messages)
+        const shouldUseVectorSearch = userQuery.trim().length >= 10 && 
+          !/^(hi|hello|hey|thanks|thank you|ok|okay|yes|no)$/i.test(userQuery.trim());
+
         let docContexts: DocumentContextPayload[] = [];
+        let searchMode: "vector" | "legacy" = "legacy";
+        
         try {
+          const requestBody: {
+            jobIds: string[];
+            query?: string;
+            limit?: number;
+            similarity_threshold?: number;
+          } = { jobIds };
+
+          // Add query for vector search if appropriate
+          if (shouldUseVectorSearch) {
+            requestBody.query = userQuery;
+            requestBody.limit = 10; // Get top 10 most relevant chunks
+            requestBody.similarity_threshold = 0.7; // Minimum similarity threshold
+          }
+
           const response = await fetch(DOC_CONTEXT_URL, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
             },
-            body: JSON.stringify({ jobIds }),
+            body: JSON.stringify(requestBody),
           });
           if (!response.ok) {
             const errorText = await response.text().catch(() => "");
@@ -342,6 +369,7 @@ serve(async (req) => {
           }
           const parsed = await response.json().catch(() => null);
           docContexts = Array.isArray(parsed?.contexts) ? (parsed.contexts as DocumentContextPayload[]) : [];
+          searchMode = parsed?.searchMode === "vector" ? "vector" : "legacy";
         } catch (contextError) {
           console.error("Failed to retrieve document contexts:", contextError);
         }
@@ -350,15 +378,25 @@ serve(async (req) => {
           const contextSections = docContexts.map((ctx) => {
             const combinedText =
               ctx.chunks && ctx.chunks.length > 0
-                ? ctx.chunks.map(chunk => chunk.content).join("\n\n")
+                ? ctx.chunks.map(chunk => {
+                    // Include similarity score if available (vector search mode)
+                    const similarity = (chunk as any).similarity;
+                    const content = chunk.content;
+                    return similarity !== undefined 
+                      ? `[Similarity: ${(similarity * 100).toFixed(1)}%] ${content}`
+                      : content;
+                  }).join("\n\n")
                 : ctx.summary ?? "";
             const preview =
               combinedText.length > 10000
                 ? `${combinedText.slice(0, 10000)}\n\n[... ${combinedText.length - 10000} more characters ...]`
                 : combinedText;
             const parts: string[] = [`📄 Document: "${ctx.fileName}"`];
+            if (searchMode === "vector") {
+              parts.push(`\n🔍 Retrieved via semantic search (${ctx.chunks?.length || 0} relevant chunks)`);
+            }
             if (preview) {
-              parts.push(`\n📝 Extracted Text Preview:\n${preview}`);
+              parts.push(`\n📝 ${searchMode === "vector" ? "Relevant Content" : "Extracted Text Preview"}:\n${preview}`);
             } else if (ctx.summary) {
               parts.push(`\n👁️ Visual Summary:\n${ctx.summary}`);
             }
@@ -399,11 +437,16 @@ serve(async (req) => {
             timestamp: Date.now(),
             metadata: {
               category: "document_context",
+              searchMode: searchMode,
               attached: docContexts.map(ctx => ({
                 jobId: ctx.jobId,
                 fileName: ctx.fileName,
                 token: ctx.token,
+                chunkCount: ctx.chunks?.length ?? 0,
                 textLength: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
+                avgSimilarity: searchMode === "vector" && ctx.chunks && ctx.chunks.length > 0
+                  ? ctx.chunks.reduce((sum: number, chunk: any) => sum + (chunk.similarity || 0), 0) / ctx.chunks.length
+                  : undefined,
               })),
             },
           });

@@ -1,6 +1,6 @@
 export type JobStatus = "uploading" | "queued" | "processing" | "completed" | "failed";
 
-export const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+export const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "indexed", "injected", "failed"] as const;
 export type JobStage = typeof JOB_STAGES[number];
 
 export type StageHistoryEntry = { stage: JobStage; at: string };

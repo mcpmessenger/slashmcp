@@ -22,9 +22,176 @@ const AWS_SESSION_TOKEN = Deno.env.get("AWS_SESSION_TOKEN");
 const AWS_S3_BUCKET = Deno.env.get("AWS_S3_BUCKET");
 
 const encoder = new TextEncoder();
-const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "indexed", "injected", "failed"] as const;
 type JobStage = typeof JOB_STAGES[number];
 type StageHistoryEntry = { stage: JobStage; at: string };
+
+const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+
+// Semantic chunking function with overlap and boundary preservation
+function chunkTextSemantic(
+  text: string,
+  targetSize: number = 2000,
+  overlap: number = 150,
+): Array<{ text: string; metadata: { charPosition: number; estimatedTokens: number } }> {
+  if (!text || text.trim().length === 0) {
+    return [];
+  }
+
+  const chunks: Array<{ text: string; metadata: { charPosition: number; estimatedTokens: number } }> = [];
+  let currentPos = 0;
+  let chunkIndex = 0;
+
+  // Helper to estimate token count (rough approximation: ~4 chars per token)
+  const estimateTokens = (str: string): number => Math.ceil(str.length / 4);
+
+  while (currentPos < text.length) {
+    const remainingText = text.slice(currentPos);
+    
+    // If remaining text is smaller than target size, take it all
+    if (remainingText.length <= targetSize) {
+      if (remainingText.trim().length > 0) {
+        chunks.push({
+          text: remainingText.trim(),
+          metadata: {
+            charPosition: currentPos,
+            estimatedTokens: estimateTokens(remainingText),
+          },
+        });
+      }
+      break;
+    }
+
+    // Try to find a good breaking point
+    let chunkEnd = currentPos + targetSize;
+    
+    // First, try to break at paragraph boundary (double newline)
+    const paragraphBreak = text.lastIndexOf("\n\n", chunkEnd);
+    if (paragraphBreak > currentPos + targetSize * 0.7) {
+      chunkEnd = paragraphBreak + 2; // Include the newlines
+    } else {
+      // Try to break at sentence boundary (period, exclamation, question mark followed by space)
+      const sentenceEndings = [". ", "! ", "? ", ".\n", "!\n", "?\n"];
+      let bestBreak = -1;
+      
+      for (const ending of sentenceEndings) {
+        const breakPos = text.lastIndexOf(ending, chunkEnd);
+        if (breakPos > currentPos + targetSize * 0.7 && breakPos > bestBreak) {
+          bestBreak = breakPos + ending.length;
+        }
+      }
+      
+      if (bestBreak > currentPos) {
+        chunkEnd = bestBreak;
+      } else {
+        // Fallback: break at word boundary (space or newline)
+        const wordBreak = text.lastIndexOf(" ", chunkEnd);
+        if (wordBreak > currentPos + targetSize * 0.8) {
+          chunkEnd = wordBreak + 1;
+        }
+      }
+    }
+
+    const chunkText = text.slice(currentPos, chunkEnd).trim();
+    if (chunkText.length > 0) {
+      chunks.push({
+        text: chunkText,
+        metadata: {
+          charPosition: currentPos,
+          estimatedTokens: estimateTokens(chunkText),
+        },
+      });
+    }
+
+    // Move position forward, accounting for overlap
+    // For first chunk, start from beginning. For subsequent chunks, overlap
+    if (chunkIndex === 0) {
+      currentPos = chunkEnd;
+    } else {
+      // Back up by overlap amount, but ensure we don't go backwards
+      currentPos = Math.max(currentPos + 1, chunkEnd - overlap);
+    }
+    
+    chunkIndex++;
+  }
+
+  return chunks;
+}
+
+// Generate embeddings using OpenAI API with batching and retry logic
+async function generateEmbeddings(
+  texts: string[],
+  apiKey: string,
+  maxRetries: number = 3,
+): Promise<number[][]> {
+  if (texts.length === 0) return [];
+
+  const embeddings: number[][] = [];
+  const batchSize = 100; // OpenAI allows up to 2048 inputs per request, but we'll use smaller batches
+
+  for (let i = 0; i < texts.length; i += batchSize) {
+    const batch = texts.slice(i, i + batchSize);
+    let retries = 0;
+    let success = false;
+
+    while (retries < maxRetries && !success) {
+      try {
+        const response = await fetch("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "text-embedding-3-large",
+            input: batch,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          // Handle rate limiting
+          if (response.status === 429) {
+            const retryAfter = response.headers.get("retry-after");
+            const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : Math.pow(2, retries) * 1000;
+            console.log(`Rate limited, waiting ${delay}ms before retry ${retries + 1}/${maxRetries}`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            retries++;
+            continue;
+          }
+          throw new Error(`OpenAI API error: ${response.status} ${errorText}`);
+        }
+
+        const data = await response.json();
+        if (!data.data || !Array.isArray(data.data)) {
+          throw new Error("Invalid response format from OpenAI API");
+        }
+
+        const batchEmbeddings = data.data
+          .sort((a: { index: number }, b: { index: number }) => a.index - b.index)
+          .map((item: { embedding: number[] }) => item.embedding);
+
+        embeddings.push(...batchEmbeddings);
+        success = true;
+
+        // Small delay between batches to avoid rate limits
+        if (i + batchSize < texts.length) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        retries++;
+        if (retries >= maxRetries) {
+          throw error;
+        }
+        const delay = Math.pow(2, retries) * 1000;
+        console.error(`Embedding generation error, retrying in ${delay}ms:`, error);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  return embeddings;
+}
 
 function parseStageHistory(metadata?: Record<string, unknown> | null): StageHistoryEntry[] {
   if (!metadata) return [];
@@ -210,6 +377,73 @@ async function textractRequest(target: string, payload: Record<string, unknown>)
   }
 
   return response.json();
+}
+
+async function createPresignedGetUrl(options: {
+  bucket: string;
+  key: string;
+  region: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken?: string | null;
+  expiresIn?: number;
+}): Promise<string> {
+  const { bucket, key, region, accessKeyId, secretAccessKey, sessionToken, expiresIn = 300 } = options;
+
+  const host = region === "us-east-1"
+    ? `${bucket}.s3.amazonaws.com`
+    : `${bucket}.s3.${region}.amazonaws.com`;
+
+  const encodedKey = key.split("/").map((segment) => encodeRfc3986(segment)).join("/");
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+  const dateStamp = amzDate.slice(0, 8);
+  const credentialScope = `${dateStamp}/${region}/s3/aws4_request`;
+
+  const signedHeaders = "host";
+  const queryEntries: [string, string][] = [
+    ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
+    ["X-Amz-Credential", `${accessKeyId}/${credentialScope}`],
+    ["X-Amz-Date", amzDate],
+    ["X-Amz-Expires", String(expiresIn)],
+    ["X-Amz-SignedHeaders", signedHeaders],
+  ];
+
+  if (sessionToken) {
+    queryEntries.push(["X-Amz-Security-Token", sessionToken]);
+  }
+
+  const canonicalQuery = queryEntries
+    .map(([key, value]) => `${encodeRfc3986(key)}=${encodeRfc3986(value)}`)
+    .sort()
+    .join("&");
+
+  const canonicalHeaders = `host:${host}\n`;
+
+  const canonicalRequest = [
+    "GET",
+    `/${encodedKey}`,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    "UNSIGNED-PAYLOAD",
+  ].join("\n");
+
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    await sha256Hex(canonicalRequest),
+  ].join("\n");
+
+  const kDate = await hmacSha256(`AWS4${secretAccessKey}`, dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, "s3");
+  const kSigning = await hmacSha256(kService, "aws4_request");
+  const signature = toHex(await hmacSha256(kSigning, stringToSign));
+
+  const finalQuery = `${canonicalQuery}&X-Amz-Signature=${signature}`;
+  return `https://${host}/${encodedKey}?${finalQuery}`;
 }
 
 const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
@@ -481,6 +715,77 @@ serve(async (req) => {
       .from("processing_jobs")
       .update({ status: "completed", metadata: jobMetadata })
       .eq("id", job.id);
+
+    // Indexing step: Generate embeddings and store in document_embeddings table
+    try {
+      if (OPENAI_API_KEY && extractedText.trim().length > 0) {
+        console.log(`Starting indexing for job ${job.id}, text length: ${extractedText.length}`);
+
+        // Chunk the extracted text using semantic chunking
+        const chunks = chunkTextSemantic(extractedText, 2000, 150);
+        console.log(`Created ${chunks.length} chunks for indexing`);
+
+        if (chunks.length > 0) {
+          // Generate embeddings for all chunks
+          const chunkTexts = chunks.map((chunk) => chunk.text);
+          const embeddings = await generateEmbeddings(chunkTexts, OPENAI_API_KEY);
+
+          if (embeddings.length !== chunks.length) {
+            throw new Error(`Embedding count mismatch: expected ${chunks.length}, got ${embeddings.length}`);
+          }
+
+          // Prepare batch insert data
+          const embeddingRows = chunks.map((chunk, index) => ({
+            job_id: job.id,
+            chunk_text: chunk.text,
+            embedding: `[${embeddings[index].join(",")}]`, // Convert array to PostgreSQL vector format
+            chunk_index: index,
+            metadata: {
+              charPosition: chunk.metadata.charPosition,
+              estimatedTokens: chunk.metadata.estimatedTokens,
+              contentLength: chunk.text.length,
+            },
+          }));
+
+          // Batch insert embeddings (Supabase handles batching internally with insert)
+          const { error: embeddingError } = await supabase
+            .from("document_embeddings")
+            .insert(embeddingRows);
+
+          if (embeddingError) {
+            console.error("Failed to insert embeddings:", embeddingError);
+            // Don't fail the job, just log the error - job remains at "extracted" stage
+            // This allows fallback to old prompt injection system
+          } else {
+            // Calculate embedding cost (text-embedding-3-large: $0.00013 per 1K tokens)
+            // Rough estimate: ~4 chars per token
+            const totalTokens = chunks.reduce((sum, chunk) => sum + chunk.metadata.estimatedTokens, 0);
+            const embeddingCost = (totalTokens / 1000) * 0.00013;
+
+            // Update job stage to "indexed"
+            jobMetadata = withJobStage(jobMetadata, "indexed", {
+              indexed_at: new Date().toISOString(),
+              total_chunks: chunks.length,
+              embedding_cost: embeddingCost,
+              embedding_model: "text-embedding-3-large",
+            });
+
+            await supabase
+              .from("processing_jobs")
+              .update({ metadata: jobMetadata })
+              .eq("id", job.id);
+
+            console.log(`Successfully indexed job ${job.id} with ${chunks.length} chunks`);
+          }
+        }
+      } else {
+        console.log(`Skipping indexing for job ${job.id}: ${!OPENAI_API_KEY ? "API key not configured" : "no text extracted"}`);
+      }
+    } catch (indexingError) {
+      // Log error but don't fail the job - allow fallback to old system
+      console.error(`Indexing failed for job ${job.id}:`, indexingError);
+      // Job remains at "extracted" stage, can use old prompt injection
+    }
 
     return new Response(JSON.stringify({ status: "completed", jobId: job.id }), {
       status: 200,

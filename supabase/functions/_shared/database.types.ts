@@ -88,6 +88,35 @@ export interface Database {
           updated_at?: string;
         };
       };
+      document_embeddings: {
+        Row: {
+          id: string;
+          job_id: string;
+          chunk_text: string;
+          embedding: number[]; // Vector(3072) stored as array
+          chunk_index: number;
+          metadata: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          job_id: string;
+          chunk_text: string;
+          embedding: number[] | string; // Can be array or string representation
+          chunk_index: number;
+          metadata?: Json | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          job_id?: string;
+          chunk_text?: string;
+          embedding?: number[] | string;
+          chunk_index?: number;
+          metadata?: Json | null;
+          created_at?: string;
+        };
+      };
       user_memory: {
         Row: {
           id: string;

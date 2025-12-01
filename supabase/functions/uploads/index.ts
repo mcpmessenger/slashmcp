@@ -29,7 +29,7 @@ const AWS_SESSION_TOKEN = Deno.env.get("AWS_SESSION_TOKEN");
 const AWS_S3_BUCKET = Deno.env.get("AWS_S3_BUCKET");
 
 const encoder = new TextEncoder();
-const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "indexed", "injected", "failed"] as const;
 type JobStage = typeof JOB_STAGES[number];
 type StageHistoryEntry = { stage: JobStage; at: string };
 
