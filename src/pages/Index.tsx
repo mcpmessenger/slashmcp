@@ -2,6 +2,7 @@ import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
 import { FileUploadStatus } from "@/components/FileUploadStatus";
 import { useChat } from "@/hooks/useChat";
+import { fetchJobStatus } from "@/lib/api";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import { Volume2, VolumeX, LogIn, ChevronDown, Server, Workflow, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -442,13 +443,22 @@ const Index = () => {
         {/* Chat Input */}
         {authReady && session && (
           <ChatInput
-            onSubmit={(input) => {
+            onSubmit={async (input) => {
               // Get completed uploads with content to include in context
-              // Only include documents that have been processed (have text or vision data)
+              // Also check for jobs that might still be processing but have results
               const completedDocs = uploadJobs
+                .filter(job => {
+                  // Include completed jobs with content
+                  if (job.status === "completed" && (job.resultText || job.visionSummary)) {
+                    return true;
+                  }
+                  // Also include processing jobs that have some results (might be CSV that finished quickly)
+                  if (job.status === "processing" && job.resultText) {
+                    return true;
+                  }
+                  return false;
+                })
                 .filter(job => 
-                  job.status === "completed" && 
-                  (job.resultText || job.visionSummary) &&
                   // Only include documents uploaded in the last hour to keep context relevant
                   (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
                 )
@@ -458,6 +468,50 @@ const Index = () => {
                   visionSummary: job.visionSummary || undefined,
                   visionMetadata: job.visionMetadata || undefined,
                 }));
+              
+              // For jobs that are still processing, try to fetch latest status
+              const processingJobs = uploadJobs.filter(job => 
+                job.status === "processing" && 
+                !job.resultText && 
+                (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
+              );
+              
+              // Try to refresh status for processing jobs (especially CSV files that process quickly)
+              if (processingJobs.length > 0) {
+                const refreshPromises = processingJobs.map(async (job) => {
+                  try {
+                    const statusResponse = await fetchJobStatus(job.id);
+                    if (statusResponse.result?.ocr_text || statusResponse.result?.vision_summary) {
+                      // Update the job with new results
+                      const updatedJob = uploadJobs.find(j => j.id === job.id);
+                      if (updatedJob) {
+                        updatedJob.resultText = statusResponse.result?.ocr_text || updatedJob.resultText || null;
+                        updatedJob.visionSummary = statusResponse.result?.vision_summary || updatedJob.visionSummary || null;
+                        updatedJob.status = statusResponse.job.status as typeof job.status;
+                        updatedJob.updatedAt = statusResponse.job.updated_at;
+                        
+                        // Add to completed docs if it now has content
+                        if (updatedJob.resultText || updatedJob.visionSummary) {
+                          completedDocs.push({
+                            fileName: updatedJob.fileName,
+                            text: updatedJob.resultText || undefined,
+                            visionSummary: updatedJob.visionSummary || undefined,
+                            visionMetadata: updatedJob.visionMetadata || undefined,
+                          });
+                        }
+                      }
+                    }
+                  } catch (error) {
+                    console.warn("Failed to refresh job status:", error);
+                  }
+                });
+                
+                // Wait for all refreshes to complete (with timeout)
+                await Promise.race([
+                  Promise.all(refreshPromises),
+                  new Promise(resolve => setTimeout(resolve, 2000)), // 2 second timeout
+                ]);
+              }
               
               // Show toast if documents are being included
               if (completedDocs.length > 0) {

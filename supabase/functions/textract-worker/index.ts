@@ -245,7 +245,13 @@ serve(async (req) => {
       .update({ status: "processing" })
       .eq("id", job.id);
 
-    if (job.analysis_target !== "document-analysis" && job.analysis_target !== "image-ocr") {
+    // Allow CSV files for document-analysis even though they don't use Textract
+    const isCsv = job.file_type === "text/csv" || 
+                  job.file_type === "application/vnd.ms-excel" ||
+                  job.file_name?.toLowerCase().endsWith(".csv") ||
+                  job.file_name?.toLowerCase().endsWith(".tsv");
+    
+    if (!isCsv && job.analysis_target !== "document-analysis" && job.analysis_target !== "image-ocr") {
       await markJobFailed(job.id, `Unsupported analysis_target: ${job.analysis_target}`);
       return new Response(JSON.stringify({ error: "Unsupported analysis target" }), {
         status: 400,
@@ -265,8 +271,48 @@ serve(async (req) => {
     let rawResponse: unknown = null;
 
     const isPdf = job.file_type === "application/pdf";
+    const isCsv = job.file_type === "text/csv" || 
+                  job.file_type === "application/vnd.ms-excel" ||
+                  job.file_name?.toLowerCase().endsWith(".csv") ||
+                  job.file_name?.toLowerCase().endsWith(".tsv");
 
-    if (isPdf) {
+    // Handle CSV/TSV files - read directly from S3
+    if (isCsv) {
+      try {
+        // Get presigned URL to read the file from S3
+        const s3Url = await createPresignedGetUrl({
+          bucket: AWS_S3_BUCKET,
+          key: job.storage_path,
+          region: AWS_REGION,
+          accessKeyId: AWS_ACCESS_KEY_ID,
+          secretAccessKey: AWS_SECRET_ACCESS_KEY,
+          sessionToken: AWS_SESSION_TOKEN ?? undefined,
+        });
+
+        // Fetch the CSV content
+        const fileResponse = await fetch(s3Url);
+        if (!fileResponse.ok) {
+          throw new Error(`Failed to fetch file from S3: ${fileResponse.statusText}`);
+        }
+
+        // Read the file content as text
+        extractedText = await fileResponse.text();
+        
+        // Limit size to prevent token limits (keep first 500KB of text)
+        if (extractedText.length > 500000) {
+          extractedText = extractedText.slice(0, 500000) + "\n\n[... file truncated, showing first 500KB ...]";
+        }
+
+        rawResponse = { type: "csv", size: extractedText.length };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Failed to read CSV file";
+        await markJobFailed(job.id, message);
+        return new Response(JSON.stringify({ error: message }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    } else if (isPdf) {
       const startResponse = await textractRequest("StartDocumentTextDetection", {
         DocumentLocation: {
           S3Object: {

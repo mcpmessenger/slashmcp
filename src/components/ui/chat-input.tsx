@@ -837,9 +837,17 @@ export function ChatInput({
     async (file: File) => {
       try {
         setIsRegisteringUpload(true);
+        
+        // Auto-detect CSV files and set analysis target
+        const isCsv = file.name.toLowerCase().endsWith(".csv") || 
+                     file.name.toLowerCase().endsWith(".tsv") ||
+                     file.type === "text/csv" ||
+                     file.type === "application/vnd.ms-excel";
+        const targetAnalysis = isCsv ? "document-analysis" : analysisTarget;
+        
         const response = await registerUploadJob({
           file,
-          analysisTarget,
+          analysisTarget: targetAnalysis,
           metadata: { source: "chat-input" },
         });
 
