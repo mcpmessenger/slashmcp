@@ -31,7 +31,7 @@ async function generateQueryEmbedding(query: string, apiKey: string): Promise<nu
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "text-embedding-3-large",
+      model: "text-embedding-3-small",
       input: query,
     }),
   });
