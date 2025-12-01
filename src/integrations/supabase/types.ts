@@ -98,7 +98,7 @@ export type Database = {
           id: string
           job_id: string
           chunk_text: string
-          embedding: number[] // Vector(3072) stored as array
+          embedding: number[] // Vector(1536) stored as array - text-embedding-3-small
           chunk_index: number
           metadata: Json | null
           created_at: string

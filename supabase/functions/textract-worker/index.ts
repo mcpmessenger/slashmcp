@@ -136,17 +136,17 @@ async function generateEmbeddings(
 
     while (retries < maxRetries && !success) {
       try {
-        const response = await fetch("https://api.openai.com/v1/embeddings", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: "text-embedding-3-large",
-            input: batch,
-          }),
-        });
+          const response = await fetch("https://api.openai.com/v1/embeddings", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: "text-embedding-3-small",
+              input: batch,
+            }),
+          });
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -757,17 +757,17 @@ serve(async (req) => {
             // Don't fail the job, just log the error - job remains at "extracted" stage
             // This allows fallback to old prompt injection system
           } else {
-            // Calculate embedding cost (text-embedding-3-large: $0.00013 per 1K tokens)
+            // Calculate embedding cost (text-embedding-3-small: $0.00002 per 1K tokens)
             // Rough estimate: ~4 chars per token
             const totalTokens = chunks.reduce((sum, chunk) => sum + chunk.metadata.estimatedTokens, 0);
-            const embeddingCost = (totalTokens / 1000) * 0.00013;
+            const embeddingCost = (totalTokens / 1000) * 0.00002;
 
             // Update job stage to "indexed"
             jobMetadata = withJobStage(jobMetadata, "indexed", {
               indexed_at: new Date().toISOString(),
               total_chunks: chunks.length,
               embedding_cost: embeddingCost,
-              embedding_model: "text-embedding-3-large",
+              embedding_model: "text-embedding-3-small",
             });
 
             await supabase
