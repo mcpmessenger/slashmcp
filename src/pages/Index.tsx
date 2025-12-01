@@ -326,7 +326,12 @@ const Index = () => {
                       Scrape anything with MCP Messenger
                     </p>
                     {!authReady ? (
-                      <p className="text-sm text-muted-foreground">Loading...</p>
+                      <div className="space-y-2">
+                        <p className="text-sm text-muted-foreground">Loading...</p>
+                        <p className="text-xs text-muted-foreground/70">
+                          If this takes too long, check your browser console for errors.
+                        </p>
+                      </div>
                     ) : (
                       <div className="space-y-4">
                         <p className="text-muted-foreground">

@@ -852,10 +852,36 @@ export function useChat() {
 
   useEffect(() => {
     let isCancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    // Set a timeout to prevent infinite loading (5 seconds max)
+    timeoutId = setTimeout(() => {
+      if (!isCancelled) {
+        console.warn("Auth check timeout - setting authReady to true");
+        setAuthReady(true);
+        setSession(null);
+      }
+    }, 5000);
+
+    // Check if Supabase client is properly initialized
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+    
+    if (!supabaseUrl || !supabaseAnonKey) {
+      console.error("Missing Supabase environment variables:", {
+        hasUrl: !!supabaseUrl,
+        hasKey: !!supabaseAnonKey,
+      });
+      if (timeoutId) clearTimeout(timeoutId);
+      setAuthReady(true);
+      setSession(null);
+      return;
+    }
 
     supabaseClient.auth
       .getSession()
       .then(({ data, error }) => {
+        if (timeoutId) clearTimeout(timeoutId);
         if (isCancelled) return;
         if (error) {
           console.error("Failed to fetch Supabase session", error);
@@ -866,6 +892,7 @@ export function useChat() {
         setAuthReady(true);
       })
       .catch(error => {
+        if (timeoutId) clearTimeout(timeoutId);
         if (!isCancelled) {
           console.error("Supabase getSession error", error);
           setSession(null);
@@ -873,6 +900,13 @@ export function useChat() {
         }
       });
 
+    return () => {
+      isCancelled = true;
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, []);
+
+  useEffect(() => {
     const { data: listener } = supabaseClient.auth.onAuthStateChange(async (event, nextSession) => {
       setSession(nextSession);
       if (event === "SIGNED_IN" && nextSession?.user) {
@@ -935,10 +969,11 @@ export function useChat() {
     });
 
     return () => {
-      isCancelled = true;
-      listener.subscription.unsubscribe();
+      if (listener?.subscription) {
+        listener.subscription.unsubscribe();
+      }
     };
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     let isMounted = true;
