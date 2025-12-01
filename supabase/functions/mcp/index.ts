@@ -2807,6 +2807,410 @@ async function handleCanva(invocation: McpInvocation, userId?: string): Promise<
   };
 }
 
+async function handleEmail(invocation: McpInvocation, userId?: string, userEmail?: string, authHeader?: string | null): Promise<McpInvocationResponse> {
+  const startedAt = performance.now();
+  const args = invocation.args ?? {};
+  const command = invocation.command ?? "send_test_email";
+
+  // Require authentication for email sending
+  if (!userId || !userEmail) {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Authentication required",
+        details: {
+          explanation: "You must be logged in to send emails. Please sign in to continue.",
+        },
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  try {
+    if (command === "send_test_email") {
+      const subject = args.subject || "Test Email";
+      const body = args.body || args.content || "test";
+      const provider = args.provider || "gmail"; // Default to Gmail, can be "gmail", "outlook", "icloud"
+
+      const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL");
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+        return {
+          invocation,
+          result: {
+            type: "error",
+            message: "Email service is not configured",
+            details: {
+              explanation: "Supabase email service is not properly configured on the server.",
+            },
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }
+
+      const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+
+      // Try to use provider-specific API based on provider parameter
+      if (provider === "gmail") {
+        // Try to get Google OAuth token if auth header is available
+        let googleToken = null;
+        if (authHeader) {
+          const { getOAuthTokenFromRequest } = await import("../_shared/oauth.ts");
+          googleToken = await getOAuthTokenFromRequest(authHeader, "google", SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+          console.log("OAuth token retrieval:", {
+            hasAuthHeader: !!authHeader,
+            hasToken: !!googleToken?.accessToken,
+            userId,
+            userEmail,
+          });
+        } else {
+          console.log("No auth header provided for Gmail API", { userId, userEmail });
+        }
+
+        if (googleToken?.accessToken) {
+          // Verify token has Gmail scope by making a test API call
+          try {
+            const profileResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+              headers: {
+                "Authorization": `Bearer ${googleToken.accessToken}`,
+              },
+            });
+            
+            if (!profileResponse.ok) {
+              console.error("Token validation failed:", {
+                status: profileResponse.status,
+                statusText: profileResponse.statusText,
+              });
+              // Token might be invalid or expired
+              googleToken = null;
+            } else {
+              const profile = await profileResponse.json();
+              console.log("Google OAuth token validated:", {
+                email: profile.email,
+                verified: profile.verified_email,
+              });
+            }
+          } catch (tokenError) {
+            console.error("Token validation error:", tokenError);
+            googleToken = null;
+          }
+        }
+
+        if (googleToken?.accessToken) {
+          try {
+            // Create email message in RFC 2822 format
+            const emailContent = [
+              `To: ${userEmail}`,
+              `Subject: ${subject}`,
+              `Content-Type: text/plain; charset=utf-8`,
+              ``,
+              body,
+            ].join("\n");
+
+            // Encode message in base64url format (Gmail API requirement)
+            const encodedMessage = btoa(emailContent)
+              .replace(/\+/g, "-")
+              .replace(/\//g, "_")
+              .replace(/=+$/, "");
+
+            // Send email via Gmail API
+            const gmailResponse = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${googleToken.accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                raw: encodedMessage,
+              }),
+            });
+
+            if (gmailResponse.ok) {
+              const gmailData = await gmailResponse.json().catch(() => ({}));
+              console.log("Gmail API success:", { messageId: gmailData.id, userEmail });
+              return {
+                invocation,
+                result: {
+                  type: "text",
+                  content: `✅ Test email sent successfully via Gmail to ${userEmail}!\n\nSubject: ${subject}\nBody: ${body.substring(0, 200)}${body.length > 200 ? '...' : ''}\n\nCheck your inbox!`,
+                },
+                timestamp: new Date().toISOString(),
+                latencyMs: Math.round(performance.now() - startedAt),
+              };
+            } else {
+              const errorData = await gmailResponse.json().catch(() => ({}));
+              const errorText = await gmailResponse.text().catch(() => "");
+              console.error("Gmail API failed:", {
+                status: gmailResponse.status,
+                statusText: gmailResponse.statusText,
+                error: errorData,
+                errorText: errorText.substring(0, 500),
+                userEmail,
+                hasToken: !!googleToken?.accessToken,
+              });
+              // Return error instead of falling through - user needs to fix Gmail setup
+              return {
+                invocation,
+                result: {
+                  type: "error",
+                  message: `Gmail API failed: ${errorData.error?.message || gmailResponse.statusText || 'Unknown error'}`,
+                  details: {
+                    explanation: "Could not send email via Gmail API. This usually means:",
+                    possibleCauses: [
+                      "You haven't signed in with Google OAuth",
+                      "You haven't granted Gmail permissions (gmail.send scope)",
+                      "Your Google OAuth token has expired",
+                      "Gmail API is not enabled in your Google Cloud project",
+                    ],
+                    userEmail: userEmail,
+                    gmailError: errorData.error || errorText.substring(0, 200),
+                    instructions: "1. Sign out and sign back in with Google\n2. Make sure you grant Gmail permissions\n3. Check Supabase Edge Function logs for more details",
+                  },
+                },
+                timestamp: new Date().toISOString(),
+                latencyMs: Math.round(performance.now() - startedAt),
+              };
+            }
+          } catch (gmailError) {
+            console.error("Gmail API exception:", {
+              error: gmailError instanceof Error ? gmailError.message : String(gmailError),
+              stack: gmailError instanceof Error ? gmailError.stack : undefined,
+              userEmail,
+            });
+            // Return error instead of falling through
+            return {
+              invocation,
+              result: {
+                type: "error",
+                message: `Gmail API error: ${gmailError instanceof Error ? gmailError.message : String(gmailError)}`,
+                details: {
+                  explanation: "An exception occurred while trying to send email via Gmail API.",
+                  userEmail: userEmail,
+                  error: gmailError instanceof Error ? gmailError.message : String(gmailError),
+                },
+              },
+              timestamp: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - startedAt),
+            };
+          }
+        } else {
+          console.log("No Google OAuth token available for Gmail API", { userEmail, hasAuthHeader: !!authHeader });
+          // If we get here, Gmail API is not available
+          // Return helpful error with setup instructions for Gmail OAuth
+          return {
+            invocation,
+            result: {
+              type: "error",
+              message: "Gmail OAuth tokens not available",
+              details: {
+                explanation: "To send emails via Gmail API, you need to sign in with Google OAuth and grant Gmail permissions.",
+                steps: [
+                  "1. Sign out completely from the app",
+                  "2. Sign back in using 'Sign in with Google' (not email/password)",
+                  "3. When Google asks for permissions, grant Gmail permissions",
+                  "4. The system will automatically capture and store your OAuth tokens",
+                  "5. Try sending email again",
+                ],
+                userEmail: userEmail,
+                currentStatus: "Gmail API: Not available (no OAuth token stored)\n\nNote: After signing in with Google OAuth, tokens are automatically captured and stored.",
+                troubleshooting: "If you've already signed in with Google but still see this error:\n- Make sure you granted Gmail permissions during sign-in\n- Check Supabase Edge Function logs for token capture errors\n- Try signing out and signing back in again",
+              },
+            },
+            timestamp: new Date().toISOString(),
+            latencyMs: Math.round(performance.now() - startedAt),
+          };
+        }
+      } else if (provider === "outlook") {
+        // Try to get Microsoft OAuth token
+        let microsoftToken = null;
+        if (authHeader) {
+          const { getOAuthTokenFromRequest } = await import("../_shared/oauth.ts");
+          microsoftToken = await getOAuthTokenFromRequest(authHeader, "azure", SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+          console.log("Microsoft OAuth token retrieval:", {
+            hasAuthHeader: !!authHeader,
+            hasToken: !!microsoftToken?.accessToken,
+            userId,
+            userEmail,
+          });
+        }
+
+        if (microsoftToken?.accessToken) {
+          try {
+            // Send email via Microsoft Graph API
+            const graphResponse = await fetch("https://graph.microsoft.com/v1.0/me/sendMail", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${microsoftToken.accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                message: {
+                  subject: subject,
+                  body: {
+                    contentType: "Text",
+                    content: body,
+                  },
+                  toRecipients: [
+                    {
+                      emailAddress: {
+                        address: userEmail,
+                      },
+                    },
+                  ],
+                },
+              }),
+            });
+
+            if (graphResponse.ok) {
+              console.log("Microsoft Graph API success:", { userEmail });
+              return {
+                invocation,
+                result: {
+                  type: "text",
+                  content: `✅ Test email sent successfully via Outlook to ${userEmail}!\n\nSubject: ${subject}\nBody: ${body.substring(0, 200)}${body.length > 200 ? '...' : ''}\n\nCheck your inbox!`,
+                },
+                timestamp: new Date().toISOString(),
+                latencyMs: Math.round(performance.now() - startedAt),
+              };
+            } else {
+              const errorData = await graphResponse.json().catch(() => ({}));
+              console.error("Microsoft Graph API failed:", {
+                status: graphResponse.status,
+                statusText: graphResponse.statusText,
+                error: errorData,
+                userEmail,
+              });
+              return {
+                invocation,
+                result: {
+                  type: "error",
+                  message: `Outlook API failed: ${errorData.error?.message || graphResponse.statusText || 'Unknown error'}`,
+                  details: {
+                    explanation: "Could not send email via Microsoft Graph API.",
+                    possibleCauses: [
+                      "You haven't signed in with Microsoft/Azure OAuth",
+                      "You haven't granted Mail.Send permissions",
+                      "Your Microsoft OAuth token has expired",
+                      "Microsoft Graph API permissions not configured",
+                    ],
+                    userEmail: userEmail,
+                    instructions: "1. Sign in with Microsoft/Azure OAuth\n2. Grant Mail.Send permissions\n3. Check Supabase Edge Function logs for more details",
+                  },
+                },
+                timestamp: new Date().toISOString(),
+                latencyMs: Math.round(performance.now() - startedAt),
+              };
+            }
+          } catch (outlookError) {
+            console.error("Outlook API exception:", outlookError);
+            return {
+              invocation,
+              result: {
+                type: "error",
+                message: `Outlook API error: ${outlookError instanceof Error ? outlookError.message : String(outlookError)}`,
+                details: {
+                  explanation: "An exception occurred while trying to send email via Microsoft Graph API.",
+                  userEmail: userEmail,
+                },
+              },
+              timestamp: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - startedAt),
+            };
+          }
+        } else {
+          return {
+            invocation,
+            result: {
+              type: "error",
+              message: "Outlook OAuth tokens not available",
+              details: {
+                explanation: "To send emails via Outlook, you need to sign in with Microsoft/Azure OAuth and grant Mail.Send permissions.",
+                steps: [
+                  "1. Sign out completely from the app",
+                  "2. Sign back in using 'Sign in with Microsoft' (if available)",
+                  "3. Grant Mail.Send permissions when prompted",
+                  "4. The system will automatically capture and store your OAuth tokens",
+                  "5. Try sending email again",
+                ],
+                userEmail: userEmail,
+                note: "Microsoft/Azure OAuth provider must be configured in Supabase Authentication settings.",
+              },
+            },
+            timestamp: new Date().toISOString(),
+            latencyMs: Math.round(performance.now() - startedAt),
+          };
+        }
+      } else if (provider === "icloud") {
+        // iCloud doesn't have a standard OAuth API for sending emails
+        // We would need to use IMAP/SMTP with app-specific passwords
+        // For now, return an informative error
+        return {
+          invocation,
+          result: {
+            type: "error",
+            message: "iCloud email sending not yet fully implemented",
+            details: {
+              explanation: "iCloud doesn't provide a standard OAuth API for sending emails. Implementation options:",
+              options: [
+                "1. Use IMAP/SMTP with app-specific passwords (requires user to set up)",
+                "2. Use Apple's Mail API (requires Apple Developer account and special setup)",
+                "3. Use a third-party email service that supports iCloud",
+              ],
+              userEmail: userEmail,
+              note: "For now, please use Gmail or Outlook for email sending. iCloud support is planned for a future update.",
+            },
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      } else {
+        // Unknown provider
+        return {
+          invocation,
+          result: {
+            type: "error",
+            message: `Unknown email provider: ${provider}`,
+            details: {
+              explanation: `The provider "${provider}" is not supported.`,
+              supportedProviders: ["gmail", "outlook", "icloud"],
+              userEmail: userEmail,
+            },
+          },
+          timestamp: new Date().toISOString(),
+          latencyMs: Math.round(performance.now() - startedAt),
+        };
+      }
+    }
+
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: `Unknown email command: ${command}. Supported commands: send_test_email`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  } catch (error) {
+    console.error("Email handler error:", error);
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: error instanceof Error ? error.message : "Failed to send email",
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+}
+
 serve(async req => {
   const origin = req.headers.get("Origin");
   const corsHeaders = getCorsHeaders(origin);
@@ -2875,6 +3279,7 @@ serve(async req => {
 
   // Try to get authenticated user (optional - for key manager lookup)
   let userId: string | undefined;
+  let userEmail: string | undefined;
   const authHeader = req.headers.get("Authorization");
   if (authHeader) {
     try {
@@ -2888,6 +3293,7 @@ serve(async req => {
         const { data: { user } } = await supabase.auth.getUser(accessToken);
         if (user) {
           userId = user.id;
+          userEmail = user.email;
         }
       }
     } catch (error) {
@@ -2945,6 +3351,65 @@ serve(async req => {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+    if (invocation.serverId === "email-mcp") {
+      const response = await handleEmail(invocation, userId, userEmail, authHeader);
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (invocation.serverId === "playwright-wrapper") {
+      // Forward to playwright-wrapper edge function
+      const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
+      if (!PROJECT_URL) {
+        return respondWithError(500, "PROJECT_URL not configured", origin);
+      }
+      
+      const playwrightUrl = `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1/playwright-wrapper`;
+      
+      try {
+        const playwrightResponse = await fetch(playwrightUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(authHeader ? { "Authorization": authHeader } : {}),
+          },
+          body: JSON.stringify({
+            command: invocation.command,
+            args: invocation.args,
+            positionalArgs: invocation.positionalArgs,
+          }),
+        });
+
+        if (!playwrightResponse.ok) {
+          const errorText = await playwrightResponse.text().catch(() => "Unknown error");
+          return respondWithError(playwrightResponse.status, `Playwright wrapper error: ${errorText}`, origin);
+        }
+
+        const playwrightData = await playwrightResponse.json();
+        
+        // Format response to match MCP gateway format
+        const response: McpInvocationResponse = {
+          invocation,
+          result: playwrightData.result || {
+            type: "error",
+            message: "No result from playwright-wrapper",
+          },
+          timestamp: playwrightData.timestamp || new Date().toISOString(),
+          latencyMs: playwrightData.latencyMs,
+          raw: playwrightData,
+        };
+
+        return new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } catch (error) {
+        console.error("Playwright wrapper proxy error:", error);
+        const message = error instanceof Error ? error.message : "Unknown error";
+        return respondWithError(500, `Failed to proxy to playwright-wrapper: ${message}`, origin);
+      }
     }
 
     return respondWithError(400, `Unsupported MCP server: ${invocation.serverId}`, origin);

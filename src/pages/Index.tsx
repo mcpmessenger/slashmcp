@@ -28,19 +28,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { Provider } from "@/hooks/useChat";
 import type { McpRegistryEntry } from "@/lib/mcp/types";
-
-type UploadJob = {
-  id: string;
-  fileName: string;
-  status: "uploading" | "queued" | "processing" | "completed" | "failed";
-  message?: string | null;
-  error?: string | null;
-  resultText?: string | null;
-  updatedAt?: string;
-  visionSummary?: string | null;
-  visionProvider?: "gpt4o" | "gemini" | null;
-  visionMetadata?: Record<string, unknown> | null;
-};
+import type { UploadJob } from "@/types/uploads";
+import { parseStageMetadata } from "@/types/uploads";
 
 const Index = () => {
   const {
@@ -66,6 +55,10 @@ const Index = () => {
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const { enabled: voicePlaybackEnabled, toggle: toggleVoicePlayback, speak, stop, isSpeaking } = useVoicePlayback();
+  const hasPendingUploads = useMemo(
+    () => isRegisteringUpload || uploadJobs.some(job => ["uploading", "queued"].includes(job.status)),
+    [uploadJobs, isRegisteringUpload],
+  );
 
   const sortedRegistry = useMemo(
     () => [...registry].sort((a, b) => a.name.localeCompare(b.name)),
@@ -445,127 +438,89 @@ const Index = () => {
           />
         )}
 
+        {hasPendingUploads && (
+          <div className="px-4 pb-2 flex items-center gap-2 text-xs text-amber-500">
+            <AlertCircle className="h-4 w-4" />
+            <span>Uploads are still in progress. Document context will attach once processing completes.</span>
+          </div>
+        )}
+
         {/* Chat Input */}
         {authReady && session && (
           <ChatInput
             onSubmit={async (input) => {
-              // CRITICAL: Always refresh job status for completed jobs to ensure we have the latest resultText
-              // This is especially important for CSV files that may have finished processing
-              const jobsToCheck = uploadJobs.filter(job => 
-                (job.status === "completed" || job.status === "processing") &&
-                (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
+              const jobsToRefresh = uploadJobs.filter(job =>
+                ["processing", "completed"].includes(job.status) &&
+                (!job.updatedAt || Date.now() - new Date(job.updatedAt).getTime() < 3600000),
               );
-              
-              // Refresh all relevant jobs to get latest content
-              const refreshPromises = jobsToCheck.map(async (job) => {
-                try {
-                  const statusResponse = await fetchJobStatus(job.id);
-                  return {
-                    jobId: job.id,
-                    resultText: statusResponse.result?.ocr_text || null,
-                    visionSummary: statusResponse.result?.vision_summary || null,
-                    visionMetadata: statusResponse.result?.vision_metadata || null,
-                    status: statusResponse.job.status,
-                    updatedAt: statusResponse.job.updated_at,
+
+              const refreshResults = await Promise.all(
+                jobsToRefresh.map(async (job) => {
+                  try {
+                    return await fetchJobStatus(job.id);
+                  } catch (error) {
+                    console.warn("Failed to refresh job status:", job.id, error);
+                    return null;
+                  }
+                }),
+              );
+
+              let nextJobs = uploadJobs;
+
+              if (refreshResults.some(Boolean)) {
+                const jobMap = new Map(uploadJobs.map(job => [job.id, { ...job }]));
+                refreshResults.forEach((result) => {
+                  if (!result) return;
+                  const current = jobMap.get(result.job.id) ?? {
+                    id: result.job.id,
+                    fileName: result.job.file_name,
+                    status: "queued",
                   };
-                } catch (error) {
-                  console.warn(`Failed to refresh job status for ${job.id}:`, error);
-                  return null;
-                }
-              });
-              
-              // Wait for refreshes (with timeout)
-              const refreshResults = await Promise.race([
-                Promise.all(refreshPromises),
-                new Promise<Array<typeof refreshPromises[0] | null>>(resolve => setTimeout(() => resolve([]), 3000)), // 3 second timeout
-              ]);
-              
-              // Update state with refreshed job data
-              let updatedJobs = [...uploadJobs];
-              refreshResults.forEach((result) => {
-                if (result) {
-                  const jobIndex = updatedJobs.findIndex(j => j.id === result.jobId);
-                  if (jobIndex >= 0) {
-                    updatedJobs[jobIndex] = {
-                      ...updatedJobs[jobIndex],
-                      resultText: result.resultText || updatedJobs[jobIndex].resultText || null,
-                      visionSummary: result.visionSummary || updatedJobs[jobIndex].visionSummary || null,
-                      visionMetadata: result.visionMetadata || updatedJobs[jobIndex].visionMetadata || null,
-                      status: result.status as typeof updatedJobs[jobIndex].status,
-                      updatedAt: result.updatedAt,
-                    };
-                  }
-                }
-              });
-              
-              // Update state if we got new data
-              if (refreshResults.some(r => r !== null)) {
-                setUploadJobs(updatedJobs);
+                  const stageMetadata = parseStageMetadata(result.job.metadata);
+                  jobMap.set(result.job.id, {
+                    ...current,
+                    status: result.job.status as UploadJob["status"],
+                    resultText: result.result?.ocr_text ?? current.resultText ?? null,
+                    visionSummary: result.result?.vision_summary ?? current.visionSummary ?? null,
+                    visionMetadata: result.result?.vision_metadata ?? current.visionMetadata ?? null,
+                    updatedAt: result.job.updated_at,
+                    ...stageMetadata,
+                  });
+                });
+                nextJobs = Array.from(jobMap.values());
+                setUploadJobs(nextJobs);
               }
-              
-              // Now get completed uploads with content to include in context (use updated jobs)
-              const jobsToUse = refreshResults.some(r => r !== null) ? updatedJobs : uploadJobs;
-              const completedDocs = jobsToUse
-                .filter(job => {
-                  // Include completed jobs with content
-                  if (job.status === "completed" && (job.resultText || job.visionSummary)) {
-                    return true;
-                  }
-                  // Also include processing jobs that have some results (might be CSV that finished quickly)
-                  if (job.status === "processing" && job.resultText) {
-                    return true;
-                  }
-                  return false;
-                })
-                .filter(job => 
-                  // Only include documents uploaded in the last hour to keep context relevant
-                  (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
+
+              const contextDocs = nextJobs
+                .filter(job =>
+                  job.status === "completed" &&
+                  (job.stage === "extracted" || job.stage === "injected"),
                 )
                 .map(job => ({
+                  jobId: job.id,
                   fileName: job.fileName,
-                  text: job.resultText || undefined,
-                  visionSummary: job.visionSummary || undefined,
-                  visionMetadata: job.visionMetadata || undefined,
+                  textLength: job.resultText?.length ?? job.contentLength ?? undefined,
                 }));
-              
-              // Debug logging
-              if (uploadJobs.length > 0) {
-                console.log("[Document Context] Upload jobs:", uploadJobs.map(j => ({
-                  id: j.id,
-                  fileName: j.fileName,
-                  status: j.status,
-                  hasText: !!j.resultText,
-                  textLength: j.resultText?.length || 0,
-                })));
-                console.log("[Document Context] Completed docs to include:", completedDocs.map(d => ({
-                  fileName: d.fileName,
-                  hasText: !!d.text,
-                  textLength: d.text?.length || 0,
-                })));
-              }
-              
-              // Show toast if documents are being included
-              if (completedDocs.length > 0) {
+
+              if (contextDocs.length > 0) {
                 toast({
                   title: "Including document context",
-                  description: `${completedDocs.length} document(s) will be analyzed with your message.`,
+                  description: `${contextDocs.length} document(s) will be analyzed with your message.`,
                   duration: 2000,
                 });
-              } else if (uploadJobs.length > 0 && uploadJobs.some(j => j.status === "completed")) {
-                // Warn if we have completed jobs but no content
-                console.warn("[Document Context] Completed jobs found but no content available:", uploadJobs);
+              } else if (uploadJobs.length > 0) {
                 toast({
-                  title: "Document content not available",
-                  description: "The uploaded file may still be processing. Please wait a moment and try again.",
+                  title: "No document context yet",
+                  description: "Your files are still being processed. Try again shortly.",
                   variant: "destructive",
-                  duration: 3000,
+                  duration: 2500,
                 });
               }
-              
-              sendMessage(input, completedDocs.length > 0 ? completedDocs : undefined);
+
+              sendMessage(input, contextDocs.length > 0 ? contextDocs : undefined);
             }}
             onAssistantMessage={appendAssistantText}
-            disabled={isLoading}
+            disabled={isLoading || hasPendingUploads}
             className="px-4 pb-4"
             registry={registry}
             voicePlaybackEnabled={voicePlaybackEnabled}

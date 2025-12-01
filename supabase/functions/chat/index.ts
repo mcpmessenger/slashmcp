@@ -26,11 +26,14 @@ const BASE_SYSTEM_PROMPT =
 
 const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 const encoder = new TextEncoder();
 
 const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
-const MCP_GATEWAY_URL = PROJECT_URL ? `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1/mcp` : "";
+const NORMALIZED_PROJECT_URL = PROJECT_URL ? PROJECT_URL.replace(/\/+$/, "") : "";
+const MCP_GATEWAY_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/mcp` : "";
+const DOC_CONTEXT_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/doc-context` : "";
 
 function getCorsHeaders(origin: string | null): Record<string, string> {
   const isAllowed = !origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin);
@@ -117,6 +120,72 @@ function mapMessagesForGemini(messages: Array<{ role: string; content: string }>
   }));
 }
 
+const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+type JobStage = typeof JOB_STAGES[number];
+type StageHistoryEntry = { stage: JobStage; at: string };
+
+function parseStageHistory(metadata?: Record<string, unknown> | null): StageHistoryEntry[] {
+  if (!metadata) return [];
+  const raw = (metadata as Record<string, unknown>).job_stage_history;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      if (entry && typeof entry === "object" && "stage" in entry && "at" in entry) {
+        const stage = (entry as Record<string, unknown>).stage;
+        const at = (entry as Record<string, unknown>).at;
+        if (JOB_STAGES.includes(stage as JobStage) && typeof at === "string") {
+          return { stage: stage as JobStage, at };
+        }
+      }
+      return null;
+    })
+    .filter((entry): entry is StageHistoryEntry => Boolean(entry));
+}
+
+function withJobStage(
+  metadata: Record<string, unknown> | null | undefined,
+  stage: JobStage,
+  extra: Record<string, unknown> = {},
+) {
+  const base = { ...(metadata ?? {}) } as Record<string, unknown>;
+  const history = parseStageHistory(base);
+  const lastEntry = history[history.length - 1];
+  const timestamp = new Date().toISOString();
+  const nextHistory =
+    lastEntry && lastEntry.stage === stage ? history : [...history, { stage, at: timestamp }].slice(-25);
+
+  return {
+    ...base,
+    ...extra,
+    job_stage: stage,
+    job_stage_history: nextHistory,
+    job_stage_updated_at: timestamp,
+  };
+}
+
+const adminClient = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+  ? createClient<Database>(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false,
+      },
+    })
+  : null;
+
+type DocumentContextPayload = {
+  jobId: string;
+  fileName: string;
+  token: string;
+  stage: JobStage | null;
+  rawMetadata?: Record<string, unknown> | null;
+  chunks: Array<{ id: string; content: string }>;
+  summary?: string | null;
+  metadata?: {
+    textLength?: number;
+    visionMetadata?: Record<string, unknown> | null;
+  };
+};
+
 // --- Multi-agent setup using OpenAI Agents SDK for the OpenAI provider ---
 // Note: Agent and tool creation logic is now imported from the shared orchestration module
 
@@ -166,7 +235,7 @@ serve(async (req) => {
       });
     }
     
-    const { messages, provider } = requestData;
+    const { messages, provider, documentContext: documentContextRefs } = requestData;
     if (!Array.isArray(messages)) {
       // Return stream even for validation errors
       eventStream.sendEvent({
@@ -247,8 +316,124 @@ serve(async (req) => {
     const normalizedProvider = (provider ?? "openai") as string;
     const selectedProvider: Provider =
       normalizedProvider === "anthropic" || normalizedProvider === "gemini" ? normalizedProvider : "openai";
+    let augmentedMessages: Array<{ role: string; content: string }> = [...messages];
 
-    const conversation = messages.map((message) => ({
+    if (Array.isArray(documentContextRefs) && documentContextRefs.length > 0) {
+      const jobIds = documentContextRefs
+        .map((doc: { jobId?: string }) => (doc && typeof doc.jobId === "string" ? doc.jobId : null))
+        .filter((id): id is string => Boolean(id));
+
+      if (!DOC_CONTEXT_URL) {
+        console.warn("Document context provided but DOC_CONTEXT_URL is not configured");
+      } else if (jobIds.length > 0) {
+        let docContexts: DocumentContextPayload[] = [];
+        try {
+          const response = await fetch(DOC_CONTEXT_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
+            },
+            body: JSON.stringify({ jobIds }),
+          });
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => "");
+            throw new Error(`doc-context responded with ${response.status} ${errorText}`);
+          }
+          const parsed = await response.json().catch(() => null);
+          docContexts = Array.isArray(parsed?.contexts) ? (parsed.contexts as DocumentContextPayload[]) : [];
+        } catch (contextError) {
+          console.error("Failed to retrieve document contexts:", contextError);
+        }
+
+        if (docContexts.length > 0) {
+          const contextSections = docContexts.map((ctx) => {
+            const combinedText =
+              ctx.chunks && ctx.chunks.length > 0
+                ? ctx.chunks.map(chunk => chunk.content).join("\n\n")
+                : ctx.summary ?? "";
+            const preview =
+              combinedText.length > 10000
+                ? `${combinedText.slice(0, 10000)}\n\n[... ${combinedText.length - 10000} more characters ...]`
+                : combinedText;
+            const parts: string[] = [`📄 Document: "${ctx.fileName}"`];
+            if (preview) {
+              parts.push(`\n📝 Extracted Text Preview:\n${preview}`);
+            } else if (ctx.summary) {
+              parts.push(`\n👁️ Visual Summary:\n${ctx.summary}`);
+            }
+            if (ctx.metadata?.visionMetadata) {
+              const bulletPoints = Array.isArray(ctx.metadata.visionMetadata?.bullet_points)
+                ? (ctx.metadata.visionMetadata?.bullet_points as string[])
+                : [];
+              if (bulletPoints.length > 0) {
+                parts.push(`\n🔑 Key Points:\n${bulletPoints.map(point => `- ${point}`).join("\n")}`);
+              }
+              if (ctx.metadata.visionMetadata?.chart_analysis) {
+                parts.push(`\n📊 Chart Analysis: ${ctx.metadata.visionMetadata.chart_analysis as string}`);
+              }
+            }
+            parts.push(`\n🔗 Context Token: ${ctx.token}`);
+            return parts.join("");
+          });
+
+          const contextBlock = `[AVAILABLE DOCUMENT CONTEXT]\n${contextSections.join("\n\n---\n\n")}`;
+          const lastMessageIndex = augmentedMessages.length - 1;
+          if (lastMessageIndex >= 0) {
+            const lastMessage = augmentedMessages[lastMessageIndex];
+            const lastContent =
+              typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content ?? "");
+            augmentedMessages[lastMessageIndex] = {
+              ...lastMessage,
+              content: `${contextBlock}\n\n[USER QUERY]\n${lastContent}`,
+            };
+          } else {
+            augmentedMessages.push({
+              role: "user",
+              content: `${contextBlock}\n\n[USER QUERY]\n`,
+            });
+          }
+
+          eventStream.sendEvent({
+            type: "system",
+            timestamp: Date.now(),
+            metadata: {
+              category: "document_context",
+              attached: docContexts.map(ctx => ({
+                jobId: ctx.jobId,
+                fileName: ctx.fileName,
+                token: ctx.token,
+                textLength: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
+              })),
+            },
+          });
+
+          if (adminClient) {
+            const timestamp = new Date().toISOString();
+            await Promise.all(
+              docContexts.map((ctx) => {
+                const updatedMetadata = withJobStage(
+                  (ctx.rawMetadata as Record<string, unknown> | null) ?? null,
+                  "injected",
+                  {
+                    injected_at: timestamp,
+                    last_injected_text_length: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
+                  },
+                );
+                return adminClient
+                  .from("processing_jobs")
+                  .update({ metadata: updatedMetadata })
+                  .eq("id", ctx.jobId);
+              }),
+            );
+          } else {
+            console.warn("Admin client not configured; unable to update document stage to injected");
+          }
+        }
+      }
+    }
+
+    const conversation = augmentedMessages.map((message) => ({
       role: message.role === "assistant" ? "assistant" : "user",
       content: typeof message.content === "string" ? message.content : String(message.content),
     }));

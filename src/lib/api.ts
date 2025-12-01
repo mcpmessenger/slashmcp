@@ -89,6 +89,24 @@ export async function registerUploadJob(params: {
   return response.json();
 }
 
+export async function updateJobStage(jobId: string, stage: "registered" | "uploaded" | "processing" | "extracted" | "injected" | "failed"): Promise<void> {
+  if (!FUNCTIONS_URL) {
+    throw new Error("Functions URL is not configured");
+  }
+
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ jobId, stage }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error?.error || "Failed to update job stage");
+  }
+}
+
 export async function triggerTextractJob(jobId: string): Promise<void> {
   if (!FUNCTIONS_URL) {
     throw new Error("Functions URL is not configured");
@@ -127,6 +145,10 @@ export interface JobStatusResponse {
         ocr_text: string | null;
         textract_response: Record<string, unknown> | null;
         summary: Record<string, unknown> | null;
+        vision_summary: string | null;
+        vision_metadata: Record<string, unknown> | null;
+        vision_provider: string | null;
+        vision_cost: Record<string, unknown> | null;
         created_at: string;
       }
     | null;

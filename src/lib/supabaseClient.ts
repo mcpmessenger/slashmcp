@@ -13,3 +13,8 @@ export const supabaseClient = createClient(supabaseUrl ?? "", supabaseAnonKey ??
     autoRefreshToken: true,
   },
 });
+
+// Expose to window for debugging (browser console access)
+if (typeof window !== "undefined") {
+  (window as any).supabase = supabaseClient;
+}

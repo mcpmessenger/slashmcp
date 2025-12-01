@@ -79,7 +79,7 @@ export async function invokeMcpCommand(
     const body = isDynamicServer
       ? {
           serverId: invocation.serverId,
-          path: "invoke",
+          path: "mcp/invoke", // Standard MCP protocol endpoint
           method: "POST",
           body: invocation,
         }
@@ -93,9 +93,19 @@ export async function invokeMcpCommand(
     });
 
     if (!response.ok) {
-      const errorPayload = await response.json().catch(() => undefined);
-      const message = errorPayload?.error || `MCP gateway request failed with status ${response.status}`;
-      throw new Error(message);
+      let errorMessage = `MCP gateway request failed with status ${response.status}`;
+      try {
+        const errorPayload = await response.json();
+        errorMessage = errorPayload?.error || errorPayload?.message || JSON.stringify(errorPayload) || errorMessage;
+        console.error("[MCP Client] Error payload:", errorPayload);
+      } catch {
+        const errorText = await response.text().catch(() => "");
+        if (errorText) {
+          errorMessage = errorText.slice(0, 500);
+          console.error("[MCP Client] Error text:", errorText.slice(0, 500));
+        }
+      }
+      throw new Error(errorMessage);
     }
 
     const data = (await response.json()) as McpInvocationResponse | McpInvocationResult;

@@ -113,10 +113,31 @@ serve(async (req) => {
     });
   }
 
-  const gatewayUrl = server.gateway_url.endsWith("/") ? server.gateway_url : `${server.gateway_url}/`;
-  const relativePath = body.path?.replace(/^\//, "") ?? "invoke";
+  // Normalize gateway URL (ensure it ends with /)
+  let baseUrl = server.gateway_url;
+  if (!baseUrl.endsWith("/")) {
+    baseUrl = `${baseUrl}/`;
+  }
+  
+  // Determine the correct path
+  // If path is provided, use it; otherwise default to "mcp/invoke" for standard MCP servers
+  let relativePath = body.path?.replace(/^\//, "");
+  if (!relativePath) {
+    // Check if gateway_url already contains /mcp/ - if so, just use "invoke"
+    // Otherwise, use "mcp/invoke" for standard MCP protocol servers
+    if (baseUrl.includes("/mcp/")) {
+      relativePath = "invoke";
+    } else {
+      relativePath = "mcp/invoke";
+    }
+  }
+  
   const method = body.method?.toUpperCase() ?? "POST";
-  const targetUrl = new URL(relativePath, gatewayUrl).toString();
+  const targetUrl = new URL(relativePath, baseUrl).toString();
+  
+  console.log("[mcp-proxy] Gateway URL:", baseUrl);
+  console.log("[mcp-proxy] Relative path:", relativePath);
+  console.log("[mcp-proxy] Target URL:", targetUrl);
 
   const downstreamHeaders = new Headers(body.headers ?? {});
   if (!downstreamHeaders.has("Content-Type")) {
@@ -148,22 +169,59 @@ serve(async (req) => {
     }
   }
 
+  // Transform SlashMCP invocation format to MCP protocol format
+  // SlashMCP format: { serverId, command, args, positionalArgs, rawInput }
+  // MCP protocol format: { tool, arguments }
+  let requestBody = body.body;
+  if (requestBody && typeof requestBody === "object" && "command" in requestBody) {
+    const invocation = requestBody as { command?: string; args?: Record<string, string>; positionalArgs?: string[] };
+    if (invocation.command) {
+      // Transform to MCP protocol format
+      requestBody = {
+        tool: invocation.command,
+        arguments: invocation.args || {},
+      };
+      console.log("[mcp-proxy] Transformed SlashMCP format to MCP protocol:", JSON.stringify(requestBody).slice(0, 200));
+    }
+  }
+
   let response: Response;
   try {
+    console.log("[mcp-proxy] Forwarding to:", targetUrl);
+    console.log("[mcp-proxy] Request body:", JSON.stringify(requestBody).slice(0, 500));
+    
     response = await fetch(targetUrl, {
       method,
       headers: downstreamHeaders,
-      body: method === "GET" || method === "HEAD" ? undefined : JSON.stringify(body.body ?? {}),
+      body: method === "GET" || method === "HEAD" ? undefined : JSON.stringify(requestBody ?? {}),
     });
+    
+    console.log("[mcp-proxy] Response status:", response.status);
   } catch (proxyError) {
-    console.error("mcp/proxy fetch error", proxyError);
-    return new Response(JSON.stringify({ error: "Failed to contact gateway" }), {
+    console.error("[mcp-proxy] Fetch error:", proxyError);
+    return new Response(JSON.stringify({ error: "Failed to contact gateway", details: proxyError instanceof Error ? proxyError.message : String(proxyError) }), {
       status: 502,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
   const responseBody = await response.text();
+  
+  // Log error responses for debugging
+  if (!response.ok) {
+    console.error("[mcp-proxy] Error response from server:", response.status);
+    console.error("[mcp-proxy] Error body:", responseBody);
+    
+    // Try to parse error response and include more details
+    try {
+      const errorData = JSON.parse(responseBody);
+      console.error("[mcp-proxy] Parsed error:", JSON.stringify(errorData, null, 2));
+    } catch {
+      // If not JSON, log as text
+      console.error("[mcp-proxy] Error response (text):", responseBody.slice(0, 1000));
+    }
+  }
+  
   return new Response(responseBody, {
     status: response.status,
     headers: {

@@ -205,13 +205,18 @@ export function createMcpProxyTool(mcpGatewayUrl: string, authHeader?: string | 
   return {
     name: "mcp_proxy",
     description:
-      "Executes a registered MCP command via the slashmcp backend. Input must be a string in the format: /<server-id> <command> [param=value...]",
+      "Executes MCP commands to browse websites, search the web, send emails, get stock data, and more. " +
+      "You CAN browse ANY website (Craigslist, eBay, Amazon, etc.) using playwright-wrapper. " +
+      "You CAN send emails using email-mcp. " +
+      "You CAN search websites and extract data. " +
+      "Input format: /<server-id> <command> [param=value...]. " +
+      "Examples: '/playwright-wrapper browser_navigate url=https://craigslist.org', '/email-mcp send_test_email', '/search-mcp web_search query=shuttle bus'",
     parameters: {
       type: "object",
       properties: {
         command: {
           type: "string",
-          description: 'The full MCP command string, e.g., "/alphavantage-mcp get_stock_chart symbol=NVDA"',
+          description: 'The full MCP command string. Examples: "/playwright-wrapper browser_navigate url=https://example.com", "/email-mcp send_test_email", "/search-mcp web_search query=shuttle bus"',
         },
       },
       required: ["command"],

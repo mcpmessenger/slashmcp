@@ -5,7 +5,7 @@ import type { Database } from "../_shared/database.types.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, PATCH, OPTIONS",
 };
 
 type AnalysisTarget = "document-analysis" | "image-ocr" | "image-generation" | "audio-transcription";
@@ -29,6 +29,9 @@ const AWS_SESSION_TOKEN = Deno.env.get("AWS_SESSION_TOKEN");
 const AWS_S3_BUCKET = Deno.env.get("AWS_S3_BUCKET");
 
 const encoder = new TextEncoder();
+const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+type JobStage = typeof JOB_STAGES[number];
+type StageHistoryEntry = { stage: JobStage; at: string };
 
 function toHex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer))
@@ -168,12 +171,57 @@ function validateRequestBody(body: UploadRequestBody): asserts body is Required<
   if (!body.analysisTarget) throw new Error("analysisTarget is required");
 }
 
+function normalizeStageHistory(metadata: Record<string, unknown> | null | undefined): StageHistoryEntry[] {
+  const rawHistory = (metadata as Record<string, unknown> | null | undefined)?.job_stage_history;
+  if (!Array.isArray(rawHistory)) return [];
+  return rawHistory
+    .map((entry) => {
+      if (entry && typeof entry === "object" && "stage" in entry && "at" in entry) {
+        const stage = (entry as Record<string, unknown>).stage;
+        const at = (entry as Record<string, unknown>).at;
+        if (JOB_STAGES.includes(stage as JobStage) && typeof at === "string") {
+          return { stage: stage as JobStage, at };
+        }
+      }
+      return null;
+    })
+    .filter((entry): entry is StageHistoryEntry => Boolean(entry));
+}
+
+function withJobStage(
+  metadata: Record<string, unknown> | null | undefined,
+  stage: JobStage,
+  extra: Record<string, unknown> = {},
+) {
+  const base = { ...(metadata ?? {}) } as Record<string, unknown>;
+  const existingHistory = normalizeStageHistory(base);
+  const lastEntry = existingHistory[existingHistory.length - 1];
+  const timestamp = new Date().toISOString();
+
+  const nextHistory =
+    lastEntry && lastEntry.stage === stage
+      ? existingHistory
+      : [...existingHistory, { stage, at: timestamp }].slice(-25);
+
+  return {
+    ...base,
+    ...extra,
+    job_stage: stage,
+    job_stage_history: nextHistory,
+    job_stage_updated_at: timestamp,
+  };
+}
+
+function isValidStage(stage: unknown): stage is JobStage {
+  return typeof stage === "string" && JOB_STAGES.includes(stage as JobStage);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  if (req.method !== "POST") {
+  if (req.method !== "POST" && req.method !== "PATCH") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -188,6 +236,70 @@ serve(async (req) => {
   }
 
   try {
+    if (req.method === "PATCH") {
+      const body = await req.json();
+      const jobId = body?.jobId;
+      const stage = body?.stage;
+
+      if (typeof jobId !== "string" || !jobId) {
+        return new Response(JSON.stringify({ error: "jobId is required" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      if (!isValidStage(stage)) {
+        return new Response(JSON.stringify({ error: "Invalid stage value" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const { data: job, error: jobError } = await supabase
+        .from("processing_jobs")
+        .select("metadata")
+        .eq("id", jobId)
+        .single();
+
+      if (jobError || !job) {
+        console.error("Failed to load job for stage update", jobError);
+        return new Response(JSON.stringify({ error: "Job not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      const updatedMetadata = withJobStage(job.metadata ?? null, stage);
+      if (stage === "uploaded") {
+        updatedMetadata.uploaded_at = new Date().toISOString();
+      }
+
+      const { error: updateError } = await supabase
+        .from("processing_jobs")
+        .update({ metadata: updatedMetadata })
+        .eq("id", jobId);
+
+      if (updateError) {
+        console.error("Failed to update job stage", updateError);
+        return new Response(JSON.stringify({ error: "Failed to update job stage" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      return new Response(
+        JSON.stringify({
+          jobId,
+          stage,
+          metadata: updatedMetadata,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     const body: UploadRequestBody = await req.json();
     validateRequestBody(body);
 
@@ -211,7 +323,7 @@ serve(async (req) => {
         analysis_target: body.analysisTarget,
         status: "queued",
         storage_path: storagePath,
-        metadata: body.metadata ?? null,
+        metadata: withJobStage(body.metadata ?? null, "registered"),
         user_id: body.userId ?? null,
       })
       .select("id")

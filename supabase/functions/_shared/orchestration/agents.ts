@@ -70,6 +70,15 @@ AVAILABLE MCP COMMANDS:
      Format: /search-mcp web_search query="QUERY" [max_results=N]
      Example: /search-mcp web_search query="Model Context Protocol" max_results=5
 
+9. EMAIL-MCP (Email Sending)
+   - send_test_email: Send a test email to the logged-in user
+     Format: /email-mcp send_test_email [subject="SUBJECT"] [body="BODY"]
+     IMPORTANT: This command automatically uses the logged-in user's email address - you do NOT need to ask for it
+     Defaults: subject="Test Email", body="test" if not specified
+     Example: /email-mcp send_test_email
+     Example: /email-mcp send_test_email subject="Test" body="test"
+     When user says "send a test email" or "send us a test email", automatically use this command with defaults
+
 COMMAND TRANSLATION RULES:
 - "Get stock price for AAPL" → /alphavantage-mcp get_quote symbol=AAPL
 - "Show me Tesla's chart" → /alphavantage-mcp get_stock_chart symbol=TSLA
@@ -79,6 +88,7 @@ COMMAND TRANSLATION RULES:
 - "Create a design with [text]" → /canva-mcp create_design text="TEXT"
 - "Visit [website]" or "Scrape [website]" → /playwright-wrapper browser_navigate url=URL
 - "Take a screenshot of [url]" → /playwright-wrapper browser_take_screenshot url=URL
+- "Send a test email" or "Send us a test email" → /email-mcp send_test_email (automatically uses logged-in user's email)
 `;
 
   const executeCommandHandoff: Handoff = {
@@ -112,7 +122,14 @@ COMMAND TRANSLATION RULES:
       "- If user says 'Search Grokipedia for X' or 'Grokipedia X' → Execute /grokipedia-mcp search query=\"X\"\n" +
       "- If user says 'Search for X' → Prefer Grokipedia: /grokipedia-mcp search query=\"X\"\n" +
       "- If user mentions 'Brockopedia', 'Broccopedia', or any variation → They mean 'Grokipedia', use /grokipedia-mcp search\n" +
-      "- Common misspellings: Brockopedia, Broccopedia, Grokipedia, Grokypedia → All mean Grokipedia\n\n" +
+      "- Common misspellings: Brockopedia, Broccopedia, Grokipedia, Grokypedia → All mean Grokipedia\n" +
+      "- ⚠️ EMAIL COMMAND - HIGHEST PRIORITY:\n" +
+      "  If user says ANY of: 'send me a test email', 'send a test email', 'send us a test email', 'send test email', 'email me', 'send email':\n" +
+      "  → YOU MUST IMMEDIATELY use mcp_proxy tool with command='/email-mcp send_test_email'\n" +
+      "  → DO NOT respond with 'I can't send emails' - YOU CAN via email-mcp server\n" +
+      "  → DO NOT ask questions - just execute the command\n" +
+      "  → The email address is automatically retrieved from the user's session\n" +
+      "  → Example: When user says 'send me a test email', you MUST call mcp_proxy({command: '/email-mcp send_test_email'})\n\n" +
       "LOCATION/BUSINESS QUERIES:\n" +
       "- 'Find [business] in [location]', 'Nearest [business]', 'Where is [business] near [location]' → Execute /google-places-mcp search_places query=\"[business] in [location]\"\n" +
       "- Examples: 'Find Starbucks in Des Moines' → /google-places-mcp search_places query=\"Starbucks in Des Moines\"\n" +
@@ -154,7 +171,19 @@ export function createMcpToolAgent(tools: Tool[]): Agent {
     name: "MCP_Tool_Agent",
     instructions:
       "You are an expert in executing Model Context Protocol (MCP) commands. Your only tool is the `mcp_proxy`. " +
-      "When a user request requires external data or a specific tool, you must formulate the correct MCP command and use the `mcp_proxy` tool.\n\n" +
+      "When a user request requires external data or a specific tool, you MUST formulate the correct MCP command and use the `mcp_proxy` tool.\n\n" +
+      "🚨 CRITICAL: You CAN and MUST perform these actions - DO NOT say 'I can't':\n" +
+      "- ✅ Browse ANY website using playwright-wrapper (Craigslist, eBay, Amazon, etc.)\n" +
+      "- ✅ Search websites and extract data\n" +
+      "- ✅ Send emails using email-mcp\n" +
+      "- ✅ Chain multiple commands together for complex tasks\n\n" +
+      "EXAMPLE: User says 'Find me a shuttle bus on Craigslist and email the results'\n" +
+      "→ Step 1: Use mcp_proxy with command='/playwright-wrapper browser_navigate url=https://craigslist.org'\n" +
+      "→ Step 2: Use mcp_proxy with command='/playwright-wrapper browser_snapshot' to see the page\n" +
+      "→ Step 3: Navigate to search or use browser_click to interact\n" +
+      "→ Step 4: Extract text with browser_extract_text\n" +
+      "→ Step 5: Use mcp_proxy with command='/email-mcp send_test_email body=[extracted results]'\n" +
+      "→ DO NOT say 'I can't' - YOU CAN do this!\n\n" +
       "AVAILABLE MCP SERVERS AND COMMANDS:\n" +
       "1. alphavantage-mcp: get_stock_chart (symbol, interval, range), get_quote (symbol)\n" +
       "2. polymarket-mcp: get_market_price (market_id)\n" +
@@ -165,8 +194,22 @@ export function createMcpToolAgent(tools: Tool[]): Agent {
       "6. playwright-mcp: navigate_and_scrape (url, selector), screenshot (url, selector)\n" +
       "7. playwright-wrapper: browser_navigate (url), browser_snapshot, browser_click (element, ref), browser_extract_text (url), browser_take_screenshot (filename, fullPage)\n" +
       "8. search-mcp: web_search (query, max_results)\n" +
-      "9. google-earth-engine-mcp: search_datasets (query), get_image (dataset, location, start_date, end_date), analyze_vegetation (location, date)\n" +
-      "10. google-places-mcp: get_place_details (place_id, fields), search_places (query, location), autocomplete (input, location)\n" +
+      "9. email-mcp: send_test_email (subject, body) - Send test email to logged-in user\n" +
+      "   ⚠️ CRITICAL EMAIL RULE - READ THIS CAREFULLY:\n" +
+      "   When user says ANY of these phrases:\n" +
+      "   - 'send me a test email'\n" +
+      "   - 'send a test email'\n" +
+      "   - 'send us a test email'\n" +
+      "   - 'send test email'\n" +
+      "   - 'email me'\n" +
+      "   - 'send email'\n" +
+      "   → YOU MUST IMMEDIATELY call mcp_proxy with: '/email-mcp send_test_email'\n" +
+      "   → DO NOT say 'I can't send emails' - YOU CAN via email-mcp\n" +
+      "   → DO NOT ask for email address - it's automatically retrieved\n" +
+      "   → DO NOT ask for subject or body - defaults are provided\n" +
+      "   → JUST EXECUTE THE COMMAND: Use mcp_proxy tool with command='/email-mcp send_test_email'\n" +
+      "10. google-earth-engine-mcp: search_datasets (query), get_image (dataset, location, start_date, end_date), analyze_vegetation (location, date)\n" +
+      "11. google-places-mcp: get_place_details (place_id, fields), search_places (query, location), autocomplete (input, location)\n" +
       "    IMPORTANT: When google-places-mcp returns results, format them in a friendly, conversational way:\n" +
       "    - Present each location with name, address, phone, rating, hours, and map links\n" +
       "    - Use emojis and clear formatting (📍 for address, 📞 for phone, ⭐ for rating, 🗺️ for maps)\n" +
@@ -215,9 +258,18 @@ export function createMcpToolAgent(tools: Tool[]): Agent {
       "- For research, extract text content from pages and analyze it\n" +
       "When researching websites or testing apps, use browser automation to:\n" +
       "1. Navigate to the URL with `browser_navigate url=...`\n" +
-      "2. Get page structure with `browser_snapshot url=...`\n" +
+      "2. Get page structure with `browser_snapshot`\n" +
       "3. Extract text with `browser_extract_text url=...` (if available)\n" +
-      "4. Take screenshots with `browser_take_screenshot url=...` if visual analysis is needed\n" +
+      "4. Take screenshots with `browser_take_screenshot url=...` if visual analysis is needed\n\n" +
+      "MULTI-STEP TASKS - You CAN and MUST chain commands together:\n" +
+      "- When user asks to 'find X on website Y and email results':\n" +
+      "  → IMMEDIATELY start with browser_navigate to the website\n" +
+      "  → Use browser_snapshot to see the page structure\n" +
+      "  → Extract data with browser_extract_text or browser_click to interact\n" +
+      "  → Use email-mcp to send the results\n" +
+      "- You MUST execute multiple MCP commands in sequence - don't stop after one command\n" +
+      "- NEVER say 'I can't browse websites' or 'I can't send emails' - YOU CAN via MCP commands\n" +
+      "- If user asks to search a website, USE BROWSER AUTOMATION - don't just give instructions\n" +
       "\n" +
       "MANDATORY: If a Polymarket market lookup fails with any 'not found' error, you MUST:\n" +
       "1. Immediately use browser automation (playwright-wrapper) to search Polymarket.com\n" +
