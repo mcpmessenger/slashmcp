@@ -42,6 +42,41 @@ export const PROVIDER_OPTIONS: Array<{ value: Provider; label: string }> = Objec
   }),
 );
 
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_PROJECT_REF =
+  SUPABASE_URL?.replace("https://", "")?.split(".supabase.co")?.[0]?.split(".")[0] ?? null;
+const SUPABASE_STORAGE_KEY = SUPABASE_PROJECT_REF ? `sb-${SUPABASE_PROJECT_REF}-auth-token` : null;
+
+const getStoredSupabaseSession = (): Session | null => {
+  if (typeof window === "undefined" || !SUPABASE_STORAGE_KEY) return null;
+  try {
+    const raw = window.localStorage.getItem(SUPABASE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.currentSession ?? parsed?.session ?? null;
+  } catch (error) {
+    console.warn("Unable to parse stored Supabase session", error);
+    return null;
+  }
+};
+
+const hydrateSupabaseSessionFromStorage = async (): Promise<Session | null> => {
+  const stored = getStoredSupabaseSession();
+  if (!stored) return null;
+  try {
+    const { error } = await supabaseClient.auth.setSession({
+      access_token: stored.access_token,
+      refresh_token: stored.refresh_token,
+    });
+    if (error) {
+      console.warn("Failed to apply stored Supabase session", error);
+    }
+  } catch (error) {
+    console.warn("Error while applying stored Supabase session", error);
+  }
+  return stored;
+};
+
 type BaseMessage = {
   role: "user" | "assistant";
   type: "text" | "stock" | "image";
@@ -853,15 +888,7 @@ export function useChat() {
   useEffect(() => {
     let isCancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
-
-    // Set a timeout to prevent infinite loading (5 seconds max)
-    timeoutId = setTimeout(() => {
-      if (!isCancelled) {
-        console.warn("Auth check timeout - setting authReady to true");
-        setAuthReady(true);
-        setSession(null);
-      }
-    }, 5000);
+    let resolved = false;
 
     // Check if Supabase client is properly initialized
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -878,24 +905,66 @@ export function useChat() {
       return;
     }
 
+    const fallbackRestore = async () => {
+      if (isCancelled) return;
+      const restored = await hydrateSupabaseSessionFromStorage();
+      if (restored) {
+        setSession(restored);
+        setAuthReady(true);
+        return true;
+      }
+      return false;
+    };
+
+    // Set a timeout to prevent infinite loading (5 seconds max)
+    timeoutId = setTimeout(() => {
+      if (resolved || isCancelled) return;
+      console.warn("Auth check timeout - attempting local session restore");
+      fallbackRestore().then((restored) => {
+        if (!restored && !isCancelled) {
+          setAuthReady(true);
+          setSession(null);
+        }
+      });
+    }, 5000);
+
     supabaseClient.auth
       .getSession()
-      .then(({ data, error }) => {
+      .then(async ({ data, error }) => {
+        resolved = true;
         if (timeoutId) clearTimeout(timeoutId);
         if (isCancelled) return;
         if (error) {
           console.error("Failed to fetch Supabase session", error);
-          setSession(null);
+          const restored = await hydrateSupabaseSessionFromStorage();
+          if (restored) {
+            setSession(restored);
+          } else {
+            setSession(null);
+          }
+        } else if (data.session) {
+          setSession(data.session);
         } else {
-          setSession(data.session ?? null);
+          const restored = await hydrateSupabaseSessionFromStorage();
+          if (restored) {
+            setSession(restored);
+          } else {
+            setSession(null);
+          }
         }
         setAuthReady(true);
       })
-      .catch(error => {
+      .catch(async error => {
+        resolved = true;
         if (timeoutId) clearTimeout(timeoutId);
         if (!isCancelled) {
           console.error("Supabase getSession error", error);
-          setSession(null);
+          const restored = await hydrateSupabaseSessionFromStorage();
+          if (restored) {
+            setSession(restored);
+          } else {
+            setSession(null);
+          }
           setAuthReady(true);
         }
       });
@@ -1014,10 +1083,7 @@ export function useChat() {
 
     setIsAuthLoading(true);
     try {
-      // TEMP: Force redirect back to whatever origin loaded the app.
-      // This avoids relying on potentially mismatched VITE_SUPABASE_REDIRECT_URL
-      // while we stabilize OAuth in production. Supabase callback URLs remain unchanged.
-      const redirectTo = window.location.origin;
+      const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL || window.location.origin;
       console.log("[OAuth] Redirect URL:", redirectTo);
       console.log("[OAuth] Window origin:", window.location.origin);
       console.log("[OAuth] Env var:", import.meta.env.VITE_SUPABASE_REDIRECT_URL);
