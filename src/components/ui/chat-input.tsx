@@ -129,7 +129,83 @@ const SLASH_COMMANDS: SlashCommand[] = [
   {
     value: "/key stale",
     label: "/key stale",
-    description: "Find keys that haven’t been used recently.",
+    description: "Find keys that haven't been used recently.",
+  },
+  // MCP Server Commands
+  {
+    value: "/alphavantage-mcp get_quote",
+    label: "/alphavantage-mcp get_quote",
+    description: "Get stock quote (e.g., symbol=NVDA)",
+  },
+  {
+    value: "/alphavantage-mcp get_stock_chart",
+    label: "/alphavantage-mcp get_stock_chart",
+    description: "Get stock chart (e.g., symbol=TSLA interval=1wk)",
+  },
+  {
+    value: "/polymarket-mcp get_market_price",
+    label: "/polymarket-mcp get_market_price",
+    description: "Get prediction market odds (e.g., market_id=us_election_2024)",
+  },
+  {
+    value: "/grokipedia-mcp search",
+    label: "/grokipedia-mcp search",
+    description: "Search Grokipedia knowledge base (e.g., query=\"Model Context Protocol\")",
+  },
+  {
+    value: "/canva-mcp create_design",
+    label: "/canva-mcp create_design",
+    description: "Create Canva design (e.g., template=presentation text=\"Hello\")",
+  },
+  {
+    value: "/gemini-mcp generate_text",
+    label: "/gemini-mcp generate_text",
+    description: "Generate text with Gemini (e.g., prompt=\"Write a story\")",
+  },
+  {
+    value: "/playwright-wrapper browser_navigate",
+    label: "/playwright-wrapper browser_navigate",
+    description: "Navigate to URL (e.g., url=https://example.com)",
+  },
+  {
+    value: "/playwright-wrapper browser_snapshot",
+    label: "/playwright-wrapper browser_snapshot",
+    description: "Get page accessibility snapshot",
+  },
+  {
+    value: "/playwright-wrapper browser_extract_text",
+    label: "/playwright-wrapper browser_extract_text",
+    description: "Extract text from page (e.g., url=https://example.com)",
+  },
+  {
+    value: "/search-mcp web_search",
+    label: "/search-mcp web_search",
+    description: "Search the web (e.g., query=\"Model Context Protocol\")",
+  },
+  {
+    value: "/email-mcp send_test_email",
+    label: "/email-mcp send_test_email",
+    description: "Send test email to logged-in user",
+  },
+  {
+    value: "/google-places-mcp search_places",
+    label: "/google-places-mcp search_places",
+    description: "Search for places (e.g., query=\"Starbucks in Des Moines\")",
+  },
+  {
+    value: "/google-places-mcp get_place_details",
+    label: "/google-places-mcp get_place_details",
+    description: "Get place details (e.g., place_id=ChIJ...)",
+  },
+  {
+    value: "/google-earth-engine-mcp search_datasets",
+    label: "/google-earth-engine-mcp search_datasets",
+    description: "Search Earth Engine datasets (e.g., query=\"landcover\")",
+  },
+  {
+    value: "/langchain-agent agent_executor",
+    label: "/langchain-agent agent_executor",
+    description: "Execute LangChain agent (e.g., query=\"What is 2+2?\" [system_instruction=\"...\"])",
   },
 ];
 
@@ -143,6 +219,7 @@ interface ChatInputProps {
   voicePlaybackEnabled?: boolean;
   onToggleVoicePlayback?: () => void;
   isSpeaking?: boolean;
+  onJobsChange?: (jobs: UploadJob[], isRegistering: boolean) => void;
 }
 
 interface OptionTagProps {
@@ -210,6 +287,7 @@ export function ChatInput({
   voicePlaybackEnabled = false,
   onToggleVoicePlayback,
   isSpeaking = false,
+  onJobsChange,
 }: ChatInputProps) {
   const { toast } = useToast();
   const [value, setValue] = useState("");
@@ -233,12 +311,23 @@ export function ChatInput({
   const cancelTranscriptionRef = useRef(false);
   const updateJob = useCallback(
     (jobId: string, updates: Partial<UploadJob>) => {
-      setJobs((prev) =>
-        prev.map((job) => (job.id === jobId ? { ...job, ...updates } : job)),
-      );
+      setJobs((prev) => {
+        const updated = prev.map((job) => (job.id === jobId ? { ...job, ...updates } : job));
+        if (onJobsChange) {
+          onJobsChange(updated, isRegisteringUpload);
+        }
+        return updated;
+      });
     },
-    [],
+    [onJobsChange, isRegisteringUpload],
   );
+
+  // Notify parent when jobs or registration state changes
+  useEffect(() => {
+    if (onJobsChange) {
+      onJobsChange(jobs, isRegisteringUpload);
+    }
+  }, [jobs, isRegisteringUpload, onJobsChange]);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -754,16 +843,20 @@ export function ChatInput({
           metadata: { source: "chat-input" },
         });
 
-        setJobs(prev => [
-          ...prev,
-          {
-            id: response.jobId,
-            fileName: file.name,
-            status: response.uploadUrl ? "uploading" : "queued",
-            message: response.message ?? null,
-            error: null,
-          },
-        ]);
+        const newJob: UploadJob = {
+          id: response.jobId,
+          fileName: file.name,
+          status: response.uploadUrl ? "uploading" : "queued",
+          message: response.message ?? null,
+          error: null,
+        };
+        setJobs((prev) => {
+          const updated = [...prev, newJob];
+          if (onJobsChange) {
+            onJobsChange(updated, true);
+          }
+          return updated;
+        });
 
         if (!response.uploadUrl) {
           toast({
@@ -821,9 +914,14 @@ export function ChatInput({
               const normalizedStatus =
                 jobStatus === "failed" && visionSucceeded ? "completed" : jobStatus;
 
+              // Preserve vision data when updating with OCR results
+              const currentJob = jobs.find(j => j.id === response.jobId);
               updateJob(response.jobId, {
                 status: normalizedStatus,
                 resultText: statusResponse.result?.ocr_text ?? null,
+                visionSummary: statusResponse.result?.vision_summary ?? currentJob?.visionSummary ?? null,
+                visionMetadata: statusResponse.result?.vision_metadata ?? currentJob?.visionMetadata ?? null,
+                visionProvider: (statusResponse.result?.vision_provider as "gpt4o" | "gemini" | null) ?? currentJob?.visionProvider ?? null,
                 updatedAt: statusResponse.job.updated_at,
               });
 
@@ -858,7 +956,15 @@ export function ChatInput({
               title: "Vision analysis ready",
               description: `${file.name} analyzed with ${visionProviderUsed ?? "vision model"}.`,
             });
-            updateJob(response.jobId, { status: "completed", error: null });
+            // Preserve vision data when marking as completed
+            const currentJob = jobs.find(j => j.id === response.jobId);
+            updateJob(response.jobId, { 
+              status: "completed", 
+              error: null,
+              visionSummary: currentJob?.visionSummary ?? null,
+              visionMetadata: currentJob?.visionMetadata ?? null,
+              visionProvider: currentJob?.visionProvider ?? null,
+            });
           } else if (ocrSucceeded) {
             toast({
               title: "Text extracted",
@@ -937,12 +1043,12 @@ export function ChatInput({
         className
       )}
     >
-      <div className="relative flex flex-col w-full min-h-full bg-gradient-glass backdrop-blur-xl shadow-glow-ice rounded-2xl p-2 border border-glass-border/30 group hover:border-glass-border/50 hover:shadow-xl transition-all duration-300">
+      <div className="relative flex flex-col w-full min-h-full bg-gradient-glass backdrop-blur-xl shadow-glow-ice rounded-2xl border border-glass-border/30 group hover:border-glass-border/50 hover:shadow-xl transition-all duration-300">
         {/* Frost overlay */}
         <div className="absolute inset-0 bg-gradient-frost rounded-2xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         
         {/* Input row */}
-        <div className="flex items-center relative z-10">
+        <div className="flex items-center relative z-10 p-2">
           {/* Plus button */}
           <div className="relative" ref={menuRef}>
             <button
@@ -1092,84 +1198,6 @@ export function ChatInput({
           </div>
         )}
 
-        {jobs.length > 0 && (
-          <div className="mt-3 pl-3 pr-3 pb-1 z-10 relative space-y-2">
-            {jobs.map(job => (
-              <div
-                key={job.id}
-                className="rounded-lg border border-border/40 bg-muted/40 px-3 py-3 text-xs text-foreground/80"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex flex-col gap-1">
-                    <span className="font-medium text-sm">{job.fileName}</span>
-                    {job.message && <span className="text-foreground/60">{job.message}</span>}
-                    {job.updatedAt && (
-                      <span className="text-foreground/50">
-                        Updated {new Date(job.updatedAt).toLocaleTimeString()}
-                      </span>
-                    )}
-                    {job.error && <span className="text-destructive">{job.error}</span>}
-                  </div>
-                  <span
-                    className={cn(
-                      "rounded-full px-2 py-0.5 text-[0.7rem] font-medium uppercase tracking-wide shrink-0",
-                      job.status === "completed" && "bg-emerald-500/20 text-emerald-500",
-                      job.status === "processing" && "bg-amber-500/20 text-amber-500",
-                      job.status === "failed" && "bg-destructive/20 text-destructive",
-                      job.status === "queued" && "bg-primary/10 text-primary",
-                      job.status === "uploading" && "bg-sky-500/20 text-sky-500",
-                    )}
-                  >
-                    {job.status}
-                  </span>
-                </div>
-                {job.resultText && (
-                  <div className="mt-3 rounded-md bg-background/80 p-3 text-foreground/90 shadow-inner">
-                    <p className="font-medium mb-1 text-foreground/80">Extracted Text</p>
-                    <pre className="whitespace-pre-wrap break-words text-xs text-foreground/70">
-                      {job.resultText}
-                    </pre>
-                  </div>
-                )}
-                {job.visionSummary && (
-                  <div className="mt-3 rounded-md bg-background/80 p-3 text-foreground/90 shadow-inner space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="font-medium text-foreground/80">Visual Summary</p>
-                      {job.visionProvider && (
-                        <span className="text-[0.65rem] uppercase tracking-wide bg-primary/10 text-primary px-2 py-0.5 rounded-full">
-                          {job.visionProvider}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-sm text-foreground/75 whitespace-pre-wrap leading-relaxed">
-                      {job.visionSummary}
-                    </p>
-                    {job.visionMetadata &&
-                      Array.isArray(job.visionMetadata["bullet_points"]) &&
-                      (job.visionMetadata["bullet_points"] as string[]).length > 0 && (
-                        <ul className="list-disc ml-4 space-y-1 text-xs text-foreground/70">
-                          {(job.visionMetadata["bullet_points"] as string[]).map((point, idx) => (
-                            <li key={idx}>{point}</li>
-                          ))}
-                        </ul>
-                      )}
-                    {job.visionMetadata && job.visionMetadata["chart_analysis"] && (
-                      <div className="text-xs text-foreground/60">
-                        <span className="font-medium text-foreground/70">Chart analysis:</span>{" "}
-                        {job.visionMetadata["chart_analysis"]}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-            {isRegisteringUpload && (
-              <div className="rounded-lg border border-dashed border-border/40 bg-muted/20 px-3 py-2 text-xs text-foreground/60">
-                Registering upload...
-              </div>
-            )}
-          </div>
-        )}
       </div>
     </form>
   );
