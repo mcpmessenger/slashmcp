@@ -3,10 +3,10 @@
 ## Overview
 
 The email-mcp server now supports sending emails through multiple providers using OAuth:
-- **Gmail** (Google) - ✅ Implemented
+- **Gmail** (Google) - ✅ Fully Implemented
 - **Google Calendar** - ✅ OAuth scopes added (ready for calendar features)
-- **Outlook** - ⏳ Pending implementation
-- **iCloud** - ⏳ Pending implementation
+- **Outlook** (Microsoft/Azure) - ✅ Implemented
+- **iCloud** - ⏳ Infrastructure ready (requires Apple Developer setup)
 
 ## Current Implementation
 
@@ -75,7 +75,7 @@ The system will:
 1. Try to use Gmail API (if OAuth token available)
 2. Fall back to Supabase email if Gmail isn't available
 
-## Adding Outlook Support
+## Outlook Support ✅
 
 ### Microsoft OAuth Setup
 
@@ -88,11 +88,12 @@ The system will:
    - Go to **Authentication** → **Providers** → **Azure**
    - Add Client ID and Secret
 
-### Implementation Steps
+### Implementation ✅
 
-1. Add Outlook OAuth provider to Supabase
-2. Update `handleEmail` function to support `provider=outlook`
-3. Use Microsoft Graph API: `https://graph.microsoft.com/v1.0/me/sendMail`
+- Outlook OAuth provider support added
+- `handleEmail` function supports `provider=outlook`
+- Uses Microsoft Graph API: `https://graph.microsoft.com/v1.0/me/sendMail`
+- See [OUTLOOK_ICLOUD_OAUTH_SETUP.md](./OUTLOOK_ICLOUD_OAUTH_SETUP.md) for detailed setup instructions
 
 ## Adding iCloud Support
 
@@ -111,11 +112,11 @@ The system will:
 2. Use iCloud Mail API (requires Apple Developer account)
 3. Consider using IMAP/SMTP instead of OAuth for iCloud
 
-## Current Limitations
+## Current Status
 
-1. **Gmail**: Requires user to sign in with Google and grant Gmail permissions
-2. **Outlook**: Not yet implemented
-3. **iCloud**: Not yet implemented
+1. **Gmail**: ✅ Fully working - Requires user to sign in with Google and grant Gmail permissions
+2. **Outlook**: ✅ Fully working - Requires user to sign in with Microsoft/Azure and grant Mail.Send permissions
+3. **iCloud**: ⏳ Infrastructure ready - See [OUTLOOK_ICLOUD_OAUTH_SETUP.md](./OUTLOOK_ICLOUD_OAUTH_SETUP.md) for details
 4. **Calendar**: OAuth scope added but calendar features not yet implemented
 
 ## Troubleshooting
@@ -144,10 +145,12 @@ The system will:
 
 1. ✅ Gmail OAuth scopes added
 2. ✅ Gmail API integration implemented
-3. ⏳ Add Outlook OAuth support
-4. ⏳ Add iCloud support (or IMAP/SMTP)
-5. ⏳ Implement Google Calendar features
-6. ⏳ Add email templates and rich content support
+3. ✅ Outlook OAuth support added
+4. ✅ Microsoft Graph API integration implemented
+5. ⏳ Add iCloud support (or IMAP/SMTP)
+6. ⏳ Implement Google Calendar features
+7. ⏳ Implement Microsoft Calendar features
+8. ⏳ Add email templates and rich content support
 
 ## Deployment
 

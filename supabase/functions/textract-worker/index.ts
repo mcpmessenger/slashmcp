@@ -22,6 +22,48 @@ const AWS_SESSION_TOKEN = Deno.env.get("AWS_SESSION_TOKEN");
 const AWS_S3_BUCKET = Deno.env.get("AWS_S3_BUCKET");
 
 const encoder = new TextEncoder();
+const JOB_STAGES = ["registered", "uploaded", "processing", "extracted", "injected", "failed"] as const;
+type JobStage = typeof JOB_STAGES[number];
+type StageHistoryEntry = { stage: JobStage; at: string };
+
+function parseStageHistory(metadata?: Record<string, unknown> | null): StageHistoryEntry[] {
+  if (!metadata) return [];
+  const raw = (metadata as Record<string, unknown>).job_stage_history;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      if (entry && typeof entry === "object" && "stage" in entry && "at" in entry) {
+        const stage = (entry as Record<string, unknown>).stage;
+        const at = (entry as Record<string, unknown>).at;
+        if (JOB_STAGES.includes(stage as JobStage) && typeof at === "string") {
+          return { stage: stage as JobStage, at };
+        }
+      }
+      return null;
+    })
+    .filter((entry): entry is StageHistoryEntry => Boolean(entry));
+}
+
+function withJobStage(
+  metadata: Record<string, unknown> | null | undefined,
+  stage: JobStage,
+  extra: Record<string, unknown> = {},
+) {
+  const base = { ...(metadata ?? {}) } as Record<string, unknown>;
+  const history = parseStageHistory(base);
+  const lastEntry = history[history.length - 1];
+  const timestamp = new Date().toISOString();
+  const nextHistory =
+    lastEntry && lastEntry.stage === stage ? history : [...history, { stage, at: timestamp }].slice(-25);
+
+  return {
+    ...base,
+    ...extra,
+    job_stage: stage,
+    job_stage_history: nextHistory,
+    job_stage_updated_at: timestamp,
+  };
+}
 
 function toHex(buffer: ArrayBuffer): string {
   return Array.from(new Uint8Array(buffer))
@@ -179,11 +221,15 @@ const supabase = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
     })
   : null;
 
-async function markJobFailed(jobId: string, reason: string) {
+async function markJobFailed(jobId: string, reason: string, metadata?: Record<string, unknown> | null) {
   if (!supabase) return;
+  const nextMetadata = withJobStage(metadata, "failed", {
+    error: reason,
+    failed_at: new Date().toISOString(),
+  });
   await supabase
     .from("processing_jobs")
-    .update({ status: "failed", metadata: { error: reason } })
+    .update({ status: "failed", metadata: nextMetadata })
     .eq("id", jobId);
 }
 
@@ -207,6 +253,7 @@ serve(async (req) => {
   }
 
   let currentJobId: string | undefined;
+  let currentJobMetadata: Record<string, unknown> | null = null;
 
   try {
     const payload: WorkerPayload = await req.json();
@@ -233,6 +280,9 @@ serve(async (req) => {
       });
     }
 
+    let jobMetadata = (job.metadata as Record<string, unknown> | null) ?? null;
+    currentJobMetadata = jobMetadata;
+
     if (job.status !== "queued") {
       return new Response(JSON.stringify({ message: "Job already processed" }), {
         status: 200,
@@ -240,9 +290,10 @@ serve(async (req) => {
       });
     }
 
+    jobMetadata = withJobStage(jobMetadata, "processing");
     await supabase
       .from("processing_jobs")
-      .update({ status: "processing" })
+      .update({ status: "processing", metadata: jobMetadata })
       .eq("id", job.id);
 
     // Allow CSV files for document-analysis even though they don't use Textract
@@ -252,7 +303,7 @@ serve(async (req) => {
                   job.file_name?.toLowerCase().endsWith(".tsv");
     
     if (!isCsv && job.analysis_target !== "document-analysis" && job.analysis_target !== "image-ocr") {
-      await markJobFailed(job.id, `Unsupported analysis_target: ${job.analysis_target}`);
+      await markJobFailed(job.id, `Unsupported analysis_target: ${job.analysis_target}`, jobMetadata);
       return new Response(JSON.stringify({ error: "Unsupported analysis target" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -260,7 +311,7 @@ serve(async (req) => {
     }
 
     if (!job.storage_path) {
-      await markJobFailed(job.id, "storage_path is not set");
+      await markJobFailed(job.id, "storage_path is not set", jobMetadata);
       return new Response(JSON.stringify({ error: "Job missing storage path" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -306,7 +357,7 @@ serve(async (req) => {
         rawResponse = { type: "csv", size: extractedText.length };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to read CSV file";
-        await markJobFailed(job.id, message);
+        await markJobFailed(job.id, message, jobMetadata);
         return new Response(JSON.stringify({ error: message }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -324,7 +375,7 @@ serve(async (req) => {
 
       const jobId = startResponse.JobId;
       if (!jobId) {
-        await markJobFailed(job.id, "Textract did not return a JobId");
+        await markJobFailed(job.id, "Textract did not return a JobId", jobMetadata);
         return new Response(JSON.stringify({ error: "Textract job initiation failed" }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -359,7 +410,7 @@ serve(async (req) => {
           }
         } else if (jobStatus === "FAILED") {
           const reason = detectionResponse.StatusMessage ?? "Textract reported failure";
-          await markJobFailed(job.id, reason);
+          await markJobFailed(job.id, reason, jobMetadata);
           return new Response(JSON.stringify({ error: reason }), {
             status: 500,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -368,7 +419,7 @@ serve(async (req) => {
       }
 
       if (!lines.length) {
-        await markJobFailed(job.id, "No text extracted from document");
+        await markJobFailed(job.id, "No text extracted from document", jobMetadata);
         return new Response(JSON.stringify({ error: "No text extracted" }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -396,7 +447,7 @@ serve(async (req) => {
       });
 
       if (!lines.length) {
-        await markJobFailed(job.id, "No text detected in image");
+        await markJobFailed(job.id, "No text detected in image", jobMetadata);
         return new Response(JSON.stringify({ error: "No text detected" }), {
           status: 500,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -413,7 +464,7 @@ serve(async (req) => {
     });
 
     if (resultError) {
-      await markJobFailed(job.id, "Failed to persist analysis result");
+      await markJobFailed(job.id, "Failed to persist analysis result", jobMetadata);
       console.error("Failed to insert analysis result", resultError);
       return new Response(JSON.stringify({ error: "Failed to persist result" }), {
         status: 500,
@@ -421,9 +472,14 @@ serve(async (req) => {
       });
     }
 
+    jobMetadata = withJobStage(jobMetadata, "extracted", {
+      extracted_at: new Date().toISOString(),
+      content_length: extractedText.length,
+    });
+
     await supabase
       .from("processing_jobs")
-      .update({ status: "completed" })
+      .update({ status: "completed", metadata: jobMetadata })
       .eq("id", job.id);
 
     return new Response(JSON.stringify({ status: "completed", jobId: job.id }), {
@@ -434,7 +490,7 @@ serve(async (req) => {
     console.error("textract-worker error", error);
     if (supabase && currentJobId) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      await markJobFailed(currentJobId, message);
+      await markJobFailed(currentJobId, message, currentJobMetadata);
     }
     return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
       status: 500,

@@ -1163,51 +1163,14 @@ export function useChat() {
     [appendAssistantText],
   );
 
-  const sendMessage = useCallback(async (input: string, documentContext?: Array<{
+  type DocumentContextReference = {
+    jobId: string;
     fileName: string;
-    text?: string;
-    visionSummary?: string;
-    visionMetadata?: Record<string, unknown>;
-  }>) => {
-    // Build enhanced message with document context if available
-    let enhancedContent = input;
-    
-    if (documentContext && documentContext.length > 0) {
-      const contextParts: string[] = [];
-      contextParts.push(`The user has uploaded ${documentContext.length} document(s) that are available for analysis.`);
-      
-      for (const doc of documentContext) {
-        const docParts: string[] = [];
-        docParts.push(`📄 Document: "${doc.fileName}"`);
-        
-        if (doc.text) {
-          // Limit text to 10000 chars to avoid token limits, but keep it substantial
-          const textPreview = doc.text.length > 10000 
-            ? doc.text.slice(0, 10000) + `\n\n[... ${doc.text.length - 10000} more characters ...]`
-            : doc.text;
-          docParts.push(`\n📝 Extracted Text:\n${textPreview}`);
-        }
-        
-        if (doc.visionSummary) {
-          docParts.push(`\n👁️ Visual Summary:\n${doc.visionSummary}`);
-        }
-        
-        if (doc.visionMetadata) {
-          if (Array.isArray(doc.visionMetadata["bullet_points"]) && doc.visionMetadata["bullet_points"].length > 0) {
-            docParts.push(`\n🔑 Key Points:\n${(doc.visionMetadata["bullet_points"] as string[]).map(p => `- ${p}`).join('\n')}`);
-          }
-          if (doc.visionMetadata["chart_analysis"]) {
-            docParts.push(`\n📊 Chart Analysis: ${doc.visionMetadata["chart_analysis"]}`);
-          }
-        }
-        
-        contextParts.push(docParts.join('\n'));
-      }
-      
-      enhancedContent = `[AVAILABLE DOCUMENT CONTEXT]\n${contextParts.join('\n\n---\n\n')}\n\n[USER QUERY]\n${input}\n\nPlease analyze the uploaded documents and answer the user's question based on the document content provided above.`;
-    }
-    
-    const userMsg: Message = { role: "user", type: "text", content: enhancedContent };
+    textLength?: number;
+  };
+
+  const sendMessage = useCallback(async (input: string, documentContext?: DocumentContextReference[]) => {
+    const userMsg: Message = { role: "user", type: "text", content: input };
     setMessages(prev => [...prev, userMsg]);
 
     const trimmedInput = input.trim();
@@ -1890,6 +1853,17 @@ export function useChat() {
     try {
       const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
       const history = [...messages, userMsg].map(({ role, content }) => ({ role, content }));
+      const documentContextPayload =
+        documentContext && documentContext.length > 0
+          ? documentContext.map((doc) => ({
+              jobId: doc.jobId,
+              fileName: doc.fileName,
+              textLength: doc.textLength ?? 0,
+            }))
+          : [];
+      if (documentContextPayload.length > 0) {
+        console.log("[useChat] Including document context payload:", documentContextPayload);
+      }
       
       // Get session token for authentication
       const {
@@ -1907,10 +1881,18 @@ export function useChat() {
         headers.Authorization = `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`;
       }
       
+      const payload: Record<string, unknown> = {
+        messages: history,
+        provider,
+      };
+      if (documentContextPayload.length > 0) {
+        payload.documentContext = documentContextPayload;
+      }
+
       const response = await fetch(CHAT_URL, {
         method: "POST",
         headers,
-        body: JSON.stringify({ messages: history, provider }),
+        body: JSON.stringify(payload),
       });
 
       if (!response.ok || !response.body) {

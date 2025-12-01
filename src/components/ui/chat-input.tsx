@@ -6,33 +6,21 @@ import {
   triggerTextractJob,
   triggerVisionJob,
   fetchJobStatus,
+  updateJobStage,
   type AnalysisTarget,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { transcribeAudio } from "@/lib/voice";
 import type { McpRegistryEntry } from "@/lib/mcp/types";
 import { MCP_PROVIDER_PRESETS } from "@/lib/mcp/presets";
+import type { UploadJob, JobStatus, StageHistoryEntry } from "@/types/uploads";
+import { parseStageMetadata } from "@/types/uploads";
 
 type MenuOption =
   | "Upload Files"
   | "Document Analysis"
   | "Image OCR"
   | "Voice Assistant";
-
-type JobStatus = "uploading" | "queued" | "processing" | "completed" | "failed";
-
-interface UploadJob {
-  id: string;
-  fileName: string;
-  status: JobStatus;
-  message?: string | null;
-  error?: string | null;
-  resultText?: string | null;
-  updatedAt?: string;
-  visionSummary?: string | null;
-  visionProvider?: "gpt4o" | "gemini" | null;
-  visionMetadata?: Record<string, unknown> | null;
-}
 
 type SlashCommand = {
   value: string;
@@ -310,9 +298,13 @@ export function ChatInput({
   const audioChunksRef = useRef<Blob[]>([]);
   const cancelTranscriptionRef = useRef(false);
   const updateJob = useCallback(
-    (jobId: string, updates: Partial<UploadJob>) => {
+    (jobId: string, updates: Partial<UploadJob> | ((job: UploadJob) => Partial<UploadJob>)) => {
       setJobs((prev) => {
-        const updated = prev.map((job) => (job.id === jobId ? { ...job, ...updates } : job));
+        const updated = prev.map((job) => {
+          if (job.id !== jobId) return job;
+          const patch = typeof updates === "function" ? updates(job) : updates;
+          return { ...job, ...patch };
+        });
         if (onJobsChange) {
           onJobsChange(updated, isRegisteringUpload);
         }
@@ -822,11 +814,13 @@ export function ChatInput({
       await triggerVisionJob({ jobId, provider: visionProvider });
       const statusResponse = await fetchJobStatus(jobId);
       const providerUsed = statusResponse.result?.vision_provider as "gpt4o" | "gemini" | null;
+      const stageMetadata = parseStageMetadata(statusResponse.job.metadata);
       updateJob(jobId, {
         visionSummary: statusResponse.result?.vision_summary ?? null,
         visionMetadata: statusResponse.result?.vision_metadata ?? null,
         visionProvider: providerUsed,
         updatedAt: statusResponse.job.updated_at,
+        ...stageMetadata,
       });
       return providerUsed;
     },
@@ -851,12 +845,15 @@ export function ChatInput({
           metadata: { source: "chat-input" },
         });
 
+        const registeredAt = new Date().toISOString();
         const newJob: UploadJob = {
           id: response.jobId,
           fileName: file.name,
           status: response.uploadUrl ? "uploading" : "queued",
           message: response.message ?? null,
           error: null,
+          stage: "registered",
+          stageHistory: [{ stage: "registered", at: registeredAt } as StageHistoryEntry],
         };
         setJobs((prev) => {
           const updated = [...prev, newJob];
@@ -885,6 +882,19 @@ export function ChatInput({
           if (!uploadResp.ok) {
             updateJob(response.jobId, { status: "failed", error: "Failed to upload to storage" });
             throw new Error("Upload to storage failed");
+          }
+
+          try {
+            await updateJobStage(response.jobId, "uploaded");
+            updateJob(response.jobId, (job) => ({
+              stage: "uploaded",
+              stageHistory: [
+                ...(job.stageHistory ?? []),
+                { stage: "uploaded", at: new Date().toISOString() } as StageHistoryEntry,
+              ],
+            }));
+          } catch (stageError) {
+            console.warn("Failed to set job stage to uploaded", stageError);
           }
 
           updateJob(response.jobId, { status: "processing", error: null });
@@ -922,16 +932,17 @@ export function ChatInput({
               const normalizedStatus =
                 jobStatus === "failed" && visionSucceeded ? "completed" : jobStatus;
 
+              const stageMetadata = parseStageMetadata(statusResponse.job.metadata);
               // Preserve vision data when updating with OCR results
-              const currentJob = jobs.find(j => j.id === response.jobId);
-              updateJob(response.jobId, {
+              updateJob(response.jobId, (currentJob) => ({
                 status: normalizedStatus,
                 resultText: statusResponse.result?.ocr_text ?? null,
                 visionSummary: statusResponse.result?.vision_summary ?? currentJob?.visionSummary ?? null,
                 visionMetadata: statusResponse.result?.vision_metadata ?? currentJob?.visionMetadata ?? null,
                 visionProvider: (statusResponse.result?.vision_provider as "gpt4o" | "gemini" | null) ?? currentJob?.visionProvider ?? null,
                 updatedAt: statusResponse.job.updated_at,
-              });
+                ...stageMetadata,
+              }));
 
               if (!statusResponse.result?.ocr_text) {
                 updateJob(response.jobId, {
@@ -965,14 +976,13 @@ export function ChatInput({
               description: `${file.name} analyzed with ${visionProviderUsed ?? "vision model"}.`,
             });
             // Preserve vision data when marking as completed
-            const currentJob = jobs.find(j => j.id === response.jobId);
-            updateJob(response.jobId, { 
-              status: "completed", 
+            updateJob(response.jobId, (currentJob) => ({
+              status: "completed",
               error: null,
               visionSummary: currentJob?.visionSummary ?? null,
               visionMetadata: currentJob?.visionMetadata ?? null,
               visionProvider: currentJob?.visionProvider ?? null,
-            });
+            }));
           } else if (ocrSucceeded) {
             toast({
               title: "Text extracted",

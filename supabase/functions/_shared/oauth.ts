@@ -34,7 +34,54 @@ export async function getUserOAuthToken(
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
-    // Get user's identity data
+    // Try querying auth.identities table directly via SQL
+    // Supabase stores tokens in the encrypted identity_data JSONB column
+    // We need to query it directly to access the tokens
+    try {
+      const { data: identityRows, error: sqlError } = await supabase.rpc('get_oauth_token', {
+        p_user_id: userId,
+        p_provider: provider,
+      }).catch(() => ({ data: null, error: { message: 'RPC function not available' } }));
+
+      if (!sqlError && identityRows) {
+        console.log(`Found OAuth token via RPC for ${provider}`);
+        return identityRows as OAuthProviderToken;
+      }
+    } catch (rpcError) {
+      console.log(`RPC method not available, trying direct query`);
+    }
+
+    // Fallback: Query auth.identities table directly using SQL
+    try {
+      // Use PostgREST to query auth schema (requires service role key)
+      const { data: identities, error: queryError } = await supabase
+        .from('auth.identities')
+        .select('identity_data, provider')
+        .eq('user_id', userId)
+        .eq('provider', provider)
+        .single();
+
+      if (!queryError && identities) {
+        const identityData = identities.identity_data as Record<string, unknown> | undefined;
+        const accessToken = identityData?.access_token as string | undefined;
+        const refreshToken = identityData?.refresh_token as string | undefined;
+        const expiresAt = identityData?.expires_at as number | undefined;
+
+        if (accessToken) {
+          console.log(`Found OAuth token via direct SQL query for ${provider}`);
+          return {
+            provider,
+            accessToken,
+            refreshToken,
+            expiresAt,
+          };
+        }
+      }
+    } catch (sqlError) {
+      console.log(`Direct SQL query failed, trying admin API`);
+    }
+
+    // Fallback to admin API method
     const { data: { user }, error: userError } = await supabase.auth.admin.getUserById(userId);
     
     if (userError || !user) {
@@ -59,7 +106,20 @@ export async function getUserOAuthToken(
 
     // Extract tokens from identity_data
     const identityData = identity.identity_data as Record<string, unknown> | undefined;
+    
+    // Log what we found for debugging
+    console.log(`OAuth token lookup for ${provider}:`, {
+      userId,
+      hasIdentity: !!identity,
+      hasIdentityData: !!identityData,
+      identityDataKeys: identityData ? Object.keys(identityData) : [],
+      // Don't log actual tokens, but log if they exist
+      hasAccessToken: identityData ? !!identityData.access_token : false,
+      hasRefreshToken: identityData ? !!identityData.refresh_token : false,
+    });
+    
     if (!identityData) {
+      console.log(`No identity_data found for ${provider} identity`);
       return null;
     }
 
@@ -70,14 +130,43 @@ export async function getUserOAuthToken(
     const expiresAt = identityData.expires_at as number | undefined;
 
     if (!accessToken) {
-      // Some providers store tokens differently - check alternative locations
-      // For Google, tokens might be in app_metadata
+      console.log(`No access_token in identity_data for ${provider}, checking app_metadata`);
+      
+      // Check app_metadata for stored OAuth tokens (from our custom storage function)
       const appMetadata = user.app_metadata as Record<string, unknown> | undefined;
+      console.log(`app_metadata check:`, {
+        hasAppMetadata: !!appMetadata,
+        appMetadataKeys: appMetadata ? Object.keys(appMetadata) : [],
+      });
+      
+      // Check our custom oauth_tokens storage
+      const oauthTokens = appMetadata?.oauth_tokens as Record<string, {
+        access_token?: string;
+        refresh_token?: string;
+        expires_at?: string;
+      }> | undefined;
+      
+      // Support both "google" and "azure" provider names
+      const providerKey = provider === "microsoft" || provider === "outlook" ? "azure" : provider;
+      
+      if (oauthTokens?.[providerKey]?.access_token || oauthTokens?.[provider]?.access_token) {
+        const tokenData = oauthTokens[providerKey] || oauthTokens[provider];
+        console.log(`Found token in app_metadata.oauth_tokens.${providerKey || provider}`);
+        return {
+          provider,
+          accessToken: tokenData.access_token!,
+          refreshToken: tokenData.refresh_token,
+          expiresAt: tokenData.expires_at ? parseInt(tokenData.expires_at) : undefined,
+        };
+      }
+      
+      // Legacy check for old format
       if (appMetadata?.provider === provider) {
         const providerData = appMetadata.providers as Record<string, unknown> | undefined;
         const googleData = providerData?.[provider] as { access_token?: string; refresh_token?: string } | undefined;
         
         if (googleData?.access_token) {
+          console.log(`Found token in app_metadata.providers.${provider}`);
           return {
             provider,
             accessToken: googleData.access_token,
@@ -86,8 +175,17 @@ export async function getUserOAuthToken(
         }
       }
       
+      // Try to query the raw identity_data JSONB column
+      // Note: Supabase encrypts this, but we can try to access it via raw SQL
+      console.log(`No OAuth token found via standard methods. Attempting raw SQL query...`);
+      
+      // The tokens might be encrypted in Supabase's auth schema
+      // We need to use a database function or webhook to capture them during OAuth callback
+      console.log(`No OAuth token found for ${provider}. Tokens may be encrypted or not stored.`);
       return null;
     }
+    
+    console.log(`Found OAuth token for ${provider} in identity_data`);
 
     return {
       provider,

@@ -1,5 +1,5 @@
 import { findServerDefinition } from "./registry";
-import type { McpInvocation, McpServerId } from "./types";
+import type { McpInvocation, McpServerId, McpRegistryEntry } from "./types";
 
 export interface ParseMcpCommandResult {
   invocation: McpInvocation;
@@ -66,7 +66,7 @@ function stripWrappingQuotes(value: string): string {
   return value;
 }
 
-function normalizeServerId(raw: string): McpServerId | null {
+function normalizeServerId(raw: string, registry?: McpRegistryEntry[]): McpServerId | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   const lower = trimmed.toLowerCase();
@@ -76,11 +76,38 @@ function normalizeServerId(raw: string): McpServerId | null {
     return lower;
   }
 
+  // Check user's registry (by id or name) - case-insensitive
+  if (registry && registry.length > 0) {
+    const registryMatch = registry.find(
+      entry => {
+        const entryIdLower = entry.id.toLowerCase();
+        const entryNameLower = entry.name.toLowerCase();
+        return entryIdLower === lower || entryNameLower === lower ||
+               entryIdLower.includes(lower) || entryNameLower.includes(lower);
+      }
+    );
+    if (registryMatch) {
+      console.log("[MCP Parser] Found server in registry:", registryMatch.id, "for input:", raw);
+      return registryMatch.id; // Return the actual ID (might be srv_...)
+    }
+    console.log("[MCP Parser] Server not found in registry. Registry entries:", registry.map(r => ({ id: r.id, name: r.name })));
+  } else {
+    console.log("[MCP Parser] Registry is empty or not provided");
+  }
+
+  // Check static registry
   const candidate = lower as McpServerId;
-  return findServerDefinition(candidate) ? candidate : null;
+  const staticMatch = findServerDefinition(candidate);
+  if (staticMatch) {
+    console.log("[MCP Parser] Found server in static registry:", candidate);
+    return candidate;
+  }
+
+  console.log("[MCP Parser] Server not found in static registry:", candidate);
+  return null;
 }
 
-export function parseMcpCommand(rawInput: string): ParseMcpCommandResult | null {
+export function parseMcpCommand(rawInput: string, registry?: McpRegistryEntry[]): ParseMcpCommandResult | null {
   const trimmed = rawInput.trim();
   if (!trimmed.startsWith("/")) {
     return null;
@@ -91,20 +118,36 @@ export function parseMcpCommand(rawInput: string): ParseMcpCommandResult | null 
     return null;
   }
 
-  const serverId = normalizeServerId(tokens[0]);
+  // Debug logging
+  console.log("[MCP Parser] Parsing command:", trimmed.slice(0, 100));
+  console.log("[MCP Parser] Tokens:", tokens);
+  console.log("[MCP Parser] Registry entries:", registry?.map(r => ({ id: r.id, name: r.name })));
+
+  const serverId = normalizeServerId(tokens[0], registry);
   if (!serverId) {
+    console.log("[MCP Parser] Server ID not found for:", tokens[0]);
     return null;
   }
 
+  console.log("[MCP Parser] Resolved server ID:", serverId);
+
+  // Check if second token is a command or a parameter
+  // If it contains "=", it's a parameter, not a command
+  const secondToken = tokens[1];
+  const isParameter = secondToken && secondToken.includes("=");
+  
   const invocation: McpInvocation = {
     serverId,
-    command: tokens[1],
+    command: isParameter ? undefined : tokens[1], // Only set command if it's not a parameter
     args: {},
     positionalArgs: [],
     rawInput,
   };
 
-  const argTokens = tokens.slice(2);
+  // Start parsing args from token 2 if command exists, otherwise from token 1
+  const argStartIndex = invocation.command ? 2 : 1;
+  const argTokens = tokens.slice(argStartIndex);
+  
   for (const token of argTokens) {
     const equalIndex = token.indexOf("=");
     if (equalIndex === -1) {
@@ -121,15 +164,34 @@ export function parseMcpCommand(rawInput: string): ParseMcpCommandResult | null 
     invocation.args[key] = stripWrappingQuotes(value);
   }
 
+  // If no command specified, try to infer from common patterns
   if (!invocation.command) {
-    const server = findServerDefinition(serverId);
-    return {
-      invocation,
-      isMcpCommand: true,
-      validationMessage: server
-        ? `Available commands: ${server.commands.map(cmd => cmd.name).join(", ")}`
-        : "No commands registered for this server.",
-    };
+    // For langchain-agent, default to agent_executor if query parameter exists
+    if (serverId.toLowerCase().includes("langchain") && invocation.args.query) {
+      invocation.command = "agent_executor";
+      console.log("[MCP Parser] Auto-detected command: agent_executor for langchain-agent");
+    } else {
+      // Check static registry for available commands
+      const server = findServerDefinition(serverId);
+      // Also check user registry
+      const registryServer = registry?.find(
+        entry => entry.id === serverId || entry.name === serverId
+      );
+      
+      if (server || registryServer) {
+        return {
+          invocation,
+          isMcpCommand: true,
+          validationMessage: server
+            ? `Available commands: ${server.commands.map(cmd => cmd.name).join(", ")}. Usage: /${serverId} <command> <params>`
+            : `Server found but no command specified. Usage: /${serverId} <command> <params>`,
+        };
+      }
+      
+      // If server not found in either registry, return null (not an MCP command)
+      console.log("[MCP Parser] Server not found in static or user registry:", serverId);
+      return null;
+    }
   }
 
   return { invocation, isMcpCommand: true };

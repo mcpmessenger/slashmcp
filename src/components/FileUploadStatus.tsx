@@ -1,25 +1,34 @@
 import React from "react";
 import { cn } from "@/lib/utils";
-
-type JobStatus = "uploading" | "queued" | "processing" | "completed" | "failed";
-
-interface UploadJob {
-  id: string;
-  fileName: string;
-  status: JobStatus;
-  message?: string | null;
-  error?: string | null;
-  resultText?: string | null;
-  updatedAt?: string;
-  visionSummary?: string | null;
-  visionProvider?: "gpt4o" | "gemini" | null;
-  visionMetadata?: Record<string, unknown> | null;
-}
+import type { UploadJob, JobStage } from "@/types/uploads";
 
 interface FileUploadStatusProps {
   jobs: UploadJob[];
   isRegisteringUpload: boolean;
   className?: string;
+}
+
+const STAGE_LABELS: Partial<Record<JobStage, string>> = {
+  registered: "Registered",
+  uploaded: "Uploaded",
+  processing: "Processing",
+  extracted: "Extracted",
+  injected: "Injected",
+  failed: "Failed",
+};
+
+function formatStage(stage?: JobStage) {
+  if (!stage) return "Unknown";
+  return STAGE_LABELS[stage] ?? stage;
+}
+
+function formatDate(value?: string) {
+  if (!value) return null;
+  try {
+    return new Date(value).toLocaleTimeString();
+  } catch {
+    return value;
+  }
 }
 
 export function FileUploadStatus({ jobs, isRegisteringUpload, className }: FileUploadStatusProps) {
@@ -43,7 +52,7 @@ export function FileUploadStatus({ jobs, isRegisteringUpload, className }: FileU
               {job.message && <span className="text-foreground/60 text-xs">{job.message}</span>}
               {job.updatedAt && (
                 <span className="text-foreground/50 text-xs">
-                  Updated {new Date(job.updatedAt).toLocaleTimeString()}
+                  Updated {formatDate(job.updatedAt)}
                 </span>
               )}
               {job.error && <span className="text-destructive text-xs">{job.error}</span>}
@@ -61,12 +70,55 @@ export function FileUploadStatus({ jobs, isRegisteringUpload, className }: FileU
               {job.status}
             </span>
           </div>
+          <div className="mt-2 text-[0.7rem] text-foreground/70 flex items-center gap-2">
+            <span className="font-semibold uppercase tracking-wide">Stage:</span>
+            <span
+              className={cn(
+                "px-2 py-0.5 rounded-full border text-foreground/80",
+                job.stage === "injected" && "bg-emerald-500/10 border-emerald-400/50 text-emerald-500",
+                job.stage === "extracted" && "bg-primary/5 border-primary/40 text-primary",
+              )}
+            >
+              {formatStage(job.stage)}
+            </span>
+            {job.injectedAt && (
+              <span className="ml-auto text-[0.65rem] text-foreground/60">
+                Injected {formatDate(job.injectedAt)}
+              </span>
+            )}
+          </div>
           {job.resultText && (
             <div className="mt-2 rounded-md bg-background/80 p-2 text-foreground/90 shadow-inner">
               <p className="font-medium mb-1 text-foreground/80 text-xs">Extracted Text</p>
               <pre className="whitespace-pre-wrap break-words text-xs text-foreground/70 max-h-32 overflow-y-auto">
                 {job.resultText}
               </pre>
+            </div>
+          )}
+          {((job.contentLength ?? 0) > 0 || (job.stageHistory?.length ?? 0) > 0 || job.injectedAt) && (
+            <div className="mt-2 rounded-md bg-background/60 p-2 text-foreground/80">
+              <div className="text-[0.65rem] uppercase tracking-wide text-foreground/60 font-semibold">
+                Context Inspector
+              </div>
+              <div className="text-xs text-foreground/70 mt-1 space-y-1">
+                {typeof job.contentLength === "number" && (
+                  <div>Extracted text length: {job.contentLength.toLocaleString()} chars</div>
+                )}
+                {job.injectedAt && <div>Last injected: {formatDate(job.injectedAt)}</div>}
+                {job.stageHistory && job.stageHistory.length > 0 && (
+                  <div>
+                    <div className="font-medium text-foreground/60">Stage history</div>
+                    <ul className="mt-1 space-y-0.5">
+                      {job.stageHistory.slice(-4).reverse().map((entry, idx) => (
+                        <li key={`${job.id}-stage-${idx}`} className="text-foreground/60">
+                          <span className="font-semibold text-foreground/70">{formatStage(entry.stage)}</span>{" "}
+                          <span>{formatDate(entry.at)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {job.visionSummary && (
