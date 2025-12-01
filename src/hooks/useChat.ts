@@ -873,10 +873,61 @@ export function useChat() {
         }
       });
 
-    const { data: listener } = supabaseClient.auth.onAuthStateChange((event, nextSession) => {
+    const { data: listener } = supabaseClient.auth.onAuthStateChange(async (event, nextSession) => {
       setSession(nextSession);
       if (event === "SIGNED_IN" && nextSession?.user) {
         setLoginPrompt(false);
+        
+        // Capture OAuth tokens after sign-in
+        // This stores Google OAuth tokens (Gmail, Calendar, Drive) for later use
+        try {
+          const { data: { session: currentSession } } = await supabaseClient.auth.getSession();
+          if (currentSession?.access_token) {
+            // Get provider tokens from localStorage (they're stored there by Supabase)
+            const sessionKey = `sb-${import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0]}-auth-token`;
+            const sessionData = typeof window !== 'undefined' ? localStorage.getItem(sessionKey) : null;
+            const parsedSession = sessionData ? JSON.parse(sessionData) : null;
+            
+            const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+            const response = await fetch(`${SUPABASE_URL}/functions/v1/capture-oauth-tokens`, {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${currentSession.access_token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                provider_token: parsedSession?.provider_token,
+                provider_refresh_token: parsedSession?.provider_refresh_token,
+                expires_at: parsedSession?.expires_at,
+                provider: parsedSession?.provider || "google", // Pass provider if available
+              }),
+            });
+            
+            if (response.ok) {
+              const result = await response.json();
+              console.log("[OAuth] Tokens captured:", result);
+              if (result.stored > 0) {
+                toast({
+                  title: "OAuth tokens stored",
+                  description: `Captured tokens for ${result.providers.join(", ")}`,
+                });
+              } else {
+                console.warn("[OAuth] No tokens were stored. Check Supabase logs.");
+              }
+            } else {
+              const errorText = await response.text();
+              console.error("[OAuth] Failed to capture tokens:", errorText);
+              toast({
+                title: "Token capture failed",
+                description: "OAuth tokens may not be available. Check browser console.",
+                variant: "destructive",
+              });
+            }
+          }
+        } catch (error) {
+          console.error("[OAuth] Error capturing tokens:", error);
+          // Don't block sign-in if token capture fails
+        }
       }
       if (event === "SIGNED_OUT") {
         setRegistry([]);
@@ -964,6 +1015,51 @@ export function useChat() {
     }
   }, [isAuthLoading, toast]);
 
+  const signInWithMicrosoft = useCallback(async (): Promise<boolean> => {
+    if (typeof window === "undefined") {
+      toast({
+        title: "Sign-in unavailable",
+        description: "Microsoft sign-in is only supported in the browser.",
+        variant: "destructive",
+      });
+      return false;
+    }
+
+    if (isAuthLoading) {
+      return false;
+    }
+
+    setIsAuthLoading(true);
+    try {
+      const redirectTo = window.location.origin;
+      console.log("[OAuth] Microsoft redirect URL:", redirectTo);
+      const { error } = await supabaseClient.auth.signInWithOAuth({
+        provider: "azure",
+        options: {
+          redirectTo,
+          queryParams: {
+            // Request Mail.Send and Calendar scopes for Outlook
+            scope: "openid email profile offline_access https://graph.microsoft.com/Mail.Send https://graph.microsoft.com/Calendars.ReadWrite",
+          },
+        },
+      });
+      if (error) {
+        throw error;
+      }
+      return true;
+    } catch (error) {
+      console.error("Microsoft sign-in failed", error);
+      toast({
+        title: "Microsoft sign-in failed",
+        description: error instanceof Error ? error.message : "Unable to start Microsoft sign-in.",
+        variant: "destructive",
+      });
+      return false;
+    } finally {
+      setIsAuthLoading(false);
+    }
+  }, [isAuthLoading, toast]);
+
   const signOut = useCallback(async () => {
     try {
       await supabaseClient.auth.signOut();
@@ -1032,8 +1128,51 @@ export function useChat() {
     [appendAssistantText],
   );
 
-  const sendMessage = useCallback(async (input: string) => {
-    const userMsg: Message = { role: "user", type: "text", content: input };
+  const sendMessage = useCallback(async (input: string, documentContext?: Array<{
+    fileName: string;
+    text?: string;
+    visionSummary?: string;
+    visionMetadata?: Record<string, unknown>;
+  }>) => {
+    // Build enhanced message with document context if available
+    let enhancedContent = input;
+    
+    if (documentContext && documentContext.length > 0) {
+      const contextParts: string[] = [];
+      contextParts.push(`The user has uploaded ${documentContext.length} document(s) that are available for analysis.`);
+      
+      for (const doc of documentContext) {
+        const docParts: string[] = [];
+        docParts.push(`📄 Document: "${doc.fileName}"`);
+        
+        if (doc.text) {
+          // Limit text to 10000 chars to avoid token limits, but keep it substantial
+          const textPreview = doc.text.length > 10000 
+            ? doc.text.slice(0, 10000) + `\n\n[... ${doc.text.length - 10000} more characters ...]`
+            : doc.text;
+          docParts.push(`\n📝 Extracted Text:\n${textPreview}`);
+        }
+        
+        if (doc.visionSummary) {
+          docParts.push(`\n👁️ Visual Summary:\n${doc.visionSummary}`);
+        }
+        
+        if (doc.visionMetadata) {
+          if (Array.isArray(doc.visionMetadata["bullet_points"]) && doc.visionMetadata["bullet_points"].length > 0) {
+            docParts.push(`\n🔑 Key Points:\n${(doc.visionMetadata["bullet_points"] as string[]).map(p => `- ${p}`).join('\n')}`);
+          }
+          if (doc.visionMetadata["chart_analysis"]) {
+            docParts.push(`\n📊 Chart Analysis: ${doc.visionMetadata["chart_analysis"]}`);
+          }
+        }
+        
+        contextParts.push(docParts.join('\n'));
+      }
+      
+      enhancedContent = `[AVAILABLE DOCUMENT CONTEXT]\n${contextParts.join('\n\n---\n\n')}\n\n[USER QUERY]\n${input}\n\nPlease analyze the uploaded documents and answer the user's question based on the document content provided above.`;
+    }
+    
+    const userMsg: Message = { role: "user", type: "text", content: enhancedContent };
     setMessages(prev => [...prev, userMsg]);
 
     const trimmedInput = input.trim();
@@ -1668,9 +1807,16 @@ export function useChat() {
       return;
     }
 
-    const mcpCommand = parseMcpCommand(input);
+    // Try to parse as MCP command - check both with and without registry
+    console.log("[useChat] Attempting to parse MCP command. Input:", input.slice(0, 100));
+    console.log("[useChat] Registry state:", registry.length, "entries:", registry.map(r => ({ id: r.id, name: r.name })));
+    
+    const mcpCommand = parseMcpCommand(input, registry);
+    console.log("[useChat] Parse result:", mcpCommand ? "MCP command detected" : "Not an MCP command");
+    
     if (mcpCommand?.isMcpCommand) {
       const { invocation, validationMessage } = mcpCommand;
+      console.log("[useChat] MCP invocation:", invocation);
 
       if (validationMessage) {
         setMessages(prev => [
@@ -1872,11 +2018,76 @@ export function useChat() {
     signInWithGoogle,
     appendAssistantText,
     runImageGeneration,
+    registry,
   ]);
+
+  const captureOAuthTokens = useCallback(async () => {
+    try {
+      const { data: { session: currentSession } } = await supabaseClient.auth.getSession();
+      if (!currentSession?.access_token) {
+        toast({
+          title: "Not signed in",
+          description: "Please sign in first",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Get provider tokens from localStorage (stored by Supabase after OAuth sign-in)
+      // The session key format is: sb-{project-ref}-auth-token
+      const projectRef = import.meta.env.VITE_SUPABASE_URL?.split('//')[1]?.split('.')[0] || 'akxdroedpsvmckvqvggr';
+      const sessionKey = `sb-${projectRef}-auth-token`;
+      const sessionData = typeof window !== 'undefined' ? localStorage.getItem(sessionKey) : null;
+      const parsed = sessionData ? JSON.parse(sessionData) : null;
+      
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+      const response = await fetch(`${SUPABASE_URL}/functions/v1/capture-oauth-tokens`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${currentSession.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          provider_token: parsed?.provider_token || null,
+          provider_refresh_token: parsed?.provider_refresh_token || null,
+          expires_at: parsed?.expires_at || null,
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log("[OAuth] Tokens captured:", result);
+        toast({
+          title: result.stored > 0 ? "Tokens captured" : "No tokens found",
+          description: result.stored > 0 
+            ? `Stored ${result.stored} token(s) for ${result.providers.join(", ")}`
+            : "No OAuth tokens found in identity. You may need to sign out and sign back in with Google.",
+          variant: result.stored > 0 ? "default" : "destructive",
+        });
+        return result;
+      } else {
+        const errorText = await response.text();
+        console.error("[OAuth] Failed to capture tokens:", errorText);
+        toast({
+          title: "Token capture failed",
+          description: errorText,
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("[OAuth] Error capturing tokens:", error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to capture tokens",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
 
   return {
     messages,
     sendMessage,
+    captureOAuthTokens,
     isLoading,
     provider,
     providerLabel: PROVIDER_LABEL[provider],
@@ -1887,6 +2098,7 @@ export function useChat() {
     authReady,
     isAuthLoading,
     signInWithGoogle,
+    signInWithMicrosoft,
     signOut,
     appendAssistantText,
     mcpEvents,

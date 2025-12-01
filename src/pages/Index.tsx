@@ -442,7 +442,34 @@ const Index = () => {
         {/* Chat Input */}
         {authReady && session && (
           <ChatInput
-            onSubmit={sendMessage}
+            onSubmit={(input) => {
+              // Get completed uploads with content to include in context
+              // Only include documents that have been processed (have text or vision data)
+              const completedDocs = uploadJobs
+                .filter(job => 
+                  job.status === "completed" && 
+                  (job.resultText || job.visionSummary) &&
+                  // Only include documents uploaded in the last hour to keep context relevant
+                  (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
+                )
+                .map(job => ({
+                  fileName: job.fileName,
+                  text: job.resultText || undefined,
+                  visionSummary: job.visionSummary || undefined,
+                  visionMetadata: job.visionMetadata || undefined,
+                }));
+              
+              // Show toast if documents are being included
+              if (completedDocs.length > 0) {
+                toast({
+                  title: "Including document context",
+                  description: `${completedDocs.length} document(s) will be analyzed with your message.`,
+                  duration: 2000,
+                });
+              }
+              
+              sendMessage(input, completedDocs.length > 0 ? completedDocs : undefined);
+            }}
             onAssistantMessage={appendAssistantText}
             disabled={isLoading}
             className="px-4 pb-4"
