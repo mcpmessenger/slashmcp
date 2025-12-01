@@ -449,9 +449,63 @@ const Index = () => {
         {authReady && session && (
           <ChatInput
             onSubmit={async (input) => {
-              // Get completed uploads with content to include in context
-              // Also check for jobs that might still be processing but have results
-              const completedDocs = uploadJobs
+              // CRITICAL: Always refresh job status for completed jobs to ensure we have the latest resultText
+              // This is especially important for CSV files that may have finished processing
+              const jobsToCheck = uploadJobs.filter(job => 
+                (job.status === "completed" || job.status === "processing") &&
+                (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
+              );
+              
+              // Refresh all relevant jobs to get latest content
+              const refreshPromises = jobsToCheck.map(async (job) => {
+                try {
+                  const statusResponse = await fetchJobStatus(job.id);
+                  return {
+                    jobId: job.id,
+                    resultText: statusResponse.result?.ocr_text || null,
+                    visionSummary: statusResponse.result?.vision_summary || null,
+                    visionMetadata: statusResponse.result?.vision_metadata || null,
+                    status: statusResponse.job.status,
+                    updatedAt: statusResponse.job.updated_at,
+                  };
+                } catch (error) {
+                  console.warn(`Failed to refresh job status for ${job.id}:`, error);
+                  return null;
+                }
+              });
+              
+              // Wait for refreshes (with timeout)
+              const refreshResults = await Promise.race([
+                Promise.all(refreshPromises),
+                new Promise<Array<typeof refreshPromises[0] | null>>(resolve => setTimeout(() => resolve([]), 3000)), // 3 second timeout
+              ]);
+              
+              // Update state with refreshed job data
+              let updatedJobs = [...uploadJobs];
+              refreshResults.forEach((result) => {
+                if (result) {
+                  const jobIndex = updatedJobs.findIndex(j => j.id === result.jobId);
+                  if (jobIndex >= 0) {
+                    updatedJobs[jobIndex] = {
+                      ...updatedJobs[jobIndex],
+                      resultText: result.resultText || updatedJobs[jobIndex].resultText || null,
+                      visionSummary: result.visionSummary || updatedJobs[jobIndex].visionSummary || null,
+                      visionMetadata: result.visionMetadata || updatedJobs[jobIndex].visionMetadata || null,
+                      status: result.status as typeof updatedJobs[jobIndex].status,
+                      updatedAt: result.updatedAt,
+                    };
+                  }
+                }
+              });
+              
+              // Update state if we got new data
+              if (refreshResults.some(r => r !== null)) {
+                setUploadJobs(updatedJobs);
+              }
+              
+              // Now get completed uploads with content to include in context (use updated jobs)
+              const jobsToUse = refreshResults.some(r => r !== null) ? updatedJobs : uploadJobs;
+              const completedDocs = jobsToUse
                 .filter(job => {
                   // Include completed jobs with content
                   if (job.status === "completed" && (job.resultText || job.visionSummary)) {
@@ -474,48 +528,20 @@ const Index = () => {
                   visionMetadata: job.visionMetadata || undefined,
                 }));
               
-              // For jobs that are still processing, try to fetch latest status
-              const processingJobs = uploadJobs.filter(job => 
-                job.status === "processing" && 
-                !job.resultText && 
-                (!job.updatedAt || (Date.now() - new Date(job.updatedAt).getTime()) < 3600000)
-              );
-              
-              // Try to refresh status for processing jobs (especially CSV files that process quickly)
-              if (processingJobs.length > 0) {
-                const refreshPromises = processingJobs.map(async (job) => {
-                  try {
-                    const statusResponse = await fetchJobStatus(job.id);
-                    if (statusResponse.result?.ocr_text || statusResponse.result?.vision_summary) {
-                      // Update the job with new results
-                      const updatedJob = uploadJobs.find(j => j.id === job.id);
-                      if (updatedJob) {
-                        updatedJob.resultText = statusResponse.result?.ocr_text || updatedJob.resultText || null;
-                        updatedJob.visionSummary = statusResponse.result?.vision_summary || updatedJob.visionSummary || null;
-                        updatedJob.status = statusResponse.job.status as typeof job.status;
-                        updatedJob.updatedAt = statusResponse.job.updated_at;
-                        
-                        // Add to completed docs if it now has content
-                        if (updatedJob.resultText || updatedJob.visionSummary) {
-                          completedDocs.push({
-                            fileName: updatedJob.fileName,
-                            text: updatedJob.resultText || undefined,
-                            visionSummary: updatedJob.visionSummary || undefined,
-                            visionMetadata: updatedJob.visionMetadata || undefined,
-                          });
-                        }
-                      }
-                    }
-                  } catch (error) {
-                    console.warn("Failed to refresh job status:", error);
-                  }
-                });
-                
-                // Wait for all refreshes to complete (with timeout)
-                await Promise.race([
-                  Promise.all(refreshPromises),
-                  new Promise(resolve => setTimeout(resolve, 2000)), // 2 second timeout
-                ]);
+              // Debug logging
+              if (uploadJobs.length > 0) {
+                console.log("[Document Context] Upload jobs:", uploadJobs.map(j => ({
+                  id: j.id,
+                  fileName: j.fileName,
+                  status: j.status,
+                  hasText: !!j.resultText,
+                  textLength: j.resultText?.length || 0,
+                })));
+                console.log("[Document Context] Completed docs to include:", completedDocs.map(d => ({
+                  fileName: d.fileName,
+                  hasText: !!d.text,
+                  textLength: d.text?.length || 0,
+                })));
               }
               
               // Show toast if documents are being included
@@ -524,6 +550,15 @@ const Index = () => {
                   title: "Including document context",
                   description: `${completedDocs.length} document(s) will be analyzed with your message.`,
                   duration: 2000,
+                });
+              } else if (uploadJobs.length > 0 && uploadJobs.some(j => j.status === "completed")) {
+                // Warn if we have completed jobs but no content
+                console.warn("[Document Context] Completed jobs found but no content available:", uploadJobs);
+                toast({
+                  title: "Document content not available",
+                  description: "The uploaded file may still be processing. Please wait a moment and try again.",
+                  variant: "destructive",
+                  duration: 3000,
                 });
               }
               
