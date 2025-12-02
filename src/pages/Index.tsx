@@ -577,10 +577,19 @@ const Index = () => {
         {authReady && (session || guestMode) && (
           <ChatInput
             onSubmit={async (input) => {
+              console.log("[Index] ===== ONSUBMIT CALLED =====");
+              console.log("[Index] Input:", input);
+              console.log("[Index] isLoading:", isLoading);
+              console.log("[Index] hasPendingUploads:", hasPendingUploads);
+              console.log("[Index] authReady:", authReady);
+              console.log("[Index] session:", session ? "exists" : "none");
+              console.log("[Index] guestMode:", guestMode);
+              
               const jobsToRefresh = uploadJobs.filter(job =>
                 ["processing", "completed"].includes(job.status) &&
                 (!job.updatedAt || Date.now() - new Date(job.updatedAt).getTime() < 3600000),
               );
+              console.log("[Index] Jobs to refresh:", jobsToRefresh.length);
 
               const refreshResults = await Promise.all(
                 jobsToRefresh.map(async (job) => {
@@ -645,7 +654,15 @@ const Index = () => {
                 });
               }
 
-              sendMessage(input, contextDocs.length > 0 ? contextDocs : undefined);
+              console.log("[Index] About to call sendMessage with input:", input);
+              console.log("[Index] Context docs:", contextDocs.length);
+              try {
+                sendMessage(input, contextDocs.length > 0 ? contextDocs : undefined);
+                console.log("[Index] sendMessage called successfully");
+              } catch (error) {
+                console.error("[Index] Error calling sendMessage:", error);
+                throw error;
+              }
             }}
             onAssistantMessage={appendAssistantText}
             disabled={isLoading || hasPendingUploads}

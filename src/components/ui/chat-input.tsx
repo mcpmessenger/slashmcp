@@ -686,8 +686,19 @@ export function ChatInput({
   );
 
   const submitValue = useCallback(() => {
+    console.log("[ChatInput] submitValue called");
+    console.log("[ChatInput] value:", value);
+    console.log("[ChatInput] disabled:", disabled);
+    console.log("[ChatInput] value.trim():", value.trim());
     if (value.trim() && !disabled) {
-      onSubmit(value.trim());
+      console.log("[ChatInput] Calling onSubmit with:", value.trim());
+      try {
+        onSubmit(value.trim());
+        console.log("[ChatInput] onSubmit called successfully");
+      } catch (error) {
+        console.error("[ChatInput] Error in onSubmit:", error);
+        throw error;
+      }
       setValue("");
       setSelectedOptions([]);
       setInputHistory(prev => {
@@ -703,7 +714,9 @@ export function ChatInput({
 
   const handleSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
+      console.log("[ChatInput] handleSubmit called");
       e.preventDefault();
+      console.log("[ChatInput] Calling submitValue");
       submitValue();
     },
     [submitValue],
