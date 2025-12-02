@@ -7,11 +7,9 @@
         if (typeof window === 'undefined') return;
         const hash = window.location.hash;
         if (hash && hash.includes('access_token')) {
-          try {
-            sessionStorage.setItem('slashmcp.oauth.hash', hash);
-          } catch (e) {
-            console.warn('Failed to store OAuth hash:', e);
-          }
+          // Store the hash globally so the application's session logic can access it
+          window.oauthHash = hash;
+          // Strip the hash from the URL immediately to prevent GoTrue from seeing it
           window.history.replaceState(null, '', window.location.pathname + window.location.search);
         }
       })();

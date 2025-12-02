@@ -47,7 +47,6 @@ const SUPABASE_PROJECT_REF =
   SUPABASE_URL?.replace("https://", "")?.split(".supabase.co")?.[0]?.split(".")[0] ?? null;
 const SUPABASE_STORAGE_KEY = SUPABASE_PROJECT_REF ? `sb-${SUPABASE_PROJECT_REF}-auth-token` : null;
 const CUSTOM_SUPABASE_SESSION_KEY = SUPABASE_PROJECT_REF ? `slashmcp-session-${SUPABASE_PROJECT_REF}` : null;
-const OAUTH_HASH_STORAGE_KEY = "slashmcp.oauth.hash";
 
 const persistSessionToStorage = (session: Session | null) => {
   if (typeof window === "undefined" || !CUSTOM_SUPABASE_SESSION_KEY) return;
@@ -949,10 +948,8 @@ export function useChat() {
     const applySessionFromUrl = async (): Promise<boolean> => {
       if (typeof window === "undefined") return false;
 
-      let hash = window.location.hash;
-      if (!hash || !hash.includes("access_token")) {
-        hash = window.sessionStorage.getItem(OAUTH_HASH_STORAGE_KEY) ?? "";
-      }
+      // Use the globally stored hash first, which was stripped in index.html inline script
+      const hash = (window as any).oauthHash || window.location.hash;
       if (!hash || !hash.includes("access_token")) {
         return false;
       }
@@ -990,10 +987,9 @@ export function useChat() {
           persistSessionToStorage(session);
         }
 
-        try {
-          window.sessionStorage.removeItem(OAUTH_HASH_STORAGE_KEY);
-        } catch {
-          // ignore
+        // Clear the global hash variable after successful session application
+        if ((window as any).oauthHash) {
+          delete (window as any).oauthHash;
         }
 
         const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
