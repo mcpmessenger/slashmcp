@@ -135,8 +135,13 @@ npx supabase functions deploy chat --project-ref akxdroedpsvmckvqvggr
 ```
 
 ### Watch Logs
+**Note:** CLI log viewing may not be available. Use the dashboard instead:
+- Go to: https://supabase.com/dashboard/project/akxdroedpsvmckvqvggr/functions/chat/logs
+
+If CLI is available in your version:
 ```bash
-npx supabase functions logs chat --project-ref akxdroedpsvmckvqvggr --follow
+npx supabase link --project-ref akxdroedpsvmckvqvggr
+npx supabase logs --help  # Check available options
 ```
 
 ### Test Query (via curl)

@@ -10,6 +10,7 @@ import { Registry } from "./pages/Registry";
 import { WorkflowBuilder } from "./pages/WorkflowBuilder";
 import { Workflows } from "./pages/Workflows";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
+import OAuthCallback from "./pages/OAuthCallback";
 
 const queryClient = new QueryClient();
 
@@ -22,6 +23,7 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
+            <Route path="/auth/callback" element={<OAuthCallback />} />
             <Route path="/registry" element={<Registry />} />
             <Route path="/workflows" element={<Workflows />} />
             <Route path="/workflows/new" element={<WorkflowBuilder />} />

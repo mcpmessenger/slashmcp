@@ -193,10 +193,17 @@ type DocumentContextPayload = {
 // See imports at top of file
 
 serve(async (req) => {
+  // CRITICAL: Log immediately when function is invoked (before any async operations)
+  console.log("=== FUNCTION INVOKED ===");
+  console.log("Timestamp:", new Date().toISOString());
+  console.log("Method:", req.method);
+  console.log("URL:", req.url);
+  
   const origin = req.headers.get("Origin");
   const corsHeaders = getCorsHeaders(origin);
 
   if (req.method === "OPTIONS") {
+    console.log("OPTIONS request, returning CORS headers");
     return new Response("ok", {
       status: 200,
       headers: corsHeaders,
@@ -204,7 +211,9 @@ serve(async (req) => {
   }
 
   // Create event stream at the very start to ensure we always have one
+  console.log("Creating event stream...");
   const eventStream = createEventStream(corsHeaders);
+  console.log("Event stream created");
   
   // Log request start
   console.log("=== Chat Function Request Start ===");
@@ -319,13 +328,85 @@ serve(async (req) => {
     let augmentedMessages: Array<{ role: string; content: string }> = [...messages];
 
     if (Array.isArray(documentContextRefs) && documentContextRefs.length > 0) {
-      const jobIds = documentContextRefs
+      let jobIds = documentContextRefs
         .map((doc: { jobId?: string }) => (doc && typeof doc.jobId === "string" ? doc.jobId : null))
         .filter((id): id is string => Boolean(id));
 
       if (!DOC_CONTEXT_URL) {
         console.warn("Document context provided but DOC_CONTEXT_URL is not configured");
       } else if (jobIds.length > 0) {
+        // Check job statuses first - inform user if documents are still processing
+        let processingJobs: Array<{ jobId: string; fileName: string; stage: string | null }> = [];
+        
+        if (adminClient) {
+          try {
+            const { data: jobs, error: jobsError } = await adminClient
+              .from("processing_jobs")
+              .select("id, file_name, metadata")
+              .in("id", jobIds);
+
+            if (!jobsError && jobs) {
+              processingJobs = jobs.map((job: any) => ({
+                jobId: job.id,
+                fileName: job.file_name,
+                stage: (job.metadata as Record<string, unknown> | null)?.job_stage ?? null,
+              }));
+
+              // Check if any jobs are still being processed
+              const stillProcessing = processingJobs.filter(
+                (job) => 
+                  !job.stage || 
+                  job.stage === "registered" || 
+                  job.stage === "uploaded" || 
+                  job.stage === "processing"
+              );
+
+              const readyJobs = processingJobs.filter(
+                (job) => 
+                  job.stage === "extracted" || 
+                  job.stage === "indexed" || 
+                  job.stage === "injected"
+              );
+
+              // If ALL jobs are still processing, inform user and wait
+              // If SOME jobs are ready, use those and continue
+              if (stillProcessing.length > 0 && readyJobs.length === 0) {
+                // All documents are still processing - inform user
+                const fileNames = stillProcessing.map(j => j.fileName).join(", ");
+                const processingMessage = stillProcessing.length === 1
+                  ? `The file "${fileNames}" is currently being processed. Please wait a moment, and I will be able to analyze it for you.`
+                  : `The following files are currently being processed: ${fileNames}. Please wait a moment, and I will be able to analyze them for you.`;
+
+                // Send helpful message to user instead of saying we don't have access
+                eventStream.sendContent(processingMessage);
+                eventStream.sendEvent({
+                  type: "system",
+                  timestamp: Date.now(),
+                  metadata: {
+                    category: "document_processing",
+                    message: "Documents still processing",
+                    processingJobs: stillProcessing.map(j => ({ fileName: j.fileName, stage: j.stage })),
+                  },
+                });
+                eventStream.close();
+                return new Response(eventStream.stream, {
+                  headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+                });
+              } else if (stillProcessing.length > 0 && readyJobs.length > 0) {
+                // Some jobs ready, some still processing - use ready ones and mention others
+                // Filter jobIds to only include ready jobs
+                jobIds = readyJobs.map(j => j.jobId);
+                
+                // Note: We'll mention processing files in the response, but continue with ready ones
+                console.log(`Using ${jobIds.length} ready job(s), ${stillProcessing.length} still processing`);
+              }
+            }
+          } catch (statusCheckError) {
+            console.error("Error checking job status:", statusCheckError);
+            // Continue with normal flow if status check fails
+          }
+        }
+
         // Extract user query from the last message for vector search
         const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
         const userQuery = lastMessage && lastMessage.role === "user" 
@@ -497,14 +578,24 @@ serve(async (req) => {
         });
       }
 
-      // Try using OpenAI Agents SDK first, fall back to direct API if it fails
-      let useAgentsSdk = true;
+      // NOTE: Agents SDK v0.3.2 doesn't support hosted_tool (async run functions)
+      // Since our tools use async run(), the SDK will always fail with "Unsupported tool type: hosted_tool"
+      // Skip the SDK attempt and go straight to direct API mode to avoid the error and potential hangs
+      // TODO: Re-enable Agents SDK when a version that supports hosted_tool is available
+      let useAgentsSdk = false; // Disabled until SDK supports hosted_tool
       // Declare these outside the if block so they're accessible in the fallback section
       let finalOutput = "";
       let errorOccurred = false;
       let errorMessage = "";
 
       // Use the event stream created at the top of the function
+      
+      // Send initial message that we're starting
+      eventStream.sendEvent({
+        type: "system",
+        timestamp: Date.now(),
+        metadata: { message: "Initializing AI processing..." },
+      });
 
       if (useAgentsSdk) {
         try {
@@ -663,6 +754,11 @@ serve(async (req) => {
           console.log("MCP Tool Agent instructions length:", currentMcpToolAgent.instructions?.length || 0);
           console.log("MCP_GATEWAY_URL:", MCP_GATEWAY_URL);
           
+          // Declare timeout and heartbeat variables in outer scope for cleanup
+          let timeoutId: ReturnType<typeof setTimeout> | null = null;
+          let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+          let startTime = Date.now();
+          
           try {
             // Try with conversation history first, fallback to just last message if that fails
             let events: AsyncIterable<{ type: string; [key: string]: unknown }>;
@@ -719,38 +815,123 @@ serve(async (req) => {
               metadata: { message: "Agents SDK Runner started" },
             });
             
+            // Set up timeout and heartbeat for long-running operations
+            const PROCESSING_TIMEOUT_MS = 300_000; // 5 minutes max
+            const HEARTBEAT_INTERVAL_MS = 10_000; // Send heartbeat every 10 seconds
+            startTime = Date.now();
+            let lastEventTime = Date.now();
+            let lastHeartbeatTime = Date.now();
+            
+            // Create abort controller for timeout
+            const abortController = new AbortController();
+            timeoutId = setTimeout(() => {
+              console.warn("Processing timeout reached, aborting...");
+              abortController.abort();
+            }, PROCESSING_TIMEOUT_MS);
+            
+            // Heartbeat interval
+            heartbeatInterval = setInterval(() => {
+              const elapsed = Math.floor((Date.now() - startTime) / 1000);
+              const timeSinceLastEvent = Date.now() - lastEventTime;
+              
+              // Only send heartbeat if no events in last 10 seconds
+              if (timeSinceLastEvent >= HEARTBEAT_INTERVAL_MS) {
+                console.warn(`⚠️ No events received in ${Math.floor(timeSinceLastEvent / 1000)}s. Last event was ${Math.floor((Date.now() - lastEventTime) / 1000)}s ago. Total elapsed: ${elapsed}s`);
+                eventStream.sendEvent({
+                  type: "system",
+                  timestamp: Date.now(),
+                  metadata: { 
+                    message: `Still processing... (${elapsed}s elapsed)`,
+                    elapsedSeconds: elapsed,
+                    category: "heartbeat",
+                    warning: `No events in ${Math.floor(timeSinceLastEvent / 1000)}s`
+                  },
+                });
+              }
+            }, HEARTBEAT_INTERVAL_MS);
+            
             // Collect all content from the streaming events.
             let eventCount = 0;
-            for await (const event of events as AsyncIterable<{ 
-              type: string; 
-              output?: unknown; 
-              error?: unknown;
-              content?: string | unknown;
-              text?: string;
-              delta?: unknown;
-              textDelta?: unknown;
-              message?: unknown;
-              agentMessage?: unknown;
-              agent?: unknown;
-              tool?: unknown;
-              toolCall?: unknown;
-              toolResult?: unknown;
-            }>) {
-              eventCount++;
-              const eventStr = JSON.stringify(event).slice(0, 300);
-              console.log(`Event #${eventCount} - Type: ${event.type}`, eventStr);
-              
-              // Log tool calls specifically
-              if (event.type === "toolCall" || (event as any).toolCall) {
-                const toolCall = (event as any).toolCall || event;
-                console.log(`🔧 TOOL CALL: ${toolCall.name || toolCall.tool}`, JSON.stringify(toolCall.input || toolCall.arguments || {}).slice(0, 200));
-              }
-              
-              // Log tool results
-              if (event.type === "toolResult" || (event as any).toolResult) {
-                const toolResult = (event as any).toolResult || event;
-                console.log(`✅ TOOL RESULT:`, JSON.stringify(toolResult.result || toolResult.output || {}).slice(0, 200));
-              }
+            let lastProgressUpdate = Date.now();
+            const PROGRESS_UPDATE_INTERVAL = 5_000; // Update progress every 5 seconds
+            
+            try {
+              for await (const event of events as AsyncIterable<{ 
+                type: string; 
+                output?: unknown; 
+                error?: unknown;
+                content?: string | unknown;
+                text?: string;
+                delta?: unknown;
+                textDelta?: unknown;
+                message?: unknown;
+                agentMessage?: unknown;
+                agent?: unknown;
+                tool?: unknown;
+                toolCall?: unknown;
+                toolResult?: unknown;
+              }>) {
+                // Check for abort signal
+                if (abortController.signal.aborted) {
+                  throw new Error("Processing timeout: operation took too long");
+                }
+                
+                eventCount++;
+                lastEventTime = Date.now();
+                const eventStr = JSON.stringify(event).slice(0, 300);
+                console.log(`Event #${eventCount} - Type: ${event.type}`, eventStr);
+                
+                // Send progress update periodically
+                const timeSinceLastProgress = Date.now() - lastProgressUpdate;
+                if (timeSinceLastProgress >= PROGRESS_UPDATE_INTERVAL) {
+                  eventStream.sendEvent({
+                    type: "system",
+                    timestamp: Date.now(),
+                    metadata: { 
+                      message: `Processing... (${eventCount} events processed)`,
+                      eventCount: eventCount,
+                      category: "progress"
+                    },
+                  });
+                  lastProgressUpdate = Date.now();
+                }
+                
+                // Log tool calls specifically and send progress event
+                if (event.type === "toolCall" || (event as any).toolCall) {
+                  const toolCall = (event as any).toolCall || event;
+                  const toolName = toolCall.name || toolCall.tool || "unknown";
+                  const toolInput = toolCall.input || toolCall.arguments || {};
+                  console.log(`🔧 TOOL CALL: ${toolName}`, JSON.stringify(toolInput).slice(0, 200));
+                  
+                  // Send progress event for tool call
+                  eventStream.sendEvent({
+                    type: "system",
+                    timestamp: Date.now(),
+                    metadata: { 
+                      message: `Calling tool: ${toolName}...`,
+                      tool: toolName,
+                      category: "tool_call_progress"
+                    },
+                  });
+                }
+                
+                // Log tool results and send progress event
+                if (event.type === "toolResult" || (event as any).toolResult) {
+                  const toolResult = (event as any).toolResult || event;
+                  const toolName = toolResult.name || toolResult.tool || "unknown";
+                  console.log(`✅ TOOL RESULT: ${toolName}`, JSON.stringify(toolResult.result || toolResult.output || {}).slice(0, 200));
+                  
+                  // Send progress event for tool result
+                  eventStream.sendEvent({
+                    type: "system",
+                    timestamp: Date.now(),
+                    metadata: { 
+                      message: `Tool ${toolName} completed`,
+                      tool: toolName,
+                      category: "tool_result_progress"
+                    },
+                  });
+                }
               
               // Send MCP event to frontend for logging
               const timestamp = Date.now();
@@ -771,8 +952,28 @@ serve(async (req) => {
               // Extract agent information
               if ((event as any).agent) {
                 eventData.agent = String((event as any).agent);
+                // Send progress update for agent activity
+                eventStream.sendEvent({
+                  type: "system",
+                  timestamp: Date.now(),
+                  metadata: { 
+                    message: `Agent ${eventData.agent} is working...`,
+                    agent: eventData.agent,
+                    category: "agent_progress"
+                  },
+                });
               } else if ((event as any).agentMessage?.agent) {
                 eventData.agent = String((event as any).agentMessage.agent);
+                // Send progress update for agent activity
+                eventStream.sendEvent({
+                  type: "system",
+                  timestamp: Date.now(),
+                  metadata: { 
+                    message: `Agent ${eventData.agent} is working...`,
+                    agent: eventData.agent,
+                    category: "agent_progress"
+                  },
+                });
               }
 
               // Extract tool call information
@@ -1188,7 +1389,12 @@ serve(async (req) => {
               }
             }
             
-            console.log(`Processed ${eventCount} events, collected ${contentParts.length} content parts`);
+            // Cleanup timeout and heartbeat
+            if (timeoutId) clearTimeout(timeoutId);
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            
+            const totalTime = Math.floor((Date.now() - startTime) / 1000);
+            console.log(`✅ Processed ${eventCount} events in ${totalTime}s, collected ${contentParts.length} content parts`);
             
             // If we collected content parts but no finalOutput, combine them (deduplicating)
             if (!finalOutput && contentParts.length > 0) {
@@ -1259,11 +1465,33 @@ serve(async (req) => {
             useAgentsSdk = false;
             // Don't reset errorOccurred here - keep it as is
           } catch (runnerError) {
+            // Cleanup timeout and heartbeat on error
+            if (timeoutId) clearTimeout(timeoutId);
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            
             errorOccurred = true;
             errorMessage = runnerError instanceof Error ? runnerError.message : String(runnerError);
             console.error("=== Runner Error ===");
             console.error("Error message:", errorMessage);
             console.error("Error stack:", runnerError instanceof Error ? runnerError.stack : 'No stack trace');
+            
+            // Check if it's a timeout error
+            if (errorMessage.includes("timeout") || errorMessage.includes("took too long")) {
+              eventStream.sendEvent({
+                type: "error",
+                timestamp: Date.now(),
+                error: "Processing timeout: The operation took longer than 5 minutes",
+                metadata: { 
+                  category: "timeout",
+                  elapsedSeconds: Math.floor((Date.now() - startTime) / 1000)
+                },
+              });
+              eventStream.sendContent("I apologize, but the operation took too long to complete. Please try breaking your request into smaller parts.");
+              eventStream.close();
+              return new Response(eventStream.stream, {
+                headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+              });
+            }
             
             // Check if this is the hosted_tool error
             const isHostedToolError = errorMessage.includes("hosted_tool") || errorMessage.includes("Unsupported tool type");
@@ -1359,27 +1587,34 @@ serve(async (req) => {
             });
           }
         }
+        } catch (outerTryError) {
+          // Catch any unhandled errors from the outer try block (line 592)
+          console.error("Outer try block error:", outerTryError);
+          errorOccurred = true;
+          errorMessage = outerTryError instanceof Error ? outerTryError.message : String(outerTryError);
+        }
       }
 
-      // Fallback to direct OpenAI API if Agents SDK didn't work
+      // Use direct OpenAI API (Agents SDK disabled due to hosted_tool incompatibility)
       if (!useAgentsSdk || errorOccurred) {
-        console.log("=== Using Direct OpenAI API (Fallback Mode) ===");
-        console.log("Reason:", errorOccurred ? "error" : "no_output");
+        console.log("=== Using Direct OpenAI API ===");
+        console.log("Reason:", errorOccurred ? "error" : "Agents SDK disabled (hosted_tool not supported)");
         if (errorOccurred) {
           console.log("Error message:", errorMessage);
         }
-        eventStream.sendEvent({
-          type: "fallback",
-          timestamp: Date.now(),
-          metadata: { reason: errorOccurred ? "error" : "no_output" },
-        });
         
-        // Send a content event to indicate we're using direct API
+        // Send an immediate event to ensure stream starts (critical for frontend timeout detection)
         eventStream.sendEvent({
           type: "system",
           timestamp: Date.now(),
-          metadata: { message: "Using direct OpenAI API (Agents SDK unavailable)" },
+          metadata: { 
+            message: "Processing with OpenAI API...",
+            mode: "direct_api",
+            reason: errorOccurred ? "error" : "sdk_incompatibility"
+          },
         });
+        // Also send initial content to ensure stream is active
+        eventStream.sendContent(""); // Empty content just to establish stream
         
         // Enhanced system prompt for fallback mode with MCP command support
         const fallbackSystemPrompt = systemPrompt + "\n\n" +
@@ -1440,7 +1675,7 @@ serve(async (req) => {
             "Content-Type": "application/json",
             Authorization: `Bearer ${apiKey}`,
           },
-            body: JSON.stringify({
+          body: JSON.stringify({
             model: "gpt-4o-mini",
             messages: [
               { role: "system", content: fallbackSystemPrompt },
@@ -1450,7 +1685,7 @@ serve(async (req) => {
           }),
         });
 
-        if (!response.ok) {
+        if (!response || !response.ok) {
           const errorText = await response.text();
           console.error("OpenAI API error:", response.status, errorText);
           const errorMsg = `OpenAI API request failed: ${errorText}`;
@@ -1485,8 +1720,28 @@ serve(async (req) => {
         const decoder = new TextDecoder();
         let textBuffer = "";
         let hasContent = false;
+        
+        // Add timeout for reading stream
+        const STREAM_READ_TIMEOUT_MS = 180_000; // 3 minutes max for streaming
+        const streamStartTime = Date.now();
 
         while (true) {
+          // Check overall timeout
+          if (Date.now() - streamStartTime > STREAM_READ_TIMEOUT_MS) {
+            console.error("Stream read timeout exceeded");
+            reader.cancel();
+            eventStream.sendEvent({
+              type: "error",
+              timestamp: Date.now(),
+              error: "Stream read timeout: response took too long",
+            });
+            eventStream.sendContent("I apologize, but the response took too long to complete. Please try again.");
+            eventStream.close();
+            return new Response(eventStream.stream, {
+              headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+            });
+          }
+          
           const { done, value } = await reader.read();
           if (done) break;
           
@@ -1743,23 +1998,6 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
         });
       }
-
-      // This should not be reached, but ensure we always return a stream
-      // If we somehow get here without closing the stream, close it and return
-      if (eventStream) {
-        if (finalOutput) {
-          eventStream.sendContent(finalOutput);
-        } else {
-          eventStream.sendContent("I apologize, but I was unable to generate a response. Please try again.");
-        }
-        eventStream.close();
-        return new Response(eventStream.stream, {
-          headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-        });
-      }
-      
-      // Last resort fallback
-      return respondWithStreamedText(finalOutput || "I apologize, but I was unable to generate a response. Please try again.", corsHeaders);
     }
 
     if (selectedProvider === "anthropic") {
@@ -1877,10 +2115,14 @@ serve(async (req) => {
     return respondWithStreamedText(text, corsHeaders);
   } catch (error) {
     console.error("=== Chat Function Error ===");
+    console.error("Timestamp:", new Date().toISOString());
     console.error("Error type:", error instanceof Error ? error.constructor.name : typeof error);
     console.error("Error message:", error instanceof Error ? error.message : String(error));
     console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
     console.error("Full error:", JSON.stringify(error, Object.getOwnPropertyNames(error)).slice(0, 1000));
+    
+    // Ensure error is logged even if eventStream fails
+    try {
     
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     const errorStack = error instanceof Error ? error.stack : undefined;
@@ -1902,5 +2144,16 @@ serve(async (req) => {
     return new Response(eventStream.stream, {
       headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
+    } catch (streamError) {
+      console.error("Failed to send error via stream:", streamError);
+      // Fallback: return a simple error response
+      return new Response(
+        JSON.stringify({ error: "Internal server error", message: error instanceof Error ? error.message : String(error) }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
   }
 });

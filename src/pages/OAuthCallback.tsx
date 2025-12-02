@@ -1,0 +1,243 @@
+import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { supabaseClient } from '../lib/supabaseClient';
+
+export default function OAuthCallback() {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<string>('Processing OAuth callback...');
+
+  useEffect(() => {
+    // DON'T clear the hash yet - Supabase needs it with detectSessionInUrl: true
+    // We'll clear it after the session is established
+    const hasHash = typeof window !== 'undefined' && window.location.hash && window.location.hash.includes('access_token');
+    if (hasHash) {
+      console.log('[OAuthCallback] OAuth hash detected in URL, waiting for Supabase to process...');
+    } else {
+      console.log('[OAuthCallback] No OAuth hash in URL');
+    }
+
+    let isHandled = false;
+    let subscription: { unsubscribe: () => void } | null = null;
+
+    const handleSessionEstablished = async () => {
+      if (isHandled) return;
+      
+      console.log('[OAuthCallback] Session establishment detected, verifying persistence...');
+      setStatus('Verifying session...');
+
+      // Wait longer to ensure session is fully persisted to localStorage
+      // Supabase needs time to process the hash and persist the session
+      let attempts = 0;
+      const maxAttempts = 10;
+      let sessionPersisted = false;
+
+      while (attempts < maxAttempts && !sessionPersisted) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        // Check if session exists in Supabase
+        const { data: { session: checkSession }, error } = await supabaseClient.auth.getSession();
+        
+        if (checkSession && checkSession.user) {
+          // Also verify it's in localStorage (Supabase persists there)
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+          if (supabaseUrl && typeof window !== 'undefined') {
+            const projectRef = supabaseUrl.split('//')[1]?.split('.')[0];
+            const storageKey = `sb-${projectRef}-auth-token`;
+            const storedSession = localStorage.getItem(storageKey);
+            
+            if (storedSession) {
+              console.log('[OAuthCallback] Session verified in both Supabase and localStorage');
+              sessionPersisted = true;
+              break;
+            } else {
+              console.log(`[OAuthCallback] Session exists but not in localStorage yet (attempt ${attempts + 1}/${maxAttempts})`);
+            }
+          } else {
+            // If we can't check localStorage, just trust Supabase
+            sessionPersisted = true;
+            break;
+          }
+        } else if (error) {
+          console.error('[OAuthCallback] Error checking session:', error);
+        }
+        
+        attempts++;
+      }
+
+      if (!sessionPersisted) {
+        console.error('[OAuthCallback] Session not persisted after multiple attempts');
+        setStatus('Session verification failed. Redirecting...');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 1000);
+        return;
+      }
+
+      isHandled = true;
+      console.log('[OAuthCallback] Session fully established and persisted');
+      
+      // Try to capture OAuth tokens now (before navigating away)
+      // This ensures tokens are captured even if the useChat hook isn't mounted yet
+      try {
+        const { data: { session: finalSession } } = await supabaseClient.auth.getSession();
+        if (finalSession?.access_token && typeof window !== 'undefined') {
+          // Get provider tokens from localStorage
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+          if (supabaseUrl) {
+            const projectRef = supabaseUrl.split('//')[1]?.split('.')[0];
+            const sessionKey = `sb-${projectRef}-auth-token`;
+            const sessionData = localStorage.getItem(sessionKey);
+            const parsedSession = sessionData ? JSON.parse(sessionData) : null;
+            
+            if (parsedSession?.provider_token) {
+              console.log('[OAuthCallback] Capturing OAuth tokens...');
+              const response = await fetch(`${supabaseUrl}/functions/v1/capture-oauth-tokens`, {
+                method: "POST",
+                headers: {
+                  "Authorization": `Bearer ${finalSession.access_token}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  provider_token: parsedSession.provider_token,
+                  provider_refresh_token: parsedSession.provider_refresh_token,
+                  expires_at: parsedSession.expires_at,
+                  provider: parsedSession.provider || "google",
+                }),
+              });
+              
+              if (response.ok) {
+                const result = await response.json();
+                console.log('[OAuthCallback] OAuth tokens captured:', result);
+              } else {
+                console.warn('[OAuthCallback] Token capture failed (will retry on main page)');
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[OAuthCallback] Error capturing tokens (will retry on main page):', error);
+        // Don't block navigation - token capture will retry in useChat hook
+      }
+      
+      // NOW clear the hash from URL since session is established
+      if (typeof window !== 'undefined' && window.location.hash) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        console.log('[OAuthCallback] URL hash cleared');
+      }
+      
+      setStatus('Login successful! Redirecting...');
+      
+      // Set a flag to indicate OAuth just completed (prevents premature login prompt)
+      // Use a longer timeout to ensure session is fully established before flag clears
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('oauth_just_completed', 'true');
+        // Also set a timestamp to track when OAuth completed
+        sessionStorage.setItem('oauth_completed_at', Date.now().toString());
+        // Clear flag after 10 seconds (increased from 5 to prevent race conditions)
+        setTimeout(() => {
+          sessionStorage.removeItem('oauth_just_completed');
+          sessionStorage.removeItem('oauth_completed_at');
+        }, 10000);
+      }
+      
+      // Wait a bit longer before redirecting to ensure session is fully persisted
+      // This prevents race conditions where the main page loads before session is ready
+      setTimeout(() => {
+        // Double-check session is still valid before redirecting
+        supabaseClient.auth.getSession().then(({ data: { session: finalCheck } }) => {
+          if (finalCheck && finalCheck.user) {
+            console.log('[OAuthCallback] Final session check passed, redirecting...');
+            window.location.href = '/';
+          } else {
+            console.error('[OAuthCallback] Session lost before redirect, staying on callback page');
+            setStatus('Session verification failed. Please try signing in again.');
+          }
+        }).catch((error) => {
+          console.error('[OAuthCallback] Error in final session check:', error);
+          setStatus('Error verifying session. Please try signing in again.');
+        });
+      }, 1000); // Increased from 500ms to 1000ms
+    };
+
+    // Listen for auth state changes
+    const { data: authData } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
+      console.log('[OAuthCallback] Auth state change:', event, session ? 'has session' : 'no session');
+      
+      if (isHandled) return;
+      
+      if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+        setStatus('Session established, verifying...');
+        await handleSessionEstablished();
+      } else if (event === 'SIGNED_OUT') {
+        if (isHandled) return;
+        isHandled = true;
+        console.log('[OAuthCallback] Signed out event');
+        setStatus('Signed out. Redirecting...');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500);
+      }
+    });
+    
+    subscription = authData?.subscription || null;
+
+    // Immediate check for existing session (in case auth state change already fired)
+    setStatus('Checking for existing session...');
+    supabaseClient.auth.getSession().then(async ({ data: { session } }) => {
+      if (isHandled) return;
+      
+      if (session && session.user) {
+        console.log('[OAuthCallback] Session found immediately');
+        setStatus('Session found, verifying...');
+        await handleSessionEstablished();
+      } else {
+        // Wait for auth state change to fire
+        console.log('[OAuthCallback] No session yet, waiting for auth state change...');
+        setStatus('Waiting for OAuth response...');
+      }
+    }).catch((error) => {
+      console.error('[OAuthCallback] Error getting session:', error);
+      if (!isHandled) {
+        isHandled = true;
+        setStatus('Error occurred. Redirecting...');
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 1000);
+      }
+    });
+
+    // Fallback timeout - if nothing happens in 10 seconds, navigate anyway
+    const fallbackTimeout = setTimeout(() => {
+      if (!isHandled) {
+        isHandled = true;
+        console.warn('[OAuthCallback] Timeout waiting for session, navigating anyway');
+        setStatus('Timeout. Redirecting...');
+        window.location.href = '/';
+      }
+    }, 10000);
+
+    return () => {
+      clearTimeout(fallbackTimeout);
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [navigate]);
+
+  // Show a loading screen while the session is being processed
+  return (
+    <div className="min-h-screen bg-background flex flex-col items-center justify-center">
+      <div className="text-center space-y-4 max-w-md mx-auto px-4">
+        <h2 className="text-2xl font-semibold text-foreground">Processing Login...</h2>
+        <p className="text-muted-foreground">{status}</p>
+        <div className="flex justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        </div>
+        <p className="text-xs text-muted-foreground mt-4">
+          If this takes too long, you may need to sign in again.
+        </p>
+      </div>
+    </div>
+  );
+}
+

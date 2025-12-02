@@ -2810,7 +2810,8 @@ async function handleCanva(invocation: McpInvocation, userId?: string): Promise<
 async function handleEmail(invocation: McpInvocation, userId?: string, userEmail?: string, authHeader?: string | null): Promise<McpInvocationResponse> {
   const startedAt = performance.now();
   const args = invocation.args ?? {};
-  const command = invocation.command ?? "send_test_email";
+  const rawCommand = invocation.command ?? "send_test_email";
+  const normalizedCommand = rawCommand.trim().toLowerCase();
 
   // Require authentication for email sending
   if (!userId || !userEmail) {
@@ -2829,7 +2830,7 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
   }
 
   try {
-    if (command === "send_test_email") {
+    if (normalizedCommand === "send_test_email") {
       const subject = args.subject || "Test Email";
       const body = args.body || args.content || "test";
       const provider = args.provider || "gmail"; // Default to Gmail, can be "gmail", "outlook", "icloud"
@@ -3192,7 +3193,7 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
       invocation,
       result: {
         type: "error",
-        message: `Unknown email command: ${command}. Supported commands: send_test_email`,
+        message: `Unknown email command: ${rawCommand}. Supported commands: send_test_email`,
       },
       timestamp: new Date().toISOString(),
       latencyMs: Math.round(performance.now() - startedAt),
@@ -3237,9 +3238,12 @@ serve(async req => {
     return respondWithError(400, "Invalid JSON body", origin);
   }
 
-  if (!invocation?.serverId) {
+  if (!invocation?.serverId || !invocation.serverId.trim()) {
     return respondWithError(400, "Missing serverId", origin);
   }
+
+  const rawServerId = invocation.serverId;
+  const normalizedServerId = rawServerId.trim().toLowerCase();
 
   // Helper function to create authentication required error response
   function createAuthRequiredResponse(invocation: McpInvocation, reason: string): McpInvocationResponse {
@@ -3303,63 +3307,63 @@ serve(async req => {
   }
 
   try {
-    if (invocation.serverId === "alphavantage-mcp") {
+    if (normalizedServerId === "alphavantage-mcp") {
       const response = await handleAlphaVantage(invocation, userId);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "polymarket-mcp") {
+    if (normalizedServerId === "polymarket-mcp") {
       const response = await handlePolymarket(invocation);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "gemini-mcp") {
+    if (normalizedServerId === "gemini-mcp") {
       const response = await handleGemini(invocation);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "grokipedia-mcp") {
+    if (normalizedServerId === "grokipedia-mcp") {
       const response = await handleGrokipedia(invocation);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "canva-mcp") {
+    if (normalizedServerId === "canva-mcp") {
       const response = await handleCanva(invocation, userId);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "search-mcp") {
+    if (normalizedServerId === "search-mcp") {
       const response = await handleSearch(invocation);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "google-places-mcp") {
+    if (normalizedServerId === "google-places-mcp") {
       const response = await handleGooglePlaces(invocation, userId);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "email-mcp") {
+    if (normalizedServerId === "email-mcp") {
       const response = await handleEmail(invocation, userId, userEmail, authHeader);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (invocation.serverId === "playwright-wrapper") {
+    if (normalizedServerId === "playwright-wrapper") {
       // Forward to playwright-wrapper edge function
       const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
       if (!PROJECT_URL) {
@@ -3412,7 +3416,7 @@ serve(async req => {
       }
     }
 
-    return respondWithError(400, `Unsupported MCP server: ${invocation.serverId}`, origin);
+    return respondWithError(400, `Unsupported MCP server: ${rawServerId}`, origin);
   } catch (error) {
     console.error("MCP handler error:", error);
     const message = error instanceof Error ? error.message : "Unknown error";

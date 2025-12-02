@@ -72,11 +72,12 @@ Make sure you're looking at logs from AFTER you sent the message:
 
 ## Alternative: Check via Supabase CLI
 
-You can also check logs via command line:
+**Note:** The Supabase CLI `functions logs` command may not be available in all versions. The dashboard method above is recommended.
 
-```bash
-npx supabase functions logs chat --project-ref akxdroedpsvmckvqvggr --follow
-```
+If you want to try the CLI:
+1. First link your project: `npx supabase link --project-ref akxdroedpsvmckvqvggr`
+2. Check available commands: `npx supabase logs --help`
+3. The exact command syntax may vary by CLI version
 
-This will show real-time logs from the chat function.
+**Recommended:** Use the Supabase Dashboard method above for the most reliable log access.
 
