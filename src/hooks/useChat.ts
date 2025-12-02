@@ -2659,44 +2659,78 @@ export function useChat() {
           const { done, value } = await reader.read();
           console.error("[useChat] Stream read completed - done:", done, "value length:", value?.length || 0, "bytes");
           if (done) {
+            console.error("[useChat] Stream done, breaking loop");
             clearTimeout(initialConnectionTimeout);
             break;
           }
           
+          console.error("[useChat] Stream not done, processing data...");
+          console.error("[useChat] Clearing initial connection timeout...");
           clearTimeout(initialConnectionTimeout); // Clear once we get first data
+          console.error("[useChat] Updating lastDataTime...");
           lastDataTime = Date.now();
+          console.error("[useChat] Calling resetStreamTimeout()...");
           resetStreamTimeout();
+          console.error("[useChat] resetStreamTimeout() returned, decoding value...");
           textBuffer += decoder.decode(value, { stream: true });
+          console.error("[useChat] Value decoded, textBuffer length:", textBuffer.length, "bytes");
 
+          console.error("[useChat] Starting to parse lines from textBuffer...");
           let newlineIndex: number;
+          let lineCount = 0;
           while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+            lineCount++;
+            console.error("[useChat] Found line", lineCount, "at index", newlineIndex);
             let line = textBuffer.slice(0, newlineIndex);
             textBuffer = textBuffer.slice(newlineIndex + 1);
+            console.error("[useChat] Line", lineCount, "extracted, length:", line.length, "remaining buffer:", textBuffer.length);
 
-            if (line.endsWith("\r")) line = line.slice(0, -1);
-            if (line.startsWith(":") || line.trim() === "") continue;
-            if (!line.startsWith("data: ")) continue;
+            if (line.endsWith("\r")) {
+              console.error("[useChat] Removing \\r from line");
+              line = line.slice(0, -1);
+            }
+            if (line.startsWith(":") || line.trim() === "") {
+              console.error("[useChat] Skipping comment or empty line");
+              continue;
+            }
+            if (!line.startsWith("data: ")) {
+              console.error("[useChat] Line doesn't start with 'data: ', skipping. Line:", line.substring(0, 50));
+              continue;
+            }
 
             const jsonStr = line.slice(6).trim();
+            console.error("[useChat] Extracted JSON string, length:", jsonStr.length);
             if (jsonStr === "[DONE]") {
+              console.error("[useChat] Received [DONE] marker, ending stream");
               streamDone = true;
               break;
             }
 
+            console.error("[useChat] Attempting to parse JSON...");
             try {
               const parsed = JSON.parse(jsonStr);
+              console.error("[useChat] JSON parsed successfully");
               
               // Handle MCP events
               if (parsed.mcpEvent) {
+                console.error("[useChat] Found MCP event, adding to events");
                 console.log("Received MCP event:", parsed.mcpEvent);
                 setMcpEvents(prev => [...prev, parsed.mcpEvent as McpEvent]);
+                console.error("[useChat] MCP event added");
               }
               
               // Handle content
               const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-              if (content) updateAssistantMessage(content);
+              console.error("[useChat] Checking for content in parsed data, content exists:", !!content, "length:", content?.length || 0);
+              if (content) {
+                console.error("[useChat] Calling updateAssistantMessage with content length:", content.length);
+                updateAssistantMessage(content);
+                console.error("[useChat] updateAssistantMessage called");
+              }
+              console.error("[useChat] Finished processing line", lineCount);
             } catch (error) {
               // Log parse errors for debugging
+              console.error("[useChat] ERROR parsing JSON:", error);
               console.warn("Failed to parse SSE line:", jsonStr, error);
               textBuffer = line + "\n" + textBuffer;
               break;
