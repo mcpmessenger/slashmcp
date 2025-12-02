@@ -2123,6 +2123,9 @@ export function useChat() {
 
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      console.log("[useChat] Raw VITE_SUPABASE_URL from env:", supabaseUrl);
+      console.log("[useChat] All env vars:", Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
+      
       if (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL') || supabaseUrl.includes('your-supabase-ref')) {
         const errorMsg = "Supabase URL is not configured. Please set VITE_SUPABASE_URL environment variable.";
         console.error("[useChat]", errorMsg, "Current value:", supabaseUrl);
@@ -2130,14 +2133,18 @@ export function useChat() {
         setMessages(prev => prev.slice(0, -1));
         toast({
           title: "Configuration Error",
-          description: errorMsg + " Check your environment variables.",
+          description: errorMsg + " Check your environment variables. Current value: " + (supabaseUrl || 'undefined'),
           variant: "destructive",
         });
         return;
       }
       
       const CHAT_URL = `${supabaseUrl}/functions/v1/chat`;
+      console.log("[useChat] ===== CHAT REQUEST DEBUG =====");
+      console.log("[useChat] VITE_SUPABASE_URL:", supabaseUrl);
       console.log("[useChat] CHAT_URL:", CHAT_URL);
+      console.log("[useChat] Full URL will be:", CHAT_URL);
+      console.log("[useChat] ===============================");
       const history = [...messages, userMsg].map(({ role, content }) => ({ role, content }));
       const documentContextPayload =
         documentContext && documentContext.length > 0
