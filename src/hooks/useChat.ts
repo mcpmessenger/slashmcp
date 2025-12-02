@@ -1296,10 +1296,19 @@ export function useChat() {
 
   const signOut = useCallback(async () => {
     try {
+      // Clear OAuth hash if present
+      if (typeof window !== "undefined" && (window as any).oauthHash) {
+        delete (window as any).oauthHash;
+      }
+      
+      // Sign out from Supabase
       await supabaseClient.auth.signOut();
+      
+      // Clear all session storage
       updateSession(null);
       setRegistry([]);
       setLoginPrompt(false);
+      
       toast({
         title: "Signed out",
         description: "You have been signed out.",

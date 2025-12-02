@@ -4,7 +4,17 @@ import { FileUploadStatus } from "@/components/FileUploadStatus";
 import { useChat } from "@/hooks/useChat";
 import { fetchJobStatus } from "@/lib/api";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
-import { Volume2, VolumeX, LogIn, ChevronDown, Server, Workflow, AlertCircle } from "lucide-react";
+import {
+  Volume2,
+  VolumeX,
+  LogIn,
+  ChevronDown,
+  Server,
+  Workflow,
+  AlertCircle,
+  ExternalLink,
+  RefreshCw,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import { useVoicePlayback } from "@/hooks/useVoicePlayback";
 import { useToast } from "@/components/ui/use-toast";
@@ -48,8 +58,19 @@ const Index = () => {
     setProvider: setChatProvider,
     registry,
     mcpEvents,
+    resetChat,
   } = useChat();
   const { toast } = useToast();
+  const hasChatHistory = !!session && (messages.length > 0 || mcpEvents.length > 0);
+
+  const handleRefreshChat = useCallback(() => {
+    if (!session) return;
+    resetChat();
+    toast({
+      title: "Chat refreshed",
+      description: "Start a new request whenever you're ready.",
+    });
+  }, [resetChat, session, toast]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastSpokenRef = useRef<string>("");
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
@@ -216,6 +237,10 @@ const Index = () => {
     toggleVoicePlayback();
   }, [stop, toggleVoicePlayback, voicePlaybackEnabled]);
 
+  const handleSignOut = useCallback(() => {
+    void signOut();
+  }, [signOut]);
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Sign-in prompt banner */}
@@ -250,21 +275,51 @@ const Index = () => {
         {authReady && (
           session ? (
             <>
-              {/* Avatar - Clickable, serves as logout button */}
               <button
                 type="button"
-                onClick={() => void signOut()}
-                className="flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
-                title="Click to sign out"
+                onClick={handleRefreshChat}
+                disabled={!hasChatHistory || isLoading}
+                className={cn(
+                  "flex-shrink-0 cursor-pointer rounded-full border border-border/50 bg-muted/40 p-1.5 text-foreground/80 transition-opacity hover:bg-muted/60",
+                  (!hasChatHistory || isLoading) && "opacity-60 cursor-not-allowed",
+                )}
+                title={hasChatHistory ? "Refresh chat" : "Nothing to refresh yet"}
               >
-                <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm">
-                  {avatarUrl ? (
-                    <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
-                  ) : (
-                    <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
-                  )}
-                </Avatar>
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">Refresh chat</span>
               </button>
+              {/* Avatar with dropdown menu */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex-shrink-0 cursor-pointer hover:opacity-80 transition-opacity"
+                    title="Account menu"
+                  >
+                    <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm">
+                      {avatarUrl ? (
+                        <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
+                      ) : (
+                        <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
+                      )}
+                    </Avatar>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>
+                    <div className="flex flex-col">
+                      <span>{displayName}</span>
+                      {session?.user?.email && (
+                        <span className="text-xs text-muted-foreground font-normal">{session.user.email}</span>
+                      )}
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem onClick={handleSignOut} className="cursor-pointer">
+                    <LogIn className="mr-2 h-4 w-4" />
+                    Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </>
           ) : (
             <button
@@ -363,53 +418,82 @@ const Index = () => {
                 {session && messages.map((message, index) => (
                   <ChatMessage key={index} message={message} />
                 ))}
-                {session && isLoading && (
-                  <div className="flex gap-3 justify-start items-center animate-fade-in">
-                    <div className="h-9 w-9 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
-                      <div className="thinking-runner-icon">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                          <circle cx="8" cy="5" r="2" fill="currentColor" />
-                          <path
-                            d="M7 7.5c1.5.5 2.8 1.4 3.6 2.7l1.1 1.9c.3.5.9.9 1.5 1l2.3.4"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <path
-                            d="M6 11.5l2.2-1.6L9 12l-1.2 2"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                          <path
-                            d="M11 14.5l-1.2 2.2L7.5 16 6 17.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                      </div>
-                    </div>
-                    <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex gap-1">
-                          <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                          <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                          <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                {session && isLoading && (() => {
+                  // Get the latest progress message from MCP events
+                  const latestProgressEvent = mcpEvents
+                    .filter(e => e.type === "system" && e.metadata?.message && (
+                      e.metadata.category === "progress" ||
+                      e.metadata.category === "tool_call_progress" ||
+                      e.metadata.category === "tool_result_progress" ||
+                      e.metadata.category === "agent_progress" ||
+                      e.metadata.category === "heartbeat"
+                    ))
+                    .sort((a, b) => b.timestamp - a.timestamp)[0];
+                  
+                  const progressMessage = latestProgressEvent?.metadata?.message as string | undefined;
+                  const displayMessage = progressMessage || "Thinking hard on your request...";
+                  
+                  return (
+                    <div className="flex gap-3 justify-start items-center animate-fade-in">
+                      <div className="h-9 w-9 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
+                        <div className="thinking-runner-icon">
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="8" cy="5" r="2" fill="currentColor" />
+                            <path
+                              d="M7 7.5c1.5.5 2.8 1.4 3.6 2.7l1.1 1.9c.3.5.9.9 1.5 1l2.3.4"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.7"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <path
+                              d="M6 11.5l2.2-1.6L9 12l-1.2 2"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.7"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                            <path
+                              d="M11 14.5l-1.2 2.2L7.5 16 6 17.5"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="1.7"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
                         </div>
-                        <span className="text-xs text-foreground/60">
-                          Thinking hard on your request...
-                        </span>
+                      </div>
+                      <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex gap-1">
+                            <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                            <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                            <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                          </div>
+                          <span className="text-xs text-foreground/60">
+                            {displayMessage}
+                          </span>
+                          {/* Add link to view logs when hanging */}
+                          <a
+                            href="https://supabase.com/dashboard/project/akxdroedpsvmckvqvggr/functions/chat/logs"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] text-blue-500 hover:text-blue-600 underline mt-1 flex items-center gap-1"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                            }}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            View logs in Supabase
+                          </a>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
                 <div ref={messagesEndRef} />
               </div>
             </div>
