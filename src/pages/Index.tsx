@@ -252,7 +252,7 @@ const Index = () => {
     if (!timestamp) return flag; // If no timestamp, assume it's valid (backward compatibility)
     const completedAt = parseInt(timestamp, 10);
     const now = Date.now();
-    const isRecent = (now - completedAt) < 15000; // 15 seconds
+    const isRecent = (now - completedAt) < 35000; // 35 seconds (increased to match callback timeout)
     if (!isRecent) {
       // Clean up stale flag
       sessionStorage.removeItem('oauth_just_completed');

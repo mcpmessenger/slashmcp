@@ -954,6 +954,70 @@ export function useChat() {
         return;
       }
       
+      // Check if OAuth just completed - if so, wait longer and check more aggressively
+      const oauthJustCompleted = typeof window !== "undefined" && sessionStorage.getItem('oauth_just_completed') === 'true';
+      if (oauthJustCompleted) {
+        console.log("[Auth] OAuth just completed - waiting for session to be available...");
+        setAuthReady(true); // Set immediately so UI doesn't block
+        
+        // Try multiple times with increasing delays to find the session
+        let attempt = 0;
+        const maxAttempts = 5;
+        const checkSession = () => {
+          if (isCancelled) return;
+          attempt++;
+          
+          // Try localStorage first (fastest)
+          const storedSession = getStoredSupabaseSession();
+          if (storedSession) {
+            console.log(`[Auth] Found session in localStorage after OAuth completion (attempt ${attempt})`);
+            updateSession(storedSession);
+            return;
+          }
+          
+          // Then try getSession
+          supabaseClient.auth
+            .getSession()
+            .then(({ data, error }) => {
+              if (isCancelled) return;
+              if (error) {
+                console.warn(`[Auth] getSession error after OAuth completion (attempt ${attempt}):`, error);
+                // Retry if we haven't exceeded max attempts
+                if (attempt < maxAttempts) {
+                  setTimeout(checkSession, 500 * attempt); // Exponential backoff
+                } else {
+                  console.warn("[Auth] Max attempts reached, will wait for onAuthStateChange");
+                  // Don't set session to null - onAuthStateChange will handle it
+                }
+              } else if (data.session) {
+                console.log(`[Auth] Session found via getSession after OAuth completion (attempt ${attempt})`);
+                updateSession(data.session);
+              } else {
+                console.log(`[Auth] No session yet after OAuth completion (attempt ${attempt}/${maxAttempts})`);
+                // Retry if we haven't exceeded max attempts
+                if (attempt < maxAttempts) {
+                  setTimeout(checkSession, 500 * attempt); // Exponential backoff
+                } else {
+                  console.log("[Auth] Max attempts reached, will wait for onAuthStateChange");
+                  // Don't set session to null - onAuthStateChange will handle it
+                }
+              }
+            })
+            .catch((error) => {
+              if (isCancelled) return;
+              console.warn(`[Auth] getSession error after OAuth completion (attempt ${attempt}):`, error);
+              // Retry if we haven't exceeded max attempts
+              if (attempt < maxAttempts) {
+                setTimeout(checkSession, 500 * attempt); // Exponential backoff
+              }
+            });
+        };
+        
+        // Start checking immediately, then with delays
+        checkSession();
+        return;
+      }
+      
       // Try to restore session from localStorage directly (faster than getSession)
       const storedSession = getStoredSupabaseSession();
       if (storedSession) {
@@ -1081,6 +1145,17 @@ export function useChat() {
       
       // Always update session state based on auth state change
       updateSession(nextSession);
+      
+      // If OAuth just completed and we get a SIGNED_IN event, ensure authReady is set and session is updated
+      const oauthJustCompleted = typeof window !== "undefined" && sessionStorage.getItem('oauth_just_completed') === 'true';
+      if (oauthJustCompleted && (event === "SIGNED_IN" || event === "TOKEN_REFRESHED")) {
+        console.log("[Auth] OAuth completion detected with SIGNED_IN/TOKEN_REFRESHED event");
+        setAuthReady(true);
+        // Session is already updated by updateSession(nextSession) above, but log it
+        if (nextSession) {
+          console.log("[Auth] Session restored via onAuthStateChange after OAuth completion");
+        }
+      }
       
       if (event === "SIGNED_OUT") {
         // Clear registry and login prompt on sign out

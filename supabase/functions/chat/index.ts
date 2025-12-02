@@ -436,14 +436,35 @@ serve(async (req) => {
             requestBody.similarity_threshold = 0.7; // Minimum similarity threshold
           }
 
-          const response = await fetch(DOC_CONTEXT_URL, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
-            },
-            body: JSON.stringify(requestBody),
-          });
+          // Add timeout to prevent hanging
+          const DOC_CONTEXT_TIMEOUT_MS = 30_000; // 30 seconds for document context
+          const docContextAbortController = new AbortController();
+          const docContextTimeoutId = setTimeout(() => {
+            docContextAbortController.abort();
+          }, DOC_CONTEXT_TIMEOUT_MS);
+          
+          let response: Response;
+          try {
+            response = await fetch(DOC_CONTEXT_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
+              },
+              body: JSON.stringify(requestBody),
+              signal: docContextAbortController.signal,
+            });
+            clearTimeout(docContextTimeoutId);
+          } catch (fetchError) {
+            clearTimeout(docContextTimeoutId);
+            if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+              console.error("Document context fetch timeout after", DOC_CONTEXT_TIMEOUT_MS, "ms");
+              // Continue without document context rather than failing the entire request
+              throw new Error("Document context request timed out");
+            }
+            throw fetchError;
+          }
+          
           if (!response.ok) {
             const errorText = await response.text().catch(() => "");
             throw new Error(`doc-context responded with ${response.status} ${errorText}`);
@@ -1669,25 +1690,53 @@ serve(async (req) => {
           "Examples: 'Find Starbucks in Des Moines' → `/google-places-mcp search_places query=\"Starbucks in Des Moines\"`\n\n" +
           "When you need to execute a command, format it exactly as shown above. The system will execute it and return results.";
         
-        const response = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model: "gpt-4o-mini",
-            messages: [
-              { role: "system", content: fallbackSystemPrompt },
-              ...conversation,
-            ],
-            stream: true,
-          }),
-        });
+        // Add timeout to prevent hanging
+        const FETCH_TIMEOUT_MS = 60_000; // 60 seconds for initial connection
+        const abortController = new AbortController();
+        const timeoutId = setTimeout(() => {
+          abortController.abort();
+        }, FETCH_TIMEOUT_MS);
+        
+        let response: Response;
+        try {
+          response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: "gpt-4o-mini",
+              messages: [
+                { role: "system", content: fallbackSystemPrompt },
+                ...conversation,
+              ],
+              stream: true,
+            }),
+            signal: abortController.signal,
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.error("OpenAI API fetch timeout after", FETCH_TIMEOUT_MS, "ms");
+            eventStream.sendEvent({
+              type: "error",
+              timestamp: Date.now(),
+              error: "Request timeout: OpenAI API took too long to respond",
+            });
+            eventStream.sendContent("I apologize, but the request timed out. The API took too long to respond. Please try again.");
+            eventStream.close();
+            return new Response(eventStream.stream, {
+              headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+            });
+          }
+          throw fetchError;
+        }
 
         if (!response || !response.ok) {
-          const errorText = await response.text();
-          console.error("OpenAI API error:", response.status, errorText);
+          const errorText = response ? await response.text().catch(() => `Status: ${response.status}`) : "No response received";
+          console.error("OpenAI API error:", response?.status || "no status", errorText);
           const errorMsg = `OpenAI API request failed: ${errorText}`;
           eventStream.sendEvent({
             type: "error",
@@ -2006,20 +2055,49 @@ serve(async (req) => {
         throw new Error("ANTHROPIC_API_KEY is not configured");
       }
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-3-haiku-20240307",
-          system: systemPrompt,
-          max_tokens: 1024,
-          messages: mapMessagesForAnthropic(conversation),
-        }),
-      });
+      // Add timeout to prevent hanging
+      const FETCH_TIMEOUT_MS = 60_000; // 60 seconds for initial connection
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        abortController.abort();
+      }, FETCH_TIMEOUT_MS);
+      
+      let response: Response;
+      try {
+        response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: "claude-3-haiku-20240307",
+            system: systemPrompt,
+            max_tokens: 1024,
+            messages: mapMessagesForAnthropic(conversation),
+          }),
+          signal: abortController.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          console.error("Anthropic API fetch timeout after", FETCH_TIMEOUT_MS, "ms");
+          const errorStream = createEventStream(corsHeaders);
+          errorStream.sendEvent({
+            type: "error",
+            timestamp: Date.now(),
+            error: "Request timeout: Anthropic API took too long to respond",
+          });
+          errorStream.sendContent("I apologize, but the request timed out. The API took too long to respond. Please try again.");
+          errorStream.close();
+          return new Response(errorStream.stream, {
+            headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+          });
+        }
+        throw fetchError;
+      }
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -2062,21 +2140,50 @@ serve(async (req) => {
       throw new Error("GEMINI_API_KEY is not configured");
     }
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          system_instruction: {
-            parts: [{ text: systemPrompt }],
+    // Add timeout to prevent hanging
+    const FETCH_TIMEOUT_MS = 60_000; // 60 seconds for initial connection
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, FETCH_TIMEOUT_MS);
+    
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
           },
-          contents: mapMessagesForGemini(conversation),
-        }),
-      },
-    );
+          body: JSON.stringify({
+            system_instruction: {
+              parts: [{ text: systemPrompt }],
+            },
+            contents: mapMessagesForGemini(conversation),
+          }),
+          signal: abortController.signal,
+        },
+      );
+      clearTimeout(timeoutId);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        console.error("Gemini API fetch timeout after", FETCH_TIMEOUT_MS, "ms");
+        const errorStream = createEventStream(corsHeaders);
+        errorStream.sendEvent({
+          type: "error",
+          timestamp: Date.now(),
+          error: "Request timeout: Gemini API took too long to respond",
+        });
+        errorStream.sendContent("I apologize, but the request timed out. The API took too long to respond. Please try again.");
+        errorStream.close();
+        return new Response(errorStream.stream, {
+          headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+        });
+      }
+      throw fetchError;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
