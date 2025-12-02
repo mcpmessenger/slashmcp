@@ -2480,6 +2480,8 @@ export function useChat() {
           return;
         }
         console.error("[useChat] Response body exists, starting to read stream...");
+        console.error("[useChat] Response OK check - response.ok:", response.ok);
+        console.error("[useChat] Response status:", response.status);
       } catch (fetchError) {
         clearTimeout(fetchTimeoutId);
         console.error("[useChat] Fetch error:", fetchError);
@@ -2506,17 +2508,28 @@ export function useChat() {
         throw fetchError;
       }
 
+      console.error("[useChat] ===== CHECKING RESPONSE STATUS =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] response.ok:", response.ok);
+      console.error("[useChat] response.body exists:", !!response.body);
+      console.error("[useChat] response.status:", response.status);
+      
       if (!response.ok || !response.body) {
+        console.error("[useChat] ===== RESPONSE NOT OK OR NO BODY =====");
+        console.error("[useChat] Guest mode:", guestMode);
+        console.error("[useChat] Response not OK or no body - response.ok:", response.ok, "response.body:", !!response.body);
         let errorMessage = "Failed to start stream";
         try {
           const errorData = await response.json().catch(() => null);
+          console.error("[useChat] Error data from response:", errorData);
           if (errorData?.error) {
             errorMessage = errorData.error;
             if (errorData.details) {
               errorMessage += ` (${errorData.details})`;
             }
           }
-        } catch {
+        } catch (parseError) {
+          console.error("[useChat] Error parsing error response:", parseError);
           // If JSON parsing fails, use status text
           errorMessage = response.statusText || `HTTP ${response.status}`;
         }
@@ -2551,10 +2564,15 @@ export function useChat() {
         return;
       }
 
+      console.error("[useChat] ===== RESPONSE IS OK, GETTING READER =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] About to get reader from response.body...");
       const reader = response.body.getReader();
+      console.error("[useChat] Reader obtained successfully");
       const decoder = new TextDecoder();
       let textBuffer = "";
       let streamDone = false;
+      console.error("[useChat] Stream variables initialized");
       
       // Add timeout handling for stream reading
       const STREAM_TIMEOUT_MS = 300_000; // 5 minutes max
