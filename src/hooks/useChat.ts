@@ -2211,20 +2211,31 @@ export function useChat() {
     console.error("[useChat] ===== SEND MESSAGE CALLED ====="); // Use error level so it's always visible
     console.warn("[useChat] ===== SEND MESSAGE CALLED ====="); // Also use warn level
     console.log("[useChat] ===== SEND MESSAGE CALLED =====");
-    console.log("[useChat] Input:", input);
-    console.log("[useChat] Document context:", documentContext);
-    console.log("[useChat] Auth ready:", authReady);
-    console.log("[useChat] Session:", session ? "exists" : "none");
-    console.log("[useChat] Guest mode:", guestMode);
+    console.error("[useChat] Input:", input);
+    console.error("[useChat] Document context:", documentContext);
+    console.error("[useChat] Auth ready:", authReady);
+    console.error("[useChat] Session:", session ? "exists" : "none");
+    console.error("[useChat] Guest mode:", guestMode);
     
     // Set loading state with safety timeout
-    console.log("[useChat] About to set isLoading to true");
-    setIsLoading(true);
-    console.log("[useChat] isLoading set to true");
-    // Clear previous MCP events when starting a new message
-    setMcpEvents([]);
+    console.error("[useChat] About to set isLoading to true");
+    try {
+      setIsLoading(true);
+      console.error("[useChat] isLoading set to true - SUCCESS");
+    } catch (error) {
+      console.error("[useChat] ERROR setting isLoading:", error);
+      throw error;
+    }
     
-    console.log("[useChat] Loading set to true, proceeding to chat request...");
+    // Clear previous MCP events when starting a new message
+    try {
+      setMcpEvents([]);
+      console.error("[useChat] MCP events cleared");
+    } catch (error) {
+      console.error("[useChat] ERROR clearing MCP events:", error);
+    }
+    
+    console.error("[useChat] Loading set to true, proceeding to chat request...");
     
     // Safety: Ensure isLoading is reset even if execution stops unexpectedly
     let loadingResetTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
@@ -2261,10 +2272,12 @@ export function useChat() {
       });
     };
 
+    console.error("[useChat] About to enter try block");
     try {
+      console.error("[useChat] Inside try block");
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      console.log("[useChat] Raw VITE_SUPABASE_URL from env:", supabaseUrl);
-      console.log("[useChat] All env vars:", Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
+      console.error("[useChat] Raw VITE_SUPABASE_URL from env:", supabaseUrl);
+      console.error("[useChat] All env vars:", Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
       
       if (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL') || supabaseUrl.includes('your-supabase-ref')) {
         const errorMsg = "Supabase URL is not configured. Please set VITE_SUPABASE_URL environment variable.";
