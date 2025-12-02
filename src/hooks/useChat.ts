@@ -2741,6 +2741,7 @@ export function useChat() {
           console.error("[useChat] Loop iteration complete, streamDone:", streamDone);
         }
       } catch (streamError) {
+        console.error("[useChat] ===== STREAM READING ERROR =====");
         console.error("Stream reading error:", streamError);
         reader.cancel();
         setIsLoading(false);
@@ -2752,13 +2753,27 @@ export function useChat() {
         });
         setMessages(prev => prev.slice(0, -1));
       } finally {
+        console.error("[useChat] ===== ENTERING FINALLY BLOCK =====");
+        console.error("[useChat] Guest mode:", guestMode);
         // Cleanup timeouts
-        if (streamTimeoutId) clearTimeout(streamTimeoutId);
+        console.error("[useChat] Cleaning up timeouts...");
+        if (streamTimeoutId) {
+          console.error("[useChat] Clearing streamTimeoutId");
+          clearTimeout(streamTimeoutId);
+        }
+        console.error("[useChat] Clearing overallTimeoutId");
         clearTimeout(overallTimeoutId);
+        console.error("[useChat] Clearing initialConnectionTimeout");
         clearTimeout(initialConnectionTimeout);
+        console.error("[useChat] All timeouts cleared");
       }
 
+      console.error("[useChat] ===== AFTER FINALLY BLOCK =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] Checking textBuffer for remaining content...");
+      console.error("[useChat] textBuffer.trim() length:", textBuffer.trim().length);
       if (textBuffer.trim()) {
+        console.error("[useChat] Processing remaining textBuffer content...");
         for (let raw of textBuffer.split("\n")) {
           if (!raw) continue;
           if (raw.endsWith("\r")) raw = raw.slice(0, -1);
@@ -2783,10 +2798,20 @@ export function useChat() {
             console.warn("Failed to parse SSE line (buffer):", jsonStr, error);
           }
         }
+        console.error("[useChat] Finished processing remaining textBuffer");
+      } else {
+        console.error("[useChat] No remaining textBuffer content to process");
       }
 
+      console.error("[useChat] ===== STREAM PROCESSING COMPLETE =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] About to set isLoading to false...");
       setIsLoading(false);
+      console.error("[useChat] isLoading set to false");
+      console.error("[useChat] About to call cleanupLoadingTimeout...");
       cleanupLoadingTimeout();
+      console.error("[useChat] cleanupLoadingTimeout called");
+      console.error("[useChat] ===== SEND MESSAGE FUNCTION COMPLETE =====");
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
