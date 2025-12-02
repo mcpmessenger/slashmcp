@@ -1065,11 +1065,21 @@ export function useChat() {
         updateSession(null);
       });
 
+    // Safety: Ensure authReady is always set, even if something goes wrong
+    // This prevents the app from being stuck on loading screen
+    const safetyTimeout = setTimeout(() => {
+      if (!isCancelled) {
+        console.warn("[Auth] Safety timeout - forcing authReady to true");
+        setAuthReady(true);
+      }
+    }, 1000); // 1 second safety net
+
     return () => {
       isCancelled = true;
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
+      clearTimeout(safetyTimeout);
     };
   }, [updateSession]);
 
