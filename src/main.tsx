@@ -7,18 +7,8 @@ import "./index.css";
 if (typeof window !== "undefined" && window.location.hash.includes("access_token")) {
   // Store the hash globally so the application's session logic can access it.
   (window as any).oauthHash = window.location.hash;
-  // Mark that we've handled this OAuth callback to prevent loops
-  try {
-    sessionStorage.setItem('oauth_callback_handled', 'true');
-  } catch(e) {}
   // Strip the hash from the URL immediately to prevent GoTrue from seeing it.
   window.history.replaceState(null, "", window.location.pathname + window.location.search);
-  // Clear it multiple times to be absolutely sure
-  setTimeout(function() {
-    if (window.location.hash.includes('access_token')) {
-      window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    }
-  }, 0);
 }
 
 const rootElement = document.getElementById("root");
