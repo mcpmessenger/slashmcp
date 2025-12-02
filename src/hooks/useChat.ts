@@ -103,18 +103,26 @@ const hydrateSupabaseSessionFromStorage = async (): Promise<Session | null> => {
   const stored = getStoredSupabaseSession();
   if (!stored) return null;
   try {
-    const { error } = await supabaseClient.auth.setSession({
+    const { data, error } = await supabaseClient.auth.setSession({
       access_token: stored.access_token,
       refresh_token: stored.refresh_token,
     });
     if (error) {
       console.warn("Failed to apply stored Supabase session", error);
+      // Don't return the session if setSession failed - it's invalid
+      return null;
     }
+    // Only return if setSession succeeded
+    const session = data?.session;
+    if (session) {
+      persistSessionToStorage(session);
+      return session;
+    }
+    return null;
   } catch (error) {
     console.warn("Error while applying stored Supabase session", error);
+    return null;
   }
-  persistSessionToStorage(stored);
-  return stored;
 };
 
 type BaseMessage = {
