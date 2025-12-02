@@ -971,6 +971,12 @@ export function useChat() {
 
         if (error) {
           console.error("Failed to set session from URL params", error);
+          // Clear hash even on failure to prevent loops
+          if ((window as any).oauthHash) {
+            delete (window as any).oauthHash;
+          }
+          const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+          window.history.replaceState({}, document.title, cleanUrl);
           return false;
         }
 
@@ -988,7 +994,7 @@ export function useChat() {
           persistSessionToStorage(session);
         }
 
-        // Clear the global hash variable after successful session application
+        // Clear the global hash variable after session application (success or failure)
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
@@ -999,6 +1005,12 @@ export function useChat() {
         return true;
       } catch (error) {
         console.error("Error applying session from URL params", error);
+        // Clear hash on exception too
+        if ((window as any).oauthHash) {
+          delete (window as any).oauthHash;
+        }
+        const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+        window.history.replaceState({}, document.title, cleanUrl);
         return false;
       }
     };
@@ -1029,7 +1041,7 @@ export function useChat() {
       return false;
     };
 
-    // Set a timeout to prevent infinite loading (5 seconds max)
+    // Set a timeout to prevent infinite loading (2 seconds max for faster guest mode access)
     timeoutId = setTimeout(() => {
       if (resolved || isCancelled) return;
       console.warn("Auth check timeout - attempting local session restore");
@@ -1046,9 +1058,18 @@ export function useChat() {
             updateSession(null);
           }
         });
-    }, 5000);
+    }, 2000);
 
     const initializeAuth = async () => {
+      // If there's no OAuth hash, set authReady immediately to allow guest mode
+      const hasOAuthHash = typeof window !== "undefined" && 
+        ((window as any).oauthHash || window.location.hash.includes("access_token"));
+      
+      if (!hasOAuthHash) {
+        // No OAuth redirect, allow immediate access (guest mode or existing session)
+        setAuthReady(true);
+      }
+      
       const restoredFromUrl = await applySessionFromUrl();
       if (restoredFromUrl) {
         resolved = true;
