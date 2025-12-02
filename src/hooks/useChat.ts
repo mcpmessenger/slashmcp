@@ -918,6 +918,7 @@ export function useChat() {
 
   useEffect(() => {
     let isCancelled = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     // Check if Supabase client is properly initialized
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -933,32 +934,142 @@ export function useChat() {
       return;
     }
 
-    // Simplified auth initialization - rely on Supabase SDK's native session handling
-    // The hash is already stripped in index.html to prevent GoTrue from seeing it
-    // The SDK will manage sessions via localStorage and onAuthStateChange listener
-    supabaseClient.auth
-      .getSession()
-      .then(({ data, error }) => {
-        if (isCancelled) return;
-        if (error) {
-          console.warn("Failed to fetch Supabase session", error);
+    // Check for OAuth hash stored by index.html script
+    const hasOAuthHash = typeof window !== "undefined" && 
+      (window as any).oauthHash && 
+      (window as any).oauthHash.includes("access_token");
+
+    console.log("[Auth] Initializing auth check", { hasOAuthHash });
+
+    // If no OAuth hash, set authReady immediately and check session in background
+    if (!hasOAuthHash) {
+      // Set authReady immediately to show UI
+      console.log("[Auth] No OAuth hash - setting authReady immediately");
+      setAuthReady(true);
+      
+      // Check for existing session in background
+      supabaseClient.auth
+        .getSession()
+        .then(({ data, error }) => {
+          if (isCancelled) return;
+          if (error) {
+            console.warn("Failed to fetch Supabase session", error);
+            updateSession(null);
+          } else if (data.session) {
+            updateSession(data.session);
+          } else {
+            updateSession(null);
+          }
+        })
+        .catch((error) => {
+          if (isCancelled) return;
+          console.error("Supabase getSession error", error);
           updateSession(null);
-        } else if (data.session) {
-          updateSession(data.session);
-        } else {
-          updateSession(null);
+        });
+      return;
+    }
+
+    // We have an OAuth hash - process it with timeout
+    const processOAuthHash = async () => {
+      if (typeof window === "undefined") return false;
+      const hash = (window as any).oauthHash;
+      if (!hash || !hash.includes("access_token")) return false;
+
+      try {
+        const params = new URLSearchParams(hash.replace(/^#/, ""));
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
+
+        if (!accessToken || !refreshToken) {
+          // Clear invalid hash
+          delete (window as any).oauthHash;
+          return false;
         }
+
+        const { data, error } = await supabaseClient.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+
+        if (error) {
+          console.warn("Failed to set session from OAuth hash", error);
+          delete (window as any).oauthHash;
+          return false;
+        }
+
+        if (data.session) {
+          updateSession(data.session);
+          // Clear hash after successful processing
+          delete (window as any).oauthHash;
+          return true;
+        }
+        return false;
+      } catch (error) {
+        console.error("Error processing OAuth hash", error);
+        delete (window as any).oauthHash;
+        return false;
+      }
+    };
+
+    // Set timeout to ensure authReady is set even if processing hangs
+    timeoutId = setTimeout(() => {
+      if (!isCancelled) {
+        console.warn("OAuth processing timeout - setting authReady to true");
         setAuthReady(true);
+      }
+    }, 3000); // 3 second timeout for OAuth processing
+
+    // Process OAuth hash
+    processOAuthHash()
+      .then((processed) => {
+        if (isCancelled) return;
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        
+        // Check for session even if OAuth processing failed
+        supabaseClient.auth
+          .getSession()
+          .then(({ data, error }) => {
+            if (isCancelled) return;
+            if (error) {
+              console.warn("Failed to fetch Supabase session", error);
+              if (!processed) {
+                updateSession(null);
+              }
+            } else if (data.session) {
+              updateSession(data.session);
+            } else if (!processed) {
+              updateSession(null);
+            }
+            setAuthReady(true);
+          })
+          .catch((error) => {
+            if (isCancelled) return;
+            console.error("Supabase getSession error", error);
+            if (!processed) {
+              updateSession(null);
+            }
+            setAuthReady(true);
+          });
       })
       .catch((error) => {
         if (isCancelled) return;
-        console.error("Supabase getSession error", error);
-        updateSession(null);
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
+        console.error("OAuth processing failed", error);
         setAuthReady(true);
+        updateSession(null);
       });
 
     return () => {
       isCancelled = true;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [updateSession]);
 
