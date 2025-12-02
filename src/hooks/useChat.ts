@@ -2573,15 +2573,21 @@ export function useChat() {
       let textBuffer = "";
       let streamDone = false;
       console.error("[useChat] Stream variables initialized");
+      console.error("[useChat] Setting up stream timeout handling...");
       
       // Add timeout handling for stream reading
       const STREAM_TIMEOUT_MS = 300_000; // 5 minutes max
       const STREAM_HEARTBEAT_TIMEOUT_MS = 60_000; // 1 minute without data = potential hang
+      console.error("[useChat] Timeout constants set - STREAM_TIMEOUT_MS:", STREAM_TIMEOUT_MS, "HEARTBEAT:", STREAM_HEARTBEAT_TIMEOUT_MS);
       let lastDataTime = Date.now();
+      console.error("[useChat] lastDataTime initialized:", lastDataTime);
       let streamTimeoutId: ReturnType<typeof setTimeout> | null = null;
+      console.error("[useChat] streamTimeoutId initialized");
       
       // Set up timeout to detect hanging streams
+      console.error("[useChat] Defining resetStreamTimeout function...");
       const resetStreamTimeout = () => {
+        console.error("[useChat] resetStreamTimeout called");
         if (streamTimeoutId) clearTimeout(streamTimeoutId);
         streamTimeoutId = setTimeout(() => {
           const timeSinceLastData = Date.now() - lastDataTime;
@@ -2599,11 +2605,16 @@ export function useChat() {
           }
         }, STREAM_HEARTBEAT_TIMEOUT_MS);
       };
+      console.error("[useChat] resetStreamTimeout function defined");
       
+      console.error("[useChat] Calling resetStreamTimeout()...");
       resetStreamTimeout();
+      console.error("[useChat] resetStreamTimeout() completed");
       
       // Overall timeout
+      console.error("[useChat] Setting up overall timeout...");
       const overallTimeoutId = setTimeout(() => {
+        console.error("[useChat] Overall timeout triggered!");
         console.error("Stream timeout: operation took longer than", STREAM_TIMEOUT_MS / 1000, "seconds");
         reader.cancel();
         setIsLoading(false);
@@ -2616,8 +2627,11 @@ export function useChat() {
 
       // Add initial connection timeout - if no data arrives within 10 seconds, cancel
       // Reduced from 30s to 10s to fail faster if backend isn't responding
-      console.log("[useChat] Starting stream read, setting initial timeout...");
+      console.error("[useChat] ===== STARTING STREAM READ ======");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] Starting stream read, setting initial timeout...");
       const initialConnectionTimeout = setTimeout(() => {
+        console.error("[useChat] Initial connection timeout triggered!");
         const timeSinceStart = Date.now() - lastDataTime;
         console.error("[useChat] Initial connection timeout triggered, time since start:", timeSinceStart, "ms");
         if (timeSinceStart > 10_000) {
