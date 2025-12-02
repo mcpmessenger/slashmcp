@@ -577,6 +577,8 @@ const Index = () => {
         {authReady && (session || guestMode) && (
           <ChatInput
             onSubmit={async (input) => {
+              console.error("[Index] ===== ONSUBMIT CALLED ====="); // Use error level
+              console.warn("[Index] ===== ONSUBMIT CALLED ====="); // Also warn
               console.log("[Index] ===== ONSUBMIT CALLED =====");
               console.log("[Index] Input:", input);
               console.log("[Index] isLoading:", isLoading);

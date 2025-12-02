@@ -2207,6 +2207,9 @@ export function useChat() {
       return;
     }
 
+    // CRITICAL: Log immediately with multiple methods to ensure visibility
+    console.error("[useChat] ===== SEND MESSAGE CALLED ====="); // Use error level so it's always visible
+    console.warn("[useChat] ===== SEND MESSAGE CALLED ====="); // Also use warn level
     console.log("[useChat] ===== SEND MESSAGE CALLED =====");
     console.log("[useChat] Input:", input);
     console.log("[useChat] Document context:", documentContext);
@@ -2215,7 +2218,9 @@ export function useChat() {
     console.log("[useChat] Guest mode:", guestMode);
     
     // Set loading state with safety timeout
+    console.log("[useChat] About to set isLoading to true");
     setIsLoading(true);
+    console.log("[useChat] isLoading set to true");
     // Clear previous MCP events when starting a new message
     setMcpEvents([]);
     
