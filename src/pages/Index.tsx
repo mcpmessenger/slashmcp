@@ -459,10 +459,10 @@ const Index = () => {
                     {renderModelMenu("compact")}
                   </div>
                 )}
-                {session && messages.map((message, index) => (
+                {(session || guestMode) && messages.map((message, index) => (
                   <ChatMessage key={index} message={message} />
                 ))}
-                {session && isLoading && (() => {
+                {(session || guestMode) && isLoading && (() => {
                   // Get the latest progress message from MCP events
                   const latestProgressEvent = mcpEvents
                     .filter(e => e.type === "system" && e.metadata?.message && (
