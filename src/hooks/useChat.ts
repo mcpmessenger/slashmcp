@@ -945,7 +945,7 @@ export function useChat() {
     if (!hasOAuthHash) {
       console.log("[Auth] No OAuth hash - checking localStorage for session");
       
-      // Don't restore session if we're in the middle of signing out
+      // Don't restore session if we're in the middle of signing out (but allow OAuth)
       const isSigningOut = typeof window !== "undefined" && sessionStorage.getItem('signing-out');
       if (isSigningOut) {
         console.log("[Auth] Sign-out in progress, skipping session restoration");
@@ -1013,6 +1013,12 @@ export function useChat() {
       if (typeof window === "undefined") return false;
       const hash = (window as any).oauthHash;
       if (!hash || !hash.includes("access_token")) return false;
+
+      // Clear signing-out flag if present (OAuth means we're signing in, not out)
+      if (sessionStorage.getItem('signing-out')) {
+        console.log("[Auth] Clearing signing-out flag - OAuth redirect detected");
+        sessionStorage.removeItem('signing-out');
+      }
 
       // Check if we've already processed this hash to prevent loops
       const hashKey = `oauth_hash_processed_${hash.substring(0, 50)}`;
