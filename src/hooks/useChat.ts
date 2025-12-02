@@ -1304,7 +1304,17 @@ export function useChat() {
       // Sign out from Supabase
       await supabaseClient.auth.signOut();
       
-      // Clear all session storage
+      // Explicitly clear all localStorage session entries
+      if (typeof window !== "undefined") {
+        if (SUPABASE_STORAGE_KEY) {
+          window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
+        }
+        if (CUSTOM_SUPABASE_SESSION_KEY) {
+          window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+        }
+      }
+      
+      // Clear all session state
       updateSession(null);
       setRegistry([]);
       setLoginPrompt(false);
@@ -1315,6 +1325,17 @@ export function useChat() {
       });
     } catch (error) {
       console.error("Supabase sign-out failed", error);
+      // Even if Supabase signOut fails, clear local state
+      updateSession(null);
+      setRegistry([]);
+      if (typeof window !== "undefined") {
+        if (SUPABASE_STORAGE_KEY) {
+          window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
+        }
+        if (CUSTOM_SUPABASE_SESSION_KEY) {
+          window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+        }
+      }
       toast({
         title: "Sign-out failed",
         description: error instanceof Error ? error.message : "Unable to sign out right now.",
