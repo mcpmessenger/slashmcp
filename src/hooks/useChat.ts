@@ -907,6 +907,14 @@ export function useChat() {
   const [registry, setRegistry] = useState<McpRegistryEntry[]>([]);
   const [loginPrompt, setLoginPrompt] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const updateSession = useCallback((nextSession: Session | null) => {
+    setSession(nextSession);
+    persistSessionToStorage(nextSession);
+  }, []);
+  const [authReady, setAuthReady] = useState(false);
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [guestMode, setGuestMode] = useState(false);
+  const { toast } = useToast();
   
   // Safety mechanism: Reset isLoading if it's been stuck for too long
   useEffect(() => {
@@ -933,14 +941,6 @@ export function useChat() {
     
     return () => clearTimeout(timeoutId);
   }, [isLoading, toast]);
-  const updateSession = useCallback((nextSession: Session | null) => {
-    setSession(nextSession);
-    persistSessionToStorage(nextSession);
-  }, []);
-  const [authReady, setAuthReady] = useState(false);
-  const [isAuthLoading, setIsAuthLoading] = useState(false);
-  const [guestMode, setGuestMode] = useState(false);
-  const { toast } = useToast();
 
   useEffect(() => {
     let isCancelled = false;
