@@ -46,18 +46,56 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_PROJECT_REF =
   SUPABASE_URL?.replace("https://", "")?.split(".supabase.co")?.[0]?.split(".")[0] ?? null;
 const SUPABASE_STORAGE_KEY = SUPABASE_PROJECT_REF ? `sb-${SUPABASE_PROJECT_REF}-auth-token` : null;
+const CUSTOM_SUPABASE_SESSION_KEY = SUPABASE_PROJECT_REF ? `slashmcp-session-${SUPABASE_PROJECT_REF}` : null;
+
+const persistSessionToStorage = (session: Session | null) => {
+  if (typeof window === "undefined" || !CUSTOM_SUPABASE_SESSION_KEY) return;
+  try {
+    if (!session) {
+      window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+      return;
+    }
+    const serializableSession = {
+      ...session,
+      expires_at: session.expires_at,
+      expires_in: session.expires_in,
+      token_type: session.token_type,
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+      user: session.user,
+      provider_token: (session as any).provider_token,
+      provider_refresh_token: (session as any).provider_refresh_token,
+    };
+    window.localStorage.setItem(CUSTOM_SUPABASE_SESSION_KEY, JSON.stringify(serializableSession));
+  } catch (error) {
+    console.warn("Failed to persist Supabase session", error);
+  }
+};
 
 const getStoredSupabaseSession = (): Session | null => {
   if (typeof window === "undefined" || !SUPABASE_STORAGE_KEY) return null;
   try {
     const raw = window.localStorage.getItem(SUPABASE_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    return parsed?.currentSession ?? parsed?.session ?? null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      const session = parsed?.currentSession ?? parsed?.session ?? null;
+      if (session) {
+        return session;
+      }
+    }
   } catch (error) {
     console.warn("Unable to parse stored Supabase session", error);
+  }
+  if (typeof window === "undefined" || !CUSTOM_SUPABASE_SESSION_KEY) return null;
+  try {
+    const fallbackRaw = window.localStorage.getItem(CUSTOM_SUPABASE_SESSION_KEY);
+    if (!fallbackRaw) return null;
+    return JSON.parse(fallbackRaw);
+  } catch (error) {
+    console.warn("Unable to parse fallback Supabase session", error);
     return null;
   }
+  return null;
 };
 
 const hydrateSupabaseSessionFromStorage = async (): Promise<Session | null> => {
@@ -74,6 +112,7 @@ const hydrateSupabaseSessionFromStorage = async (): Promise<Session | null> => {
   } catch (error) {
     console.warn("Error while applying stored Supabase session", error);
   }
+  persistSessionToStorage(stored);
   return stored;
 };
 
@@ -876,11 +915,19 @@ export function useChat() {
   const appendAssistantText = useCallback((text: string) => {
     setMessages(prev => [...prev, { role: "assistant", type: "text", content: text }]);
   }, []);
+  const resetChat = useCallback(() => {
+    setMessages([]);
+    setMcpEvents([]);
+  }, []);
   const [isLoading, setIsLoading] = useState(false);
   const [provider, setProvider] = useState<Provider>("openai");
   const [registry, setRegistry] = useState<McpRegistryEntry[]>([]);
   const [loginPrompt, setLoginPrompt] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const updateSession = useCallback((nextSession: Session | null) => {
+    setSession(nextSession);
+    persistSessionToStorage(nextSession);
+  }, []);
   const [authReady, setAuthReady] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const { toast } = useToast();
@@ -889,6 +936,56 @@ export function useChat() {
     let isCancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let resolved = false;
+
+    const applySessionFromUrl = async (): Promise<boolean> => {
+      if (typeof window === "undefined") return false;
+      const hash = window.location.hash;
+      if (!hash || !hash.includes("access_token")) {
+        return false;
+      }
+
+      const params = new URLSearchParams(hash.replace(/^#/, ""));
+      const accessToken = params.get("access_token");
+      const refreshToken = params.get("refresh_token");
+
+      if (!accessToken || !refreshToken) {
+        return false;
+      }
+
+      try {
+        const { data, error } = await supabaseClient.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        });
+
+        if (error) {
+          console.error("Failed to set session from URL params", error);
+          return false;
+        }
+
+        const session = data.session;
+        if (session) {
+          const providerToken = params.get("provider_token");
+          const providerRefreshToken = params.get("provider_refresh_token");
+          if (providerToken) {
+            (session as any).provider_token = providerToken;
+          }
+          if (providerRefreshToken) {
+            (session as any).provider_refresh_token = providerRefreshToken;
+          }
+          updateSession(session);
+          persistSessionToStorage(session);
+        }
+
+        const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
+        window.history.replaceState({}, document.title, cleanUrl);
+
+        return true;
+      } catch (error) {
+        console.error("Error applying session from URL params", error);
+        return false;
+      }
+    };
 
     // Check if Supabase client is properly initialized
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -901,7 +998,7 @@ export function useChat() {
       });
       if (timeoutId) clearTimeout(timeoutId);
       setAuthReady(true);
-      setSession(null);
+      updateSession(null);
       return;
     }
 
@@ -909,7 +1006,7 @@ export function useChat() {
       if (isCancelled) return;
       const restored = await hydrateSupabaseSessionFromStorage();
       if (restored) {
-        setSession(restored);
+        updateSession(restored);
         setAuthReady(true);
         return true;
       }
@@ -923,61 +1020,75 @@ export function useChat() {
       fallbackRestore().then((restored) => {
         if (!restored && !isCancelled) {
           setAuthReady(true);
-          setSession(null);
+          updateSession(null);
         }
       });
     }, 5000);
 
-    supabaseClient.auth
-      .getSession()
-      .then(async ({ data, error }) => {
-        resolved = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        if (isCancelled) return;
-        if (error) {
-          console.error("Failed to fetch Supabase session", error);
-          const restored = await hydrateSupabaseSessionFromStorage();
-          if (restored) {
-            setSession(restored);
-          } else {
-            setSession(null);
-          }
-        } else if (data.session) {
-          setSession(data.session);
-        } else {
-          const restored = await hydrateSupabaseSessionFromStorage();
-          if (restored) {
-            setSession(restored);
-          } else {
-            setSession(null);
-          }
-        }
-        setAuthReady(true);
-      })
-      .catch(async error => {
+    const initializeAuth = async () => {
+      const restoredFromUrl = await applySessionFromUrl();
+      if (restoredFromUrl) {
         resolved = true;
         if (timeoutId) clearTimeout(timeoutId);
         if (!isCancelled) {
-          console.error("Supabase getSession error", error);
-          const restored = await hydrateSupabaseSessionFromStorage();
-          if (restored) {
-            setSession(restored);
-          } else {
-            setSession(null);
-          }
           setAuthReady(true);
         }
-      });
+        return;
+      }
+
+      supabaseClient.auth
+        .getSession()
+        .then(async ({ data, error }) => {
+          resolved = true;
+          if (timeoutId) clearTimeout(timeoutId);
+          if (isCancelled) return;
+          if (error) {
+            console.error("Failed to fetch Supabase session", error);
+            const restored = await hydrateSupabaseSessionFromStorage();
+            if (restored) {
+              updateSession(restored);
+            } else {
+              updateSession(null);
+            }
+          } else if (data.session) {
+            updateSession(data.session);
+          } else {
+            const restored = await hydrateSupabaseSessionFromStorage();
+            if (restored) {
+              updateSession(restored);
+            } else {
+              updateSession(null);
+            }
+          }
+          setAuthReady(true);
+        })
+        .catch(async error => {
+          resolved = true;
+          if (timeoutId) clearTimeout(timeoutId);
+          if (!isCancelled) {
+            console.error("Supabase getSession error", error);
+            const restored = await hydrateSupabaseSessionFromStorage();
+            if (restored) {
+              updateSession(restored);
+            } else {
+              updateSession(null);
+            }
+            setAuthReady(true);
+          }
+        });
+    };
+
+    initializeAuth();
 
     return () => {
       isCancelled = true;
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, []);
+  }, [updateSession]);
 
   useEffect(() => {
     const { data: listener } = supabaseClient.auth.onAuthStateChange(async (event, nextSession) => {
-      setSession(nextSession);
+      updateSession(nextSession);
       if (event === "SIGNED_IN" && nextSession?.user) {
         setLoginPrompt(false);
         
@@ -1042,7 +1153,7 @@ export function useChat() {
         listener.subscription.unsubscribe();
       }
     };
-  }, [toast]);
+  }, [toast, updateSession]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1164,7 +1275,7 @@ export function useChat() {
   const signOut = useCallback(async () => {
     try {
       await supabaseClient.auth.signOut();
-      setSession(null);
+      updateSession(null);
       setRegistry([]);
       setLoginPrompt(false);
       toast({
@@ -1179,7 +1290,7 @@ export function useChat() {
         variant: "destructive",
       });
     }
-  }, [toast]);
+  }, [toast, updateSession]);
 
   const runImageGeneration = useCallback(
     async (promptText: string) => {
@@ -2010,11 +2121,55 @@ export function useChat() {
       const decoder = new TextDecoder();
       let textBuffer = "";
       let streamDone = false;
+      
+      // Add timeout handling for stream reading
+      const STREAM_TIMEOUT_MS = 300_000; // 5 minutes max
+      const STREAM_HEARTBEAT_TIMEOUT_MS = 60_000; // 1 minute without data = potential hang
+      let lastDataTime = Date.now();
+      let streamTimeoutId: ReturnType<typeof setTimeout> | null = null;
+      
+      // Set up timeout to detect hanging streams
+      const resetStreamTimeout = () => {
+        if (streamTimeoutId) clearTimeout(streamTimeoutId);
+        streamTimeoutId = setTimeout(() => {
+          const timeSinceLastData = Date.now() - lastDataTime;
+          if (timeSinceLastData >= STREAM_HEARTBEAT_TIMEOUT_MS) {
+            console.warn("Stream appears to be hanging, no data received in", timeSinceLastData, "ms");
+            // Send a progress event to show we're still waiting
+            setMcpEvents(prev => [...prev, {
+              type: "system",
+              timestamp: Date.now(),
+              metadata: { 
+                message: `Waiting for response... (${Math.floor(timeSinceLastData / 1000)}s elapsed)`,
+                category: "stream_timeout_warning"
+              },
+            } as McpEvent]);
+          }
+        }, STREAM_HEARTBEAT_TIMEOUT_MS);
+      };
+      
+      resetStreamTimeout();
+      
+      // Overall timeout
+      const overallTimeoutId = setTimeout(() => {
+        console.error("Stream timeout: operation took longer than", STREAM_TIMEOUT_MS / 1000, "seconds");
+        reader.cancel();
+        setIsLoading(false);
+        toast({
+          title: "Request Timeout",
+          description: "The request took too long to complete. Please try again with a simpler request.",
+          variant: "destructive",
+        });
+      }, STREAM_TIMEOUT_MS);
 
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        textBuffer += decoder.decode(value, { stream: true });
+      try {
+        while (!streamDone) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          lastDataTime = Date.now();
+          resetStreamTimeout();
+          textBuffer += decoder.decode(value, { stream: true });
 
         let newlineIndex: number;
         while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
@@ -2050,6 +2205,10 @@ export function useChat() {
             break;
           }
         }
+      } finally {
+        // Cleanup timeouts
+        if (streamTimeoutId) clearTimeout(streamTimeoutId);
+        clearTimeout(overallTimeoutId);
       }
 
       if (textBuffer.trim()) {
@@ -2083,11 +2242,22 @@ export function useChat() {
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
-      toast({
-        title: "Error",
-        description: errorMessage || "Failed to send message. Please try again.",
-        variant: "destructive",
-      });
+      
+      // Check if it's a timeout error
+      if (errorMessage.includes("timeout") || errorMessage.includes("took too long")) {
+        toast({
+          title: "Request Timeout",
+          description: "The request took too long to complete. Please try breaking your request into smaller parts.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Error",
+          description: errorMessage || "Failed to send message. Please try again.",
+          variant: "destructive",
+        });
+      }
+      
       setMessages(prev => prev.slice(0, -1));
       setIsLoading(false);
     }
@@ -2165,11 +2335,12 @@ export function useChat() {
         variant: "destructive",
       });
     }
-  }, [toast]);
+  }, [toast, updateSession]);
 
   return {
     messages,
     sendMessage,
+    resetChat,
     captureOAuthTokens,
     isLoading,
     provider,
