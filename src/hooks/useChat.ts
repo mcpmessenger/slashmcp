@@ -1017,12 +1017,19 @@ export function useChat() {
     timeoutId = setTimeout(() => {
       if (resolved || isCancelled) return;
       console.warn("Auth check timeout - attempting local session restore");
-      fallbackRestore().then((restored) => {
-        if (!restored && !isCancelled) {
-          setAuthReady(true);
-          updateSession(null);
-        }
-      });
+      setAuthReady(true);
+      fallbackRestore()
+        .then((restored) => {
+          if (!restored && !isCancelled) {
+            updateSession(null);
+          }
+        })
+        .catch(error => {
+          console.warn("Fallback session restore failed:", error);
+          if (!isCancelled) {
+            updateSession(null);
+          }
+        });
     }, 5000);
 
     const initializeAuth = async () => {
