@@ -2733,9 +2733,12 @@ export function useChat() {
               console.error("[useChat] ERROR parsing JSON:", error);
               console.warn("Failed to parse SSE line:", jsonStr, error);
               textBuffer = line + "\n" + textBuffer;
+              console.error("[useChat] Restored line to buffer after parse error");
               break;
             }
           }
+          console.error("[useChat] Finished parsing all lines, processed", lineCount, "lines. textBuffer remaining:", textBuffer.length);
+          console.error("[useChat] Loop iteration complete, streamDone:", streamDone);
         }
       } catch (streamError) {
         console.error("Stream reading error:", streamError);
