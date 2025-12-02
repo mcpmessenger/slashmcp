@@ -2647,9 +2647,17 @@ export function useChat() {
         }
       }, 10_000);
 
+      console.error("[useChat] ===== ABOUT TO ENTER STREAM READING LOOP =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] streamDone:", streamDone);
       try {
+        console.error("[useChat] Entered try block, starting while loop");
         while (!streamDone) {
+          console.error("[useChat] ===== READING FROM STREAM =====");
+          console.error("[useChat] Guest mode:", guestMode);
+          console.error("[useChat] About to call reader.read()...");
           const { done, value } = await reader.read();
+          console.error("[useChat] Stream read completed - done:", done, "value length:", value?.length || 0, "bytes");
           if (done) {
             clearTimeout(initialConnectionTimeout);
             break;
