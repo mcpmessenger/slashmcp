@@ -2395,12 +2395,13 @@ export function useChat() {
         provider,
       };
       console.error("[useChat] Payload created, adding document context if needed...");
-        messages: history,
-        provider,
-      };
       if (documentContextPayload.length > 0) {
         payload.documentContext = documentContextPayload;
+        console.error("[useChat] Document context added to payload");
+      } else {
+        console.error("[useChat] No document context to add");
       }
+      console.error("[useChat] Payload finalized, setting up fetch timeout...");
 
       // Add timeout to the fetch request itself
       const FETCH_TIMEOUT_MS = 30_000; // 30 seconds to establish connection
