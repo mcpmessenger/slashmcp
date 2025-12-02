@@ -1110,26 +1110,17 @@ export function useChat() {
 
   useEffect(() => {
     const { data: listener } = supabaseClient.auth.onAuthStateChange(async (event, nextSession) => {
+      // Always update session state based on auth state change
+      updateSession(nextSession);
+      
       if (event === "SIGNED_OUT") {
-        // Explicitly clear all storage on sign out
-        if (typeof window !== "undefined") {
-          if (SUPABASE_STORAGE_KEY) {
-            window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
-          }
-          if (CUSTOM_SUPABASE_SESSION_KEY) {
-            window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
-          }
-          if ((window as any).oauthHash) {
-            delete (window as any).oauthHash;
-          }
-        }
-        updateSession(null);
+        // Clear registry and login prompt on sign out
         setRegistry([]);
         setLoginPrompt(false);
+        // Note: Don't clear localStorage here - let signOut function handle it
+        // to avoid interfering with OAuth flow
         return;
       }
-      
-      updateSession(nextSession);
       if (event === "SIGNED_IN" && nextSession?.user) {
         setLoginPrompt(false);
         
@@ -1311,46 +1302,35 @@ export function useChat() {
   }, [isAuthLoading, toast]);
 
   const signOut = useCallback(async () => {
-    console.log("[SignOut] Starting sign out process...");
     try {
-      // Clear OAuth hash if present
-      if (typeof window !== "undefined" && (window as any).oauthHash) {
-        delete (window as any).oauthHash;
-        console.log("[SignOut] Cleared oauthHash");
-      }
+      // Sign out from Supabase first (this will trigger onAuthStateChange with SIGNED_OUT)
+      await supabaseClient.auth.signOut();
       
-      // Explicitly clear all localStorage session entries FIRST
+      // Then clear all localStorage session entries
       if (typeof window !== "undefined") {
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
-          console.log("[SignOut] Cleared SUPABASE_STORAGE_KEY");
         }
         if (CUSTOM_SUPABASE_SESSION_KEY) {
           window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
-          console.log("[SignOut] Cleared CUSTOM_SUPABASE_SESSION_KEY");
+        }
+        if ((window as any).oauthHash) {
+          delete (window as any).oauthHash;
         }
       }
       
-      // Clear all session state BEFORE calling Supabase signOut
-      // This ensures UI updates immediately
+      // Clear all session state
       updateSession(null);
       setRegistry([]);
       setLoginPrompt(false);
-      
-      // Sign out from Supabase (this will trigger onAuthStateChange)
-      await supabaseClient.auth.signOut();
-      console.log("[SignOut] Supabase signOut completed");
       
       toast({
         title: "Signed out",
         description: "You have been signed out.",
       });
     } catch (error) {
-      console.error("[SignOut] Supabase sign-out failed", error);
+      console.error("Supabase sign-out failed", error);
       // Even if Supabase signOut fails, clear local state
-      updateSession(null);
-      setRegistry([]);
-      setLoginPrompt(false);
       if (typeof window !== "undefined") {
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
@@ -1358,7 +1338,13 @@ export function useChat() {
         if (CUSTOM_SUPABASE_SESSION_KEY) {
           window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
         }
+        if ((window as any).oauthHash) {
+          delete (window as any).oauthHash;
+        }
       }
+      updateSession(null);
+      setRegistry([]);
+      setLoginPrompt(false);
       toast({
         title: "Signed out",
         description: "You have been signed out locally.",
