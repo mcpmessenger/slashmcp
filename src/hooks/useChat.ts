@@ -941,19 +941,49 @@ export function useChat() {
 
     console.log("[Auth] Initializing auth check", { hasOAuthHash });
 
-    // If no OAuth hash, set authReady immediately and check session in background
+    // If no OAuth hash, try to restore session from localStorage first
     if (!hasOAuthHash) {
-      // Set authReady immediately to show UI
-      console.log("[Auth] No OAuth hash - setting authReady immediately");
+      console.log("[Auth] No OAuth hash - checking localStorage for session");
+      
+      // Try to restore session from localStorage directly (faster than getSession)
+      const storedSession = getStoredSupabaseSession();
+      if (storedSession) {
+        console.log("[Auth] Found session in localStorage, restoring...");
+        updateSession(storedSession);
+        setAuthReady(true);
+        
+        // Verify with getSession in background (non-blocking)
+        supabaseClient.auth
+          .getSession()
+          .then(({ data, error }) => {
+            if (isCancelled) return;
+            if (error) {
+              console.warn("[Auth] getSession verification failed", error);
+              // Keep the localStorage session if getSession fails
+            } else if (data.session) {
+              // Update with fresh session if available
+              updateSession(data.session);
+            }
+          })
+          .catch((error) => {
+            if (isCancelled) return;
+            console.warn("[Auth] getSession verification error", error);
+            // Keep the localStorage session
+          });
+        return;
+      }
+      
+      // No session in localStorage - set authReady and check getSession
+      console.log("[Auth] No session in localStorage - setting authReady");
       setAuthReady(true);
       
-      // Check for existing session in background
+      // Check for existing session in background (non-blocking)
       supabaseClient.auth
         .getSession()
         .then(({ data, error }) => {
           if (isCancelled) return;
           if (error) {
-            console.warn("Failed to fetch Supabase session", error);
+            console.warn("[Auth] Failed to fetch Supabase session", error);
             updateSession(null);
           } else if (data.session) {
             updateSession(data.session);
@@ -963,7 +993,7 @@ export function useChat() {
         })
         .catch((error) => {
           if (isCancelled) return;
-          console.error("Supabase getSession error", error);
+          console.error("[Auth] Supabase getSession error", error);
           updateSession(null);
         });
       return;
