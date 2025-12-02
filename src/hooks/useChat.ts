@@ -2178,9 +2178,18 @@ export function useChat() {
       return;
     }
 
+    console.log("[useChat] ===== SEND MESSAGE CALLED =====");
+    console.log("[useChat] Input:", input);
+    console.log("[useChat] Document context:", documentContext);
+    console.log("[useChat] Auth ready:", authReady);
+    console.log("[useChat] Session:", session ? "exists" : "none");
+    console.log("[useChat] Guest mode:", guestMode);
+    
     setIsLoading(true);
     // Clear previous MCP events when starting a new message
     setMcpEvents([]);
+    
+    console.log("[useChat] Loading set to true, proceeding to chat request...");
     let assistantContent = "";
 
     const updateAssistantMessage = (chunk: string) => {
