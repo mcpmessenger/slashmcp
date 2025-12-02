@@ -1348,26 +1348,31 @@ export function useChat() {
   }, [isAuthLoading, toast]);
 
   const signOut = useCallback(async () => {
+    console.log("[SignOut] Starting sign out process...");
     try {
-      // 1. Call Supabase sign-out
-      const { error } = await supabaseClient.auth.signOut();
-      
-      if (error) {
-        console.error("Supabase sign-out failed:", error);
-        toast({
-          title: "Sign-out Failed",
-          description: error.message,
-          variant: "destructive",
-        });
-        // Still clear local state even if Supabase sign-out fails
-      }
+      // 3. Reset local state FIRST to prevent UI from showing session
+      updateSession(null);
+      setGuestMode(false);
+      setRegistry([]);
+      setLoginPrompt(false);
       
       // 2. Clear custom local storage session
       persistSessionToStorage(null);
       if (typeof window !== "undefined") {
+        // Clear all Supabase-related storage
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
         }
+        if (CUSTOM_SUPABASE_SESSION_KEY) {
+          window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+        }
+        // Clear all Supabase auth tokens (they use project ref in key)
+        Object.keys(localStorage).forEach(key => {
+          if (key.includes('auth-token') || key.startsWith('sb-')) {
+            console.log("[SignOut] Removing localStorage key:", key);
+            localStorage.removeItem(key);
+          }
+        });
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
@@ -1379,39 +1384,47 @@ export function useChat() {
         });
       }
       
-      // 3. Reset local state
+      // 1. Call Supabase sign-out (after clearing local state)
+      const { error } = await supabaseClient.auth.signOut();
+      
+      if (error) {
+        console.error("[SignOut] Supabase sign-out failed:", error);
+        toast({
+          title: "Sign-out Failed",
+          description: error.message,
+          variant: "destructive",
+        });
+      } else {
+        console.log("[SignOut] Successfully signed out from Supabase");
+        toast({
+          title: "Signed out",
+          description: "You have been successfully signed out.",
+        });
+      }
+    } catch (error) {
+      console.error("[SignOut] Sign-out error:", error);
+      // Even if sign-out fails, ensure local state is cleared
       updateSession(null);
       setGuestMode(false);
       setRegistry([]);
       setLoginPrompt(false);
-      
-      toast({
-        title: "Signed out",
-        description: error ? "You have been signed out locally." : "You have been successfully signed out.",
-        variant: error ? "default" : "default",
-      });
-    } catch (error) {
-      console.error("Sign-out error:", error);
-      // Even if sign-out fails, clear local state
       persistSessionToStorage(null);
       if (typeof window !== "undefined") {
-        if (SUPABASE_STORAGE_KEY) {
-          window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
-        }
+        // Clear all Supabase-related storage
+        Object.keys(localStorage).forEach(key => {
+          if (key.includes('auth-token') || key.startsWith('sb-')) {
+            localStorage.removeItem(key);
+          }
+        });
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
-        // Clear sessionStorage OAuth tracking
         Object.keys(sessionStorage).forEach(key => {
           if (key.startsWith('oauth_hash_processed_')) {
             sessionStorage.removeItem(key);
           }
         });
       }
-      updateSession(null);
-      setGuestMode(false);
-      setRegistry([]);
-      setLoginPrompt(false);
       toast({
         title: "Signed out",
         description: "You have been signed out locally.",
