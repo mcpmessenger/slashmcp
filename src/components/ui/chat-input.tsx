@@ -728,11 +728,7 @@ export function ChatInput({
 
   const handleSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
-      console.error("[ChatInput] ===== HANDLE SUBMIT CALLED ====="); // Use error level
-      console.warn("[ChatInput] ===== HANDLE SUBMIT CALLED ====="); // Also warn
-      console.log("[ChatInput] handleSubmit called");
       e.preventDefault();
-      console.log("[ChatInput] Calling submitValue");
       submitValue();
     },
     [submitValue],

@@ -577,15 +577,6 @@ const Index = () => {
         {authReady && (session || guestMode) && (
           <ChatInput
             onSubmit={async (input) => {
-              console.error("[Index] ===== ONSUBMIT CALLED ====="); // Use error level
-              console.warn("[Index] ===== ONSUBMIT CALLED ====="); // Also warn
-              console.log("[Index] ===== ONSUBMIT CALLED =====");
-              console.log("[Index] Input:", input);
-              console.log("[Index] isLoading:", isLoading);
-              console.log("[Index] hasPendingUploads:", hasPendingUploads);
-              console.log("[Index] authReady:", authReady);
-              console.log("[Index] session:", session ? "exists" : "none");
-              console.log("[Index] guestMode:", guestMode);
               
               const jobsToRefresh = uploadJobs.filter(job =>
                 ["processing", "completed"].includes(job.status) &&
@@ -660,7 +651,6 @@ const Index = () => {
               console.log("[Index] Context docs:", contextDocs.length);
               try {
                 sendMessage(input, contextDocs.length > 0 ? contextDocs : undefined);
-                console.log("[Index] sendMessage called successfully");
               } catch (error) {
                 console.error("[Index] Error calling sendMessage:", error);
                 throw error;

@@ -2207,21 +2207,9 @@ export function useChat() {
       return;
     }
 
-    // CRITICAL: Log immediately with multiple methods to ensure visibility
-    console.error("[useChat] ===== SEND MESSAGE CALLED ====="); // Use error level so it's always visible
-    console.warn("[useChat] ===== SEND MESSAGE CALLED ====="); // Also use warn level
-    console.log("[useChat] ===== SEND MESSAGE CALLED =====");
-    console.error("[useChat] Input:", input);
-    console.error("[useChat] Document context:", documentContext);
-    console.error("[useChat] Auth ready:", authReady);
-    console.error("[useChat] Session:", session ? "exists" : "none");
-    console.error("[useChat] Guest mode:", guestMode);
-    
     // Set loading state with safety timeout
-    console.error("[useChat] About to set isLoading to true");
     try {
       setIsLoading(true);
-      console.error("[useChat] isLoading set to true - SUCCESS");
     } catch (error) {
       console.error("[useChat] ERROR setting isLoading:", error);
       throw error;
@@ -2230,12 +2218,9 @@ export function useChat() {
     // Clear previous MCP events when starting a new message
     try {
       setMcpEvents([]);
-      console.error("[useChat] MCP events cleared");
     } catch (error) {
       console.error("[useChat] ERROR clearing MCP events:", error);
     }
-    
-    console.error("[useChat] Loading set to true, proceeding to chat request...");
     
     // Safety: Ensure isLoading is reset even if execution stops unexpectedly
     let loadingResetTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
@@ -2272,19 +2257,12 @@ export function useChat() {
       });
     };
 
-    console.error("[useChat] About to enter try block");
     try {
-      console.error("[useChat] Inside try block");
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      console.error("[useChat] Raw VITE_SUPABASE_URL from env:", supabaseUrl);
-      const envVars = Object.keys(import.meta.env).filter(k => k.startsWith('VITE_'));
-      console.error("[useChat] All env vars:", envVars);
-      console.error("[useChat] Env vars logged, continuing execution...");
       
-      console.error("[useChat] Checking supabaseUrl validity");
       if (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL') || supabaseUrl.includes('your-supabase-ref')) {
         const errorMsg = "Supabase URL is not configured. Please set VITE_SUPABASE_URL environment variable.";
-        console.error("[useChat]", errorMsg, "Current value:", supabaseUrl);
+        console.error("[useChat] Configuration Error:", errorMsg, "Current value:", supabaseUrl);
         setIsLoading(false);
         setMessages(prev => prev.slice(0, -1));
         toast({
@@ -2295,17 +2273,8 @@ export function useChat() {
         return;
       }
       
-      console.error("[useChat] Supabase URL is valid, constructing CHAT_URL");
       const CHAT_URL = `${supabaseUrl}/functions/v1/chat`;
-      console.error("[useChat] ===== CHAT REQUEST DEBUG =====");
-      console.error("[useChat] VITE_SUPABASE_URL:", supabaseUrl);
-      console.error("[useChat] CHAT_URL:", CHAT_URL);
-      console.error("[useChat] Full URL will be:", CHAT_URL);
-      console.error("[useChat] ===============================");
-      
-      console.error("[useChat] Building message history");
       const history = [...messages, userMsg].map(({ role, content }) => ({ role, content }));
-      console.error("[useChat] History length:", history.length);
       
       console.error("[useChat] Building document context payload");
       const documentContextPayload =
@@ -2345,22 +2314,14 @@ export function useChat() {
         }
       }
       
-      console.error("[useChat] Building headers");
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
       
       // Use session token if available, otherwise fall back to anon key
-      console.error("[useChat] ===== AUTH SETUP FOR GUEST MODE =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] Session token exists:", !!sessionToken);
-      console.error("[useChat] Publishable key exists:", !!import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
-      
       if (sessionToken) {
-        console.error("[useChat] Using session token for auth");
         headers.Authorization = `Bearer ${sessionToken}`;
       } else if (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
-        console.error("[useChat] Using publishable key for auth (guest mode or no session)");
         const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
         if (!publishableKey || publishableKey === 'undefined') {
           console.error("[useChat] ERROR: VITE_SUPABASE_PUBLISHABLE_KEY is missing or undefined!");
@@ -2387,21 +2348,14 @@ export function useChat() {
         cleanupLoadingTimeout();
         return;
       }
-      console.error("[useChat] Authorization header set:", headers.Authorization ? "Bearer ***" : "MISSING");
-      console.error("[useChat] Headers setup complete, building payload...");
       
       const payload: Record<string, unknown> = {
         messages: history,
         provider,
       };
-      console.error("[useChat] Payload created, adding document context if needed...");
       if (documentContextPayload.length > 0) {
         payload.documentContext = documentContextPayload;
-        console.error("[useChat] Document context added to payload");
-      } else {
-        console.error("[useChat] No document context to add");
       }
-      console.error("[useChat] Payload finalized, setting up fetch timeout...");
 
       // Add timeout to the fetch request itself
       const FETCH_TIMEOUT_MS = 30_000; // 30 seconds to establish connection
@@ -2410,18 +2364,10 @@ export function useChat() {
         fetchController.abort();
       }, FETCH_TIMEOUT_MS);
 
-      console.error("[useChat] ===== ABOUT TO SEND FETCH REQUEST =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] Sending request to:", CHAT_URL);
-      console.error("[useChat] Payload size:", JSON.stringify(payload).length, "bytes");
-      console.error("[useChat] Payload preview:", JSON.stringify(payload).slice(0, 200));
-      console.error("[useChat] Headers:", { ...headers, Authorization: headers.Authorization ? "Bearer ***" : "MISSING" });
-      console.error("[useChat] Method: POST");
-      
       // Validate URL before making request
       if (!CHAT_URL || CHAT_URL.includes('undefined') || !CHAT_URL.startsWith('http')) {
         const errorMsg = `Invalid CHAT_URL: ${CHAT_URL}. Check VITE_SUPABASE_URL environment variable.`;
-        console.error("[useChat]", errorMsg);
+        console.error("[useChat] Configuration Error:", errorMsg);
         setIsLoading(false);
         setMessages(prev => prev.slice(0, -1));
         toast({
@@ -2451,10 +2397,7 @@ export function useChat() {
         
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
-          console.error("[useChat] ===== FETCH ERROR =====");
-          console.error("[useChat] Guest mode:", guestMode);
-          console.error("[useChat] Response not OK:", response.status, response.statusText);
-          console.error("[useChat] Error response body:", errorText);
+          console.error("[useChat] Request failed:", response.status, response.statusText, guestMode ? '(Guest mode)' : '');
           setIsLoading(false);
           setMessages(prev => prev.slice(0, -1));
           toast({
@@ -2466,9 +2409,7 @@ export function useChat() {
           return;
         }
         if (!response.body) {
-          console.error("[useChat] ===== NO RESPONSE BODY =====");
-          console.error("[useChat] Guest mode:", guestMode);
-          console.error("[useChat] Response has no body!");
+          console.error("[useChat] Response has no body");
           setIsLoading(false);
           setMessages(prev => prev.slice(0, -1));
           toast({
@@ -2479,15 +2420,9 @@ export function useChat() {
           cleanupLoadingTimeout();
           return;
         }
-        console.error("[useChat] Response body exists, starting to read stream...");
-        console.error("[useChat] Response OK check - response.ok:", response.ok);
-        console.error("[useChat] Response status:", response.status);
       } catch (fetchError) {
         clearTimeout(fetchTimeoutId);
-        console.error("[useChat] Fetch error:", fetchError);
-        console.error("[useChat] Error type:", fetchError instanceof Error ? fetchError.constructor.name : typeof fetchError);
-        console.error("[useChat] Error message:", fetchError instanceof Error ? fetchError.message : String(fetchError));
-        console.error("[useChat] Error stack:", fetchError instanceof Error ? fetchError.stack : 'No stack');
+        console.error("[useChat] Fetch error:", fetchError instanceof Error ? fetchError.message : String(fetchError));
         if (fetchError instanceof Error && fetchError.name === 'AbortError') {
           setIsLoading(false);
           setMessages(prev => prev.slice(0, -1));
@@ -2508,20 +2443,11 @@ export function useChat() {
         throw fetchError;
       }
 
-      console.error("[useChat] ===== CHECKING RESPONSE STATUS =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] response.ok:", response.ok);
-      console.error("[useChat] response.body exists:", !!response.body);
-      console.error("[useChat] response.status:", response.status);
-      
       if (!response.ok || !response.body) {
-        console.error("[useChat] ===== RESPONSE NOT OK OR NO BODY =====");
-        console.error("[useChat] Guest mode:", guestMode);
-        console.error("[useChat] Response not OK or no body - response.ok:", response.ok, "response.body:", !!response.body);
+        console.error("[useChat] Response error - status:", response.status, "has body:", !!response.body);
         let errorMessage = "Failed to start stream";
         try {
           const errorData = await response.json().catch(() => null);
-          console.error("[useChat] Error data from response:", errorData);
           if (errorData?.error) {
             errorMessage = errorData.error;
             if (errorData.details) {
@@ -2529,7 +2455,6 @@ export function useChat() {
             }
           }
         } catch (parseError) {
-          console.error("[useChat] Error parsing error response:", parseError);
           // If JSON parsing fails, use status text
           errorMessage = response.statusText || `HTTP ${response.status}`;
         }
@@ -2564,35 +2489,24 @@ export function useChat() {
         return;
       }
 
-      console.error("[useChat] ===== RESPONSE IS OK, GETTING READER =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] About to get reader from response.body...");
       const reader = response.body.getReader();
-      console.error("[useChat] Reader obtained successfully");
       const decoder = new TextDecoder();
       let textBuffer = "";
       let streamDone = false;
-      console.error("[useChat] Stream variables initialized");
-      console.error("[useChat] Setting up stream timeout handling...");
       
       // Add timeout handling for stream reading
       const STREAM_TIMEOUT_MS = 300_000; // 5 minutes max
       const STREAM_HEARTBEAT_TIMEOUT_MS = 60_000; // 1 minute without data = potential hang
-      console.error("[useChat] Timeout constants set - STREAM_TIMEOUT_MS:", STREAM_TIMEOUT_MS, "HEARTBEAT:", STREAM_HEARTBEAT_TIMEOUT_MS);
       let lastDataTime = Date.now();
-      console.error("[useChat] lastDataTime initialized:", lastDataTime);
       let streamTimeoutId: ReturnType<typeof setTimeout> | null = null;
-      console.error("[useChat] streamTimeoutId initialized");
       
       // Set up timeout to detect hanging streams
-      console.error("[useChat] Defining resetStreamTimeout function...");
       const resetStreamTimeout = () => {
-        console.error("[useChat] resetStreamTimeout called");
         if (streamTimeoutId) clearTimeout(streamTimeoutId);
         streamTimeoutId = setTimeout(() => {
           const timeSinceLastData = Date.now() - lastDataTime;
           if (timeSinceLastData >= STREAM_HEARTBEAT_TIMEOUT_MS) {
-            console.warn("Stream appears to be hanging, no data received in", timeSinceLastData, "ms");
+            console.warn("[useChat] Stream appears to be hanging, no data received in", timeSinceLastData, "ms");
             // Send a progress event to show we're still waiting
             setMcpEvents(prev => [...prev, {
               type: "system",
@@ -2605,17 +2519,12 @@ export function useChat() {
           }
         }, STREAM_HEARTBEAT_TIMEOUT_MS);
       };
-      console.error("[useChat] resetStreamTimeout function defined");
       
-      console.error("[useChat] Calling resetStreamTimeout()...");
       resetStreamTimeout();
-      console.error("[useChat] resetStreamTimeout() completed");
       
       // Overall timeout
-      console.error("[useChat] Setting up overall timeout...");
       const overallTimeoutId = setTimeout(() => {
-        console.error("[useChat] Overall timeout triggered!");
-        console.error("Stream timeout: operation took longer than", STREAM_TIMEOUT_MS / 1000, "seconds");
+        console.error("[useChat] Stream timeout: operation took longer than", STREAM_TIMEOUT_MS / 1000, "seconds");
         reader.cancel();
         setIsLoading(false);
         toast({
@@ -2627,13 +2536,8 @@ export function useChat() {
 
       // Add initial connection timeout - if no data arrives within 10 seconds, cancel
       // Reduced from 30s to 10s to fail faster if backend isn't responding
-      console.error("[useChat] ===== STARTING STREAM READ ======");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] Starting stream read, setting initial timeout...");
       const initialConnectionTimeout = setTimeout(() => {
-        console.error("[useChat] Initial connection timeout triggered!");
         const timeSinceStart = Date.now() - lastDataTime;
-        console.error("[useChat] Initial connection timeout triggered, time since start:", timeSinceStart, "ms");
         if (timeSinceStart > 10_000) {
           console.error("[useChat] No data received within 10 seconds of connection, canceling stream");
           reader.cancel();
@@ -2647,102 +2551,57 @@ export function useChat() {
         }
       }, 10_000);
 
-      console.error("[useChat] ===== ABOUT TO ENTER STREAM READING LOOP =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] streamDone:", streamDone);
       try {
-        console.error("[useChat] Entered try block, starting while loop");
         while (!streamDone) {
-          console.error("[useChat] ===== READING FROM STREAM =====");
-          console.error("[useChat] Guest mode:", guestMode);
-          console.error("[useChat] About to call reader.read()...");
           const { done, value } = await reader.read();
-          console.error("[useChat] Stream read completed - done:", done, "value length:", value?.length || 0, "bytes");
           if (done) {
             console.error("[useChat] Stream done, breaking loop");
             clearTimeout(initialConnectionTimeout);
             break;
           }
           
-          console.error("[useChat] Stream not done, processing data...");
-          console.error("[useChat] Clearing initial connection timeout...");
           clearTimeout(initialConnectionTimeout); // Clear once we get first data
-          console.error("[useChat] Updating lastDataTime...");
           lastDataTime = Date.now();
-          console.error("[useChat] Calling resetStreamTimeout()...");
           resetStreamTimeout();
-          console.error("[useChat] resetStreamTimeout() returned, decoding value...");
           textBuffer += decoder.decode(value, { stream: true });
-          console.error("[useChat] Value decoded, textBuffer length:", textBuffer.length, "bytes");
 
-          console.error("[useChat] Starting to parse lines from textBuffer...");
           let newlineIndex: number;
-          let lineCount = 0;
           while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
-            lineCount++;
-            console.error("[useChat] Found line", lineCount, "at index", newlineIndex);
             let line = textBuffer.slice(0, newlineIndex);
             textBuffer = textBuffer.slice(newlineIndex + 1);
-            console.error("[useChat] Line", lineCount, "extracted, length:", line.length, "remaining buffer:", textBuffer.length);
 
-            if (line.endsWith("\r")) {
-              console.error("[useChat] Removing \\r from line");
-              line = line.slice(0, -1);
-            }
-            if (line.startsWith(":") || line.trim() === "") {
-              console.error("[useChat] Skipping comment or empty line");
-              continue;
-            }
-            if (!line.startsWith("data: ")) {
-              console.error("[useChat] Line doesn't start with 'data: ', skipping. Line:", line.substring(0, 50));
-              continue;
-            }
+            if (line.endsWith("\r")) line = line.slice(0, -1);
+            if (line.startsWith(":") || line.trim() === "") continue;
+            if (!line.startsWith("data: ")) continue;
 
             const jsonStr = line.slice(6).trim();
-            console.error("[useChat] Extracted JSON string, length:", jsonStr.length);
             if (jsonStr === "[DONE]") {
-              console.error("[useChat] Received [DONE] marker, ending stream");
               streamDone = true;
               break;
             }
 
-            console.error("[useChat] Attempting to parse JSON...");
             try {
               const parsed = JSON.parse(jsonStr);
-              console.error("[useChat] JSON parsed successfully");
               
               // Handle MCP events
               if (parsed.mcpEvent) {
-                console.error("[useChat] Found MCP event, adding to events");
                 console.log("Received MCP event:", parsed.mcpEvent);
                 setMcpEvents(prev => [...prev, parsed.mcpEvent as McpEvent]);
-                console.error("[useChat] MCP event added");
               }
               
               // Handle content
               const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-              console.error("[useChat] Checking for content in parsed data, content exists:", !!content, "length:", content?.length || 0);
-              if (content) {
-                console.error("[useChat] Calling updateAssistantMessage with content length:", content.length);
-                updateAssistantMessage(content);
-                console.error("[useChat] updateAssistantMessage called");
-              }
-              console.error("[useChat] Finished processing line", lineCount);
+              if (content) updateAssistantMessage(content);
             } catch (error) {
               // Log parse errors for debugging
-              console.error("[useChat] ERROR parsing JSON:", error);
-              console.warn("Failed to parse SSE line:", jsonStr, error);
+              console.warn("[useChat] Failed to parse SSE line:", jsonStr, error);
               textBuffer = line + "\n" + textBuffer;
-              console.error("[useChat] Restored line to buffer after parse error");
               break;
             }
           }
-          console.error("[useChat] Finished parsing all lines, processed", lineCount, "lines. textBuffer remaining:", textBuffer.length);
-          console.error("[useChat] Loop iteration complete, streamDone:", streamDone);
         }
       } catch (streamError) {
-        console.error("[useChat] ===== STREAM READING ERROR =====");
-        console.error("Stream reading error:", streamError);
+        console.error("[useChat] Stream reading error:", streamError);
         reader.cancel();
         setIsLoading(false);
         const errorMsg = streamError instanceof Error ? streamError.message : "Stream error";
@@ -2753,27 +2612,13 @@ export function useChat() {
         });
         setMessages(prev => prev.slice(0, -1));
       } finally {
-        console.error("[useChat] ===== ENTERING FINALLY BLOCK =====");
-        console.error("[useChat] Guest mode:", guestMode);
         // Cleanup timeouts
-        console.error("[useChat] Cleaning up timeouts...");
-        if (streamTimeoutId) {
-          console.error("[useChat] Clearing streamTimeoutId");
-          clearTimeout(streamTimeoutId);
-        }
-        console.error("[useChat] Clearing overallTimeoutId");
+        if (streamTimeoutId) clearTimeout(streamTimeoutId);
         clearTimeout(overallTimeoutId);
-        console.error("[useChat] Clearing initialConnectionTimeout");
         clearTimeout(initialConnectionTimeout);
-        console.error("[useChat] All timeouts cleared");
       }
 
-      console.error("[useChat] ===== AFTER FINALLY BLOCK =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] Checking textBuffer for remaining content...");
-      console.error("[useChat] textBuffer.trim() length:", textBuffer.trim().length);
       if (textBuffer.trim()) {
-        console.error("[useChat] Processing remaining textBuffer content...");
         for (let raw of textBuffer.split("\n")) {
           if (!raw) continue;
           if (raw.endsWith("\r")) raw = raw.slice(0, -1);
@@ -2798,20 +2643,10 @@ export function useChat() {
             console.warn("Failed to parse SSE line (buffer):", jsonStr, error);
           }
         }
-        console.error("[useChat] Finished processing remaining textBuffer");
-      } else {
-        console.error("[useChat] No remaining textBuffer content to process");
       }
 
-      console.error("[useChat] ===== STREAM PROCESSING COMPLETE =====");
-      console.error("[useChat] Guest mode:", guestMode);
-      console.error("[useChat] About to set isLoading to false...");
       setIsLoading(false);
-      console.error("[useChat] isLoading set to false");
-      console.error("[useChat] About to call cleanupLoadingTimeout...");
       cleanupLoadingTimeout();
-      console.error("[useChat] cleanupLoadingTimeout called");
-      console.error("[useChat] ===== SEND MESSAGE FUNCTION COMPLETE =====");
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
