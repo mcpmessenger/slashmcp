@@ -555,7 +555,7 @@ const Index = () => {
         )}
 
         {/* Chat Input */}
-        {authReady && session && (
+        {authReady && (session || guestMode) && (
           <ChatInput
             onSubmit={async (input) => {
               const jobsToRefresh = uploadJobs.filter(job =>
