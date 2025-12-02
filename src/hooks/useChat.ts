@@ -2428,7 +2428,6 @@ export function useChat() {
       
       let response: Response;
       try {
-        const fetchStartTime = Date.now();
         console.error("[useChat] ===== STARTING FETCH REQUEST =====");
         console.error("[useChat] Guest mode:", guestMode);
         console.error("[useChat] Starting fetch to:", CHAT_URL);
