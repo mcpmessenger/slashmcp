@@ -1018,6 +1018,7 @@ export function useChat() {
               } else if (data.session) {
                 console.log(`[Auth] Session found via getSession after OAuth completion (attempt ${attempt})`);
                 updateSession(data.session);
+                persistSessionToStorage(data.session); // Explicit persistence to prevent race condition
               } else {
                 console.log(`[Auth] No session yet after OAuth completion (attempt ${attempt}/${maxAttempts})`);
                 // Retry if we haven't exceeded max attempts
@@ -1062,6 +1063,7 @@ export function useChat() {
             } else if (data.session) {
               // Update with fresh session if available
               updateSession(data.session);
+              persistSessionToStorage(data.session); // Explicit persistence to prevent race condition
             }
           })
           .catch((error) => {
@@ -1086,6 +1088,7 @@ export function useChat() {
             updateSession(null);
           } else if (data.session) {
             updateSession(data.session);
+            persistSessionToStorage(data.session); // Explicit persistence to prevent race condition
           } else {
             updateSession(null);
           }
@@ -2302,8 +2305,8 @@ export function useChat() {
       // Use session token if available, otherwise fall back to anon key
       if (session?.access_token) {
         headers.Authorization = `Bearer ${session.access_token}`;
-      } else if (import.meta.env.VITE_SUPABASE_ANON_KEY) {
-        headers.Authorization = `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`;
+      } else if (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
+        headers.Authorization = `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`;
       }
       
       const payload: Record<string, unknown> = {
