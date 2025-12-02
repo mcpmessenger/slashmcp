@@ -1155,7 +1155,15 @@ export function useChat() {
   }, [updateSession]);
 
   useEffect(() => {
+    let isSigningOut = false;
+    
     const { data: listener } = supabaseClient.auth.onAuthStateChange(async (event, nextSession) => {
+      // Ignore auth state changes if we're in the middle of signing out
+      if (isSigningOut && event === "SIGNED_OUT") {
+        console.log("[Auth] Ignoring SIGNED_OUT event during signOut process");
+        return;
+      }
+      
       // Always update session state based on auth state change
       updateSession(nextSession);
       
@@ -1401,6 +1409,9 @@ export function useChat() {
           description: "You have been successfully signed out.",
         });
       }
+      
+      // Clear the sign-out flag
+      sessionStorage.removeItem('signing-out');
     } catch (error) {
       console.error("[SignOut] Sign-out error:", error);
       // Even if sign-out fails, ensure local state is cleared
@@ -1429,6 +1440,9 @@ export function useChat() {
         title: "Signed out",
         description: "You have been signed out locally.",
       });
+      
+      // Clear the sign-out flag
+      sessionStorage.removeItem('signing-out');
     }
   }, [toast, updateSession]);
 
