@@ -1110,6 +1110,25 @@ export function useChat() {
 
   useEffect(() => {
     const { data: listener } = supabaseClient.auth.onAuthStateChange(async (event, nextSession) => {
+      if (event === "SIGNED_OUT") {
+        // Explicitly clear all storage on sign out
+        if (typeof window !== "undefined") {
+          if (SUPABASE_STORAGE_KEY) {
+            window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
+          }
+          if (CUSTOM_SUPABASE_SESSION_KEY) {
+            window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+          }
+          if ((window as any).oauthHash) {
+            delete (window as any).oauthHash;
+          }
+        }
+        updateSession(null);
+        setRegistry([]);
+        setLoginPrompt(false);
+        return;
+      }
+      
       updateSession(nextSession);
       if (event === "SIGNED_IN" && nextSession?.user) {
         setLoginPrompt(false);
@@ -1164,9 +1183,6 @@ export function useChat() {
           console.error("[OAuth] Error capturing tokens:", error);
           // Don't block sign-in if token capture fails
         }
-      }
-      if (event === "SIGNED_OUT") {
-        setRegistry([]);
       }
     });
 
@@ -1295,39 +1311,46 @@ export function useChat() {
   }, [isAuthLoading, toast]);
 
   const signOut = useCallback(async () => {
+    console.log("[SignOut] Starting sign out process...");
     try {
       // Clear OAuth hash if present
       if (typeof window !== "undefined" && (window as any).oauthHash) {
         delete (window as any).oauthHash;
+        console.log("[SignOut] Cleared oauthHash");
       }
       
-      // Sign out from Supabase
-      await supabaseClient.auth.signOut();
-      
-      // Explicitly clear all localStorage session entries
+      // Explicitly clear all localStorage session entries FIRST
       if (typeof window !== "undefined") {
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
+          console.log("[SignOut] Cleared SUPABASE_STORAGE_KEY");
         }
         if (CUSTOM_SUPABASE_SESSION_KEY) {
           window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+          console.log("[SignOut] Cleared CUSTOM_SUPABASE_SESSION_KEY");
         }
       }
       
-      // Clear all session state
+      // Clear all session state BEFORE calling Supabase signOut
+      // This ensures UI updates immediately
       updateSession(null);
       setRegistry([]);
       setLoginPrompt(false);
+      
+      // Sign out from Supabase (this will trigger onAuthStateChange)
+      await supabaseClient.auth.signOut();
+      console.log("[SignOut] Supabase signOut completed");
       
       toast({
         title: "Signed out",
         description: "You have been signed out.",
       });
     } catch (error) {
-      console.error("Supabase sign-out failed", error);
+      console.error("[SignOut] Supabase sign-out failed", error);
       // Even if Supabase signOut fails, clear local state
       updateSession(null);
       setRegistry([]);
+      setLoginPrompt(false);
       if (typeof window !== "undefined") {
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
@@ -1337,9 +1360,8 @@ export function useChat() {
         }
       }
       toast({
-        title: "Sign-out failed",
-        description: error instanceof Error ? error.message : "Unable to sign out right now.",
-        variant: "destructive",
+        title: "Signed out",
+        description: "You have been signed out locally.",
       });
     }
   }, [toast, updateSession]);
