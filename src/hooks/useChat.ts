@@ -1008,147 +1008,47 @@ export function useChat() {
       return;
     }
 
-    // We have an OAuth hash - process it with timeout
-    const processOAuthHash = async () => {
-      if (typeof window === "undefined") return false;
-      const hash = (window as any).oauthHash;
-      if (!hash || !hash.includes("access_token")) return false;
+    // We have an OAuth hash - let Supabase SDK handle it via onAuthStateChange
+    // The hash is already stripped in index.html, so GoTrue won't see it
+    // But Supabase will process it from the redirect and fire SIGNED_IN event
+    // We just need to wait for onAuthStateChange to fire
+    
+    // Clear signing-out flag if present (OAuth means we're signing in, not out)
+    if (sessionStorage.getItem('signing-out')) {
+      console.log("[Auth] Clearing signing-out flag - OAuth redirect detected");
+      sessionStorage.removeItem('signing-out');
+    }
 
-      // Clear signing-out flag if present (OAuth means we're signing in, not out)
-      if (sessionStorage.getItem('signing-out')) {
-        console.log("[Auth] Clearing signing-out flag - OAuth redirect detected");
-        sessionStorage.removeItem('signing-out');
-      }
+    // Clear the hash from window.oauthHash (already stripped from URL in index.html)
+    if ((window as any).oauthHash) {
+      delete (window as any).oauthHash;
+    }
 
-      // Check if we've already processed this hash to prevent loops
-      const hashKey = `oauth_hash_processed_${hash.substring(0, 50)}`;
-      if (sessionStorage.getItem(hashKey)) {
-        console.log("[Auth] OAuth hash already processed, skipping");
-        delete (window as any).oauthHash;
-        return false;
-      }
-
-      try {
-        const params = new URLSearchParams(hash.replace(/^#/, ""));
-        const accessToken = params.get("access_token");
-        const refreshToken = params.get("refresh_token");
-
-        if (!accessToken || !refreshToken) {
-          // Clear invalid hash
-          console.warn("[Auth] OAuth hash missing tokens");
-          delete (window as any).oauthHash;
-          return false;
-        }
-
-        console.log("[Auth] Processing OAuth hash...");
-        
-        // Add timeout to setSession to prevent hanging
-        const setSessionPromise = supabaseClient.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-
-        const timeoutPromise = new Promise<{ data: { session: null }, error: { message: "Timeout" } }>((resolve) => {
-          setTimeout(() => {
-            resolve({ data: { session: null }, error: { message: "Timeout" } });
-          }, 2000); // 2 second timeout for setSession
-        });
-
-        const { data, error } = await Promise.race([setSessionPromise, timeoutPromise]);
-
-        if (error) {
-          console.error("[Auth] Failed to set session from OAuth hash", error);
-          // Mark as processed to prevent retry loop
-          sessionStorage.setItem(hashKey, "failed");
-          delete (window as any).oauthHash;
-          return false;
-        }
-
-        if (data.session) {
-          console.log("[Auth] OAuth session set successfully");
-          updateSession(data.session);
-          // Mark as successfully processed
-          sessionStorage.setItem(hashKey, "success");
-          // Clear hash after successful processing
-          delete (window as any).oauthHash;
-          return true;
-        }
-        console.warn("[Auth] OAuth setSession returned no session");
-        sessionStorage.setItem(hashKey, "no_session");
-        delete (window as any).oauthHash;
-        return false;
-      } catch (error) {
-        console.error("[Auth] Error processing OAuth hash", error);
-        // Mark as processed to prevent retry loop
-        const hashKey = `oauth_hash_processed_${hash.substring(0, 50)}`;
-        sessionStorage.setItem(hashKey, "error");
-        delete (window as any).oauthHash;
-        return false;
-      }
-    };
-
-    // Set timeout to ensure authReady is set even if processing hangs
-    timeoutId = setTimeout(() => {
-      if (!isCancelled) {
-        console.warn("OAuth processing timeout - setting authReady to true");
-        setAuthReady(true);
-      }
-    }, 3000); // 3 second timeout for OAuth processing
-
-    // Process OAuth hash
-    processOAuthHash()
-      .then((processed) => {
+    // Set authReady immediately - onAuthStateChange will handle the session
+    console.log("[Auth] OAuth redirect detected - waiting for onAuthStateChange");
+    setAuthReady(true);
+    
+    // Check for session - Supabase should have processed it by now
+    // If not, onAuthStateChange will fire when it does
+    supabaseClient.auth
+      .getSession()
+      .then(({ data, error }) => {
         if (isCancelled) return;
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
+        if (error) {
+          console.warn("[Auth] getSession error after OAuth redirect", error);
+          // Don't set session to null - onAuthStateChange might still fire
+        } else if (data.session) {
+          console.log("[Auth] Session found after OAuth redirect");
+          updateSession(data.session);
+        } else {
+          console.log("[Auth] No session yet - waiting for onAuthStateChange");
+          // Don't set to null - onAuthStateChange will handle it
         }
-        
-        // Check for session even if OAuth processing failed
-        // Always check getSession - it might have a valid session from localStorage
-        supabaseClient.auth
-          .getSession()
-          .then(({ data, error }) => {
-            if (isCancelled) return;
-            if (error) {
-              console.warn("[Auth] Failed to fetch Supabase session", error);
-              // Only set null if OAuth processing also failed
-              // If OAuth succeeded, the session should already be set
-              if (!processed) {
-                updateSession(null);
-              }
-            } else if (data.session) {
-              // We have a session - use it
-              console.log("[Auth] Found existing session");
-              updateSession(data.session);
-            } else if (!processed) {
-              // No session and OAuth failed - user needs to sign in
-              console.log("[Auth] No session found");
-              updateSession(null);
-            }
-            // Always set authReady so UI can show
-            setAuthReady(true);
-          })
-          .catch((error) => {
-            if (isCancelled) return;
-            console.error("[Auth] Supabase getSession error", error);
-            // Only set null if OAuth processing also failed
-            if (!processed) {
-              updateSession(null);
-            }
-            // Always set authReady so UI can show
-            setAuthReady(true);
-          });
       })
       .catch((error) => {
         if (isCancelled) return;
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-          timeoutId = null;
-        }
-        console.error("OAuth processing failed", error);
-        setAuthReady(true);
-        updateSession(null);
+        console.warn("[Auth] getSession error", error);
+        // Don't set to null - onAuthStateChange will handle it
       });
 
     // Safety: Ensure authReady is always set, even if something goes wrong
