@@ -945,6 +945,15 @@ export function useChat() {
     if (!hasOAuthHash) {
       console.log("[Auth] No OAuth hash - checking localStorage for session");
       
+      // Don't restore session if we're in the middle of signing out
+      const isSigningOut = typeof window !== "undefined" && sessionStorage.getItem('signing-out');
+      if (isSigningOut) {
+        console.log("[Auth] Sign-out in progress, skipping session restoration");
+        setAuthReady(true);
+        updateSession(null);
+        return;
+      }
+      
       // Try to restore session from localStorage directly (faster than getSession)
       const storedSession = getStoredSupabaseSession();
       if (storedSession) {
@@ -1357,6 +1366,12 @@ export function useChat() {
 
   const signOut = useCallback(async () => {
     console.log("[SignOut] Starting sign out process...");
+    
+    // Set a flag to prevent auth state change listener from restoring session
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem('signing-out', 'true');
+    }
+    
     try {
       // 3. Reset local state FIRST to prevent UI from showing session
       updateSession(null);
