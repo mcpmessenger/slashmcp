@@ -949,6 +949,16 @@ export function useChat() {
     const applySessionFromUrl = async (): Promise<boolean> => {
       if (typeof window === "undefined") return false;
 
+      // Check if we've already handled this OAuth callback to prevent loops
+      try {
+        const alreadyHandled = sessionStorage.getItem('oauth_callback_handled');
+        if (alreadyHandled === 'true' && !(window as any).oauthHash && !window.location.hash.includes("access_token")) {
+          // Already handled and hash is cleared - don't try again
+          sessionStorage.removeItem('oauth_callback_handled');
+          return false;
+        }
+      } catch(e) {}
+
       // Use the globally stored hash first, which was stripped in index.html inline script
       const hash = (window as any).oauthHash || window.location.hash;
       if (!hash || !hash.includes("access_token")) {
@@ -975,6 +985,10 @@ export function useChat() {
           if ((window as any).oauthHash) {
             delete (window as any).oauthHash;
           }
+          // Clear the handled flag so we don't block future legitimate OAuth callbacks
+          try {
+            sessionStorage.removeItem('oauth_callback_handled');
+          } catch(e) {}
           const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
           window.history.replaceState({}, document.title, cleanUrl);
           return false;
@@ -998,6 +1012,11 @@ export function useChat() {
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
+        
+        // Clear the handled flag after successful application
+        try {
+          sessionStorage.removeItem('oauth_callback_handled');
+        } catch(e) {}
 
         const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
         window.history.replaceState({}, document.title, cleanUrl);
@@ -1009,6 +1028,10 @@ export function useChat() {
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
+        // Clear the handled flag on exception too
+        try {
+          sessionStorage.removeItem('oauth_callback_handled');
+        } catch(e) {}
         const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
         window.history.replaceState({}, document.title, cleanUrl);
         return false;
