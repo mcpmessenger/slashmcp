@@ -2171,38 +2171,39 @@ export function useChat() {
           resetStreamTimeout();
           textBuffer += decoder.decode(value, { stream: true });
 
-        let newlineIndex: number;
-        while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
-          let line = textBuffer.slice(0, newlineIndex);
-          textBuffer = textBuffer.slice(newlineIndex + 1);
+          let newlineIndex: number;
+          while ((newlineIndex = textBuffer.indexOf("\n")) !== -1) {
+            let line = textBuffer.slice(0, newlineIndex);
+            textBuffer = textBuffer.slice(newlineIndex + 1);
 
-          if (line.endsWith("\r")) line = line.slice(0, -1);
-          if (line.startsWith(":") || line.trim() === "") continue;
-          if (!line.startsWith("data: ")) continue;
+            if (line.endsWith("\r")) line = line.slice(0, -1);
+            if (line.startsWith(":") || line.trim() === "") continue;
+            if (!line.startsWith("data: ")) continue;
 
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === "[DONE]") {
-            streamDone = true;
-            break;
-          }
-
-          try {
-            const parsed = JSON.parse(jsonStr);
-            
-            // Handle MCP events
-            if (parsed.mcpEvent) {
-              console.log("Received MCP event:", parsed.mcpEvent);
-              setMcpEvents(prev => [...prev, parsed.mcpEvent as McpEvent]);
+            const jsonStr = line.slice(6).trim();
+            if (jsonStr === "[DONE]") {
+              streamDone = true;
+              break;
             }
-            
-            // Handle content
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) updateAssistantMessage(content);
-          } catch (error) {
-            // Log parse errors for debugging
-            console.warn("Failed to parse SSE line:", jsonStr, error);
-            textBuffer = line + "\n" + textBuffer;
-            break;
+
+            try {
+              const parsed = JSON.parse(jsonStr);
+              
+              // Handle MCP events
+              if (parsed.mcpEvent) {
+                console.log("Received MCP event:", parsed.mcpEvent);
+                setMcpEvents(prev => [...prev, parsed.mcpEvent as McpEvent]);
+              }
+              
+              // Handle content
+              const content = parsed.choices?.[0]?.delta?.content as string | undefined;
+              if (content) updateAssistantMessage(content);
+            } catch (error) {
+              // Log parse errors for debugging
+              console.warn("Failed to parse SSE line:", jsonStr, error);
+              textBuffer = line + "\n" + textBuffer;
+              break;
+            }
           }
         }
       } finally {
