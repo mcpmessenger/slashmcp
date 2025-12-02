@@ -2351,17 +2351,43 @@ export function useChat() {
       };
       
       // Use session token if available, otherwise fall back to anon key
-      console.error("[useChat] Setting Authorization header");
+      console.error("[useChat] ===== AUTH SETUP FOR GUEST MODE =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] Session token exists:", !!sessionToken);
+      console.error("[useChat] Publishable key exists:", !!import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY);
+      
       if (sessionToken) {
         console.error("[useChat] Using session token for auth");
         headers.Authorization = `Bearer ${sessionToken}`;
       } else if (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
-        console.error("[useChat] Using publishable key for auth");
-        headers.Authorization = `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`;
+        console.error("[useChat] Using publishable key for auth (guest mode or no session)");
+        const publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+        if (!publishableKey || publishableKey === 'undefined') {
+          console.error("[useChat] ERROR: VITE_SUPABASE_PUBLISHABLE_KEY is missing or undefined!");
+          setIsLoading(false);
+          setMessages(prev => prev.slice(0, -1));
+          toast({
+            title: "Configuration Error",
+            description: "Publishable key is not configured. Guest mode requires this key.",
+            variant: "destructive",
+          });
+          cleanupLoadingTimeout();
+          return;
+        }
+        headers.Authorization = `Bearer ${publishableKey}`;
       } else {
-        console.error("[useChat] WARNING: No auth token available!");
+        console.error("[useChat] ERROR: No auth token available!");
+        setIsLoading(false);
+        setMessages(prev => prev.slice(0, -1));
+        toast({
+          title: "Authentication Error",
+          description: "No authentication token available. Please sign in or check configuration.",
+          variant: "destructive",
+        });
+        cleanupLoadingTimeout();
+        return;
       }
-      console.error("[useChat] Headers:", headers);
+      console.error("[useChat] Authorization header set:", headers.Authorization ? "Bearer ***" : "MISSING");
       
       const payload: Record<string, unknown> = {
         messages: history,
@@ -2378,10 +2404,13 @@ export function useChat() {
         fetchController.abort();
       }, FETCH_TIMEOUT_MS);
 
-      console.log("[useChat] Sending request to:", CHAT_URL);
-      console.log("[useChat] Payload:", JSON.stringify(payload).slice(0, 200));
-      console.log("[useChat] Headers:", headers);
-      console.log("[useChat] Method: POST");
+      console.error("[useChat] ===== ABOUT TO SEND FETCH REQUEST =====");
+      console.error("[useChat] Guest mode:", guestMode);
+      console.error("[useChat] Sending request to:", CHAT_URL);
+      console.error("[useChat] Payload size:", JSON.stringify(payload).length, "bytes");
+      console.error("[useChat] Payload preview:", JSON.stringify(payload).slice(0, 200));
+      console.error("[useChat] Headers:", { ...headers, Authorization: headers.Authorization ? "Bearer ***" : "MISSING" });
+      console.error("[useChat] Method: POST");
       
       // Validate URL before making request
       if (!CHAT_URL || CHAT_URL.includes('undefined') || !CHAT_URL.startsWith('http')) {
@@ -2400,7 +2429,10 @@ export function useChat() {
       let response: Response;
       try {
         const fetchStartTime = Date.now();
-        console.log("[useChat] Starting fetch to:", CHAT_URL);
+        console.error("[useChat] ===== STARTING FETCH REQUEST =====");
+        console.error("[useChat] Guest mode:", guestMode);
+        console.error("[useChat] Starting fetch to:", CHAT_URL);
+        const fetchStartTime = Date.now();
         response = await fetch(CHAT_URL, {
           method: "POST",
           headers,
@@ -2414,12 +2446,35 @@ export function useChat() {
         
         if (!response.ok) {
           const errorText = await response.text().catch(() => '');
+          console.error("[useChat] ===== FETCH ERROR =====");
+          console.error("[useChat] Guest mode:", guestMode);
           console.error("[useChat] Response not OK:", response.status, response.statusText);
           console.error("[useChat] Error response body:", errorText);
+          setIsLoading(false);
+          setMessages(prev => prev.slice(0, -1));
+          toast({
+            title: "Request Failed",
+            description: `Server returned ${response.status}: ${response.statusText}. ${guestMode ? '(Guest mode)' : ''}`,
+            variant: "destructive",
+          });
+          cleanupLoadingTimeout();
+          return;
         }
         if (!response.body) {
+          console.error("[useChat] ===== NO RESPONSE BODY =====");
+          console.error("[useChat] Guest mode:", guestMode);
           console.error("[useChat] Response has no body!");
+          setIsLoading(false);
+          setMessages(prev => prev.slice(0, -1));
+          toast({
+            title: "No Response",
+            description: "Server returned no response body.",
+            variant: "destructive",
+          });
+          cleanupLoadingTimeout();
+          return;
         }
+        console.error("[useChat] Response body exists, starting to read stream...");
       } catch (fetchError) {
         clearTimeout(fetchTimeoutId);
         console.error("[useChat] Fetch error:", fetchError);
