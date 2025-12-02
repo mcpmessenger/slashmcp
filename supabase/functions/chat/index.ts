@@ -210,6 +210,18 @@ serve(async (req) => {
     });
   }
 
+  // Explicitly check for POST method
+  if (req.method !== "POST") {
+    console.error("Method not allowed:", req.method);
+    return new Response(
+      JSON.stringify({ error: `Method ${req.method} not allowed. Only POST is supported.` }),
+      {
+        status: 405,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
+  }
+
   // Create event stream at the very start to ensure we always have one
   console.log("Creating event stream...");
   const eventStream = createEventStream(corsHeaders);
