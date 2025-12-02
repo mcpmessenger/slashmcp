@@ -98,31 +98,6 @@ const getStoredSupabaseSession = (): Session | null => {
   return null;
 };
 
-const hydrateSupabaseSessionFromStorage = async (): Promise<Session | null> => {
-  const stored = getStoredSupabaseSession();
-  if (!stored) return null;
-  try {
-    const { data, error } = await supabaseClient.auth.setSession({
-      access_token: stored.access_token,
-      refresh_token: stored.refresh_token,
-    });
-    if (error) {
-      console.warn("Failed to apply stored Supabase session", error);
-      // Don't return the session if setSession failed - it's invalid
-      return null;
-    }
-    // Only return if setSession succeeded
-    const session = data?.session;
-    if (session) {
-      persistSessionToStorage(session);
-      return session;
-    }
-    return null;
-  } catch (error) {
-    console.warn("Error while applying stored Supabase session", error);
-    return null;
-  }
-};
 
 type BaseMessage = {
   role: "user" | "assistant";
@@ -943,80 +918,6 @@ export function useChat() {
 
   useEffect(() => {
     let isCancelled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let resolved = false;
-
-    const applySessionFromUrl = async (): Promise<boolean> => {
-      if (typeof window === "undefined") return false;
-      
-      // Use the globally stored hash first, which was stripped in main.tsx
-      const hash = (window as any).oauthHash || window.location.hash; 
-      
-      if (!hash || !hash.includes("access_token")) {
-        // If the hash was stripped in main.tsx, it will be in (window as any).oauthHash
-        // If it's not there, we can assume the session was not from a fresh OAuth redirect.
-        return false;
-      }
-
-      const params = new URLSearchParams(hash.replace(/^#/, ""));
-      const accessToken = params.get("access_token");
-      const refreshToken = params.get("refresh_token");
-
-      if (!accessToken || !refreshToken) {
-        return false;
-      }
-
-      try {
-        const { data, error } = await supabaseClient.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        });
-
-        if (error) {
-          console.error("Failed to set session from URL params", error);
-          // Clear hash even on failure to prevent loops
-          if ((window as any).oauthHash) {
-            delete (window as any).oauthHash;
-          }
-          const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
-          window.history.replaceState({}, document.title, cleanUrl);
-          return false;
-        }
-
-        const session = data.session;
-        if (session) {
-          const providerToken = params.get("provider_token");
-          const providerRefreshToken = params.get("provider_refresh_token");
-          if (providerToken) {
-            (session as any).provider_token = providerToken;
-          }
-          if (providerRefreshToken) {
-            (session as any).provider_refresh_token = providerRefreshToken;
-          }
-          updateSession(session);
-          persistSessionToStorage(session);
-        }
-
-        // Clear the global hash variable after session application (success or failure)
-        if ((window as any).oauthHash) {
-          delete (window as any).oauthHash;
-        }
-
-        const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
-        window.history.replaceState({}, document.title, cleanUrl);
-
-        return true;
-      } catch (error) {
-        console.error("Error applying session from URL params", error);
-        // Clear hash on exception too
-        if ((window as any).oauthHash) {
-          delete (window as any).oauthHash;
-        }
-        const cleanUrl = `${window.location.origin}${window.location.pathname}${window.location.search}`;
-        window.history.replaceState({}, document.title, cleanUrl);
-        return false;
-      }
-    };
 
     // Check if Supabase client is properly initialized
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -1027,136 +928,37 @@ export function useChat() {
         hasUrl: !!supabaseUrl,
         hasKey: !!supabaseAnonKey,
       });
-      if (timeoutId) clearTimeout(timeoutId);
       setAuthReady(true);
       updateSession(null);
       return;
     }
 
-    const fallbackRestore = async () => {
-      if (isCancelled) return;
-      const restored = await hydrateSupabaseSessionFromStorage();
-      if (restored) {
-        updateSession(restored);
+    // Simplified auth initialization - rely on Supabase SDK's native session handling
+    // The hash is already stripped in index.html to prevent GoTrue from seeing it
+    // The SDK will manage sessions via localStorage and onAuthStateChange listener
+    supabaseClient.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (isCancelled) return;
+        if (error) {
+          console.warn("Failed to fetch Supabase session", error);
+          updateSession(null);
+        } else if (data.session) {
+          updateSession(data.session);
+        } else {
+          updateSession(null);
+        }
         setAuthReady(true);
-        return true;
-      }
-      return false;
-    };
-
-    // Set a timeout to prevent infinite loading (only for OAuth cases)
-    const hasOAuthHash = typeof window !== "undefined" && 
-      ((window as any).oauthHash || window.location.hash.includes("access_token"));
-    
-    timeoutId = setTimeout(() => {
-      if (resolved || isCancelled) return;
-      console.warn("Auth check timeout - attempting local session restore");
-      setAuthReady(true);
-      fallbackRestore()
-        .then((restored) => {
-          if (!restored && !isCancelled) {
-            updateSession(null);
-          }
-        })
-        .catch(error => {
-          console.warn("Fallback session restore failed:", error);
-          if (!isCancelled) {
-            updateSession(null);
-          }
-        });
-    }, hasOAuthHash ? 5000 : 1000); // Longer timeout for OAuth, shorter for normal flow
-
-    const initializeAuth = async () => {
-      // If there's no OAuth hash, try to restore from storage immediately and set authReady
-      const hasOAuthHash = typeof window !== "undefined" && 
-        ((window as any).oauthHash || window.location.hash.includes("access_token"));
-      
-      if (!hasOAuthHash) {
-        // No OAuth redirect - try to restore from storage immediately
-        const restored = await hydrateSupabaseSessionFromStorage();
-        if (restored) {
-          updateSession(restored);
-        }
-        // Set authReady immediately to allow guest mode or show login
-        resolved = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        if (!isCancelled) {
-          setAuthReady(true);
-        }
-        // Still check getSession in background, but don't block
-        supabaseClient.auth.getSession().then(async ({ data, error }) => {
-          if (isCancelled) return;
-          if (error) {
-            console.warn("Background session check failed", error);
-            return;
-          }
-          if (data.session && !isCancelled) {
-            // Update with fresh session if we got one
-            updateSession(data.session);
-          }
-        }).catch(() => {});
-        return;
-      }
-      
-      // We have an OAuth hash - process it
-      const restoredFromUrl = await applySessionFromUrl();
-      if (restoredFromUrl) {
-        resolved = true;
-        if (timeoutId) clearTimeout(timeoutId);
-        if (!isCancelled) {
-          setAuthReady(true);
-        }
-        return;
-      }
-
-      // OAuth hash exists but processing failed - check existing session
-      supabaseClient.auth
-        .getSession()
-        .then(async ({ data, error }) => {
-          resolved = true;
-          if (timeoutId) clearTimeout(timeoutId);
-          if (isCancelled) return;
-          if (error) {
-            console.error("Failed to fetch Supabase session", error);
-            const restored = await hydrateSupabaseSessionFromStorage();
-            if (restored) {
-              updateSession(restored);
-            } else {
-              updateSession(null);
-            }
-          } else if (data.session) {
-            updateSession(data.session);
-          } else {
-            const restored = await hydrateSupabaseSessionFromStorage();
-            if (restored) {
-              updateSession(restored);
-            } else {
-              updateSession(null);
-            }
-          }
-          setAuthReady(true);
-        })
-        .catch(async error => {
-          resolved = true;
-          if (timeoutId) clearTimeout(timeoutId);
-          if (!isCancelled) {
-            console.error("Supabase getSession error", error);
-            const restored = await hydrateSupabaseSessionFromStorage();
-            if (restored) {
-              updateSession(restored);
-            } else {
-              updateSession(null);
-            }
-            setAuthReady(true);
-          }
-        });
-    };
-
-    initializeAuth();
+      })
+      .catch((error) => {
+        if (isCancelled) return;
+        console.error("Supabase getSession error", error);
+        updateSession(null);
+        setAuthReady(true);
+      });
 
     return () => {
       isCancelled = true;
-      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [updateSession]);
 
