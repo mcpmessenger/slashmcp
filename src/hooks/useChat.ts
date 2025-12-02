@@ -2388,8 +2388,13 @@ export function useChat() {
         return;
       }
       console.error("[useChat] Authorization header set:", headers.Authorization ? "Bearer ***" : "MISSING");
+      console.error("[useChat] Headers setup complete, building payload...");
       
       const payload: Record<string, unknown> = {
+        messages: history,
+        provider,
+      };
+      console.error("[useChat] Payload created, adding document context if needed...");
         messages: history,
         provider,
       };
