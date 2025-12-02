@@ -243,10 +243,29 @@ const Index = () => {
     void signOut();
   }, [signOut]);
 
+  // Check if OAuth just completed to prevent showing login prompt too early
+  // Also check timestamp to ensure it's recent (within last 15 seconds)
+  const oauthJustCompleted = typeof window !== 'undefined' && (() => {
+    const flag = sessionStorage.getItem('oauth_just_completed') === 'true';
+    if (!flag) return false;
+    const timestamp = sessionStorage.getItem('oauth_completed_at');
+    if (!timestamp) return flag; // If no timestamp, assume it's valid (backward compatibility)
+    const completedAt = parseInt(timestamp, 10);
+    const now = Date.now();
+    const isRecent = (now - completedAt) < 15000; // 15 seconds
+    if (!isRecent) {
+      // Clean up stale flag
+      sessionStorage.removeItem('oauth_just_completed');
+      sessionStorage.removeItem('oauth_completed_at');
+      return false;
+    }
+    return true;
+  })();
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Sign-in prompt banner */}
-      {authReady && !session && !guestMode && (
+      {authReady && !session && !guestMode && !oauthJustCompleted && (
         <div className="mx-4 mt-4 mb-0 rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
           <div className="flex-1">

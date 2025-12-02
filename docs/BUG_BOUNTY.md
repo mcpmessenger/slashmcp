@@ -35,3 +35,5 @@ Production users cannot complete Google OAuth on `https://slashmcp.vercel.app`. 
 - The fallback hydration has been implemented in `src/hooks/useChat.ts`.
 - Google OAuth still needs to be published for general access; until then only developer accounts can sign in.
 
+
+

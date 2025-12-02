@@ -36,11 +36,15 @@ Add this secret to your GitHub repository:
 ### Configure Redirect URLs
 
 1. Go to [Supabase Dashboard](https://supabase.com/dashboard)
-2. Select your project
+2. Select your project (`akxdroedpsvmckvqvggr`)
 3. Navigate to **Authentication** → **URL Configuration**
-4. Add your production URL to **Redirect URLs**:
-   - `https://your-app.vercel.app`
-   - `https://your-app.vercel.app/**` (wildcard for all paths)
+4. Set **Site URL:**
+   - Production: `https://slashmcp.vercel.app`
+   - Local: `http://localhost:5173`
+5. Add **Redirect URLs:**
+   - `https://slashmcp.vercel.app/auth/callback` (production callback)
+   - `http://localhost:5173/auth/callback` (local callback)
+   - `https://slashmcp.vercel.app` (base URL, optional)
 
 ### Configure Google OAuth Provider
 
@@ -66,30 +70,39 @@ This allows OAuth to redirect back to your local dev server.
 ### Code Flow
 
 ```typescript
-// In useChat.ts and Workflows.tsx
-const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL ?? window.location.origin;
+// In useChat.ts and Workflows.tsx (WORKING IMPLEMENTATION)
+const baseUrl = import.meta.env.VITE_SUPABASE_REDIRECT_URL || window.location.origin;
+// Remove trailing slash if present, then append /auth/callback
+const redirectTo = `${baseUrl.replace(/\/$/, '')}/auth/callback`;
 
 await supabaseClient.auth.signInWithOAuth({
   provider: "google",
   options: {
-    redirectTo, // Uses env var if set, otherwise current origin
+    redirectTo, // e.g., 'https://slashmcp.vercel.app/auth/callback'
     queryParams: {
       access_type: "offline",
       prompt: "consent",
+      scope: "openid email profile https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar",
     },
   },
 });
 ```
 
-### Redirect Flow
+### Redirect Flow (Updated with Dedicated Callback Route)
 
 1. User clicks "Sign in with Google"
 2. App redirects to Google OAuth
 3. User authorizes
-4. Google redirects to Supabase callback URL
+4. Google redirects to Supabase callback URL (`https://your-project.supabase.co/auth/v1/callback`)
 5. Supabase processes the OAuth response
-6. Supabase redirects to your app's `redirectTo` URL
-7. User is signed in
+6. Supabase redirects to your app's callback route (`https://slashmcp.vercel.app/auth/callback`)
+7. OAuthCallback component processes the session:
+   - Waits for Supabase to process URL hash (DOES NOT clear hash immediately)
+   - Verifies session is persisted to localStorage
+   - Captures OAuth tokens (Gmail, Calendar scopes)
+   - Clears URL hash
+   - Navigates to main app (`/`)
+8. User is signed in and ready to use the app
 
 ## 5. Troubleshooting
 
@@ -136,6 +149,7 @@ After setup, test the OAuth flow:
 
 ---
 
-**Last Updated:** 2025-01-20  
-**Related:** [GitHub Workflows README](../.github/workflows/README.md)
+**Last Updated:** January 2025  
+**Status:** ✅ WORKING - Dedicated callback route implementation successful  
+**Related:** [GitHub Workflows README](../.github/workflows/README.md), [OAuth Loop Investigation](./Google%20OAuth%20Login%20and%20Logout%20Loop%20Investigation%20for%20mcpmessenger_slashmcp.md)
 

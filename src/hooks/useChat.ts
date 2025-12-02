@@ -1192,7 +1192,9 @@ export function useChat() {
 
     setIsAuthLoading(true);
     try {
-      const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL || window.location.origin;
+      const baseUrl = import.meta.env.VITE_SUPABASE_REDIRECT_URL || window.location.origin;
+      // Remove trailing slash if present, then append /auth/callback
+      const redirectTo = `${baseUrl.replace(/\/$/, '')}/auth/callback`;
       console.log("[OAuth] Redirect URL:", redirectTo);
       console.log("[OAuth] Window origin:", window.location.origin);
       console.log("[OAuth] Env var:", import.meta.env.VITE_SUPABASE_REDIRECT_URL);
@@ -1329,6 +1331,15 @@ export function useChat() {
           title: "Signed out",
           description: "You have been successfully signed out.",
         });
+        
+        // Navigate to home page after successful sign-out to prevent session re-detection
+        // Use setTimeout to allow toast to display briefly before navigation
+        setTimeout(() => {
+          if (typeof window !== "undefined") {
+            window.location.href = "/";
+          }
+        }, 500);
+        return; // Exit early to prevent further execution
       }
       
       // Clear the sign-out flag
@@ -1361,6 +1372,13 @@ export function useChat() {
         title: "Signed out",
         description: "You have been signed out locally.",
       });
+      
+      // Navigate to home page after sign-out (even on error)
+      setTimeout(() => {
+        if (typeof window !== "undefined") {
+          window.location.href = "/";
+        }
+      }, 500);
       
       // Clear the sign-out flag
       sessionStorage.removeItem('signing-out');
@@ -2104,7 +2122,22 @@ export function useChat() {
     };
 
     try {
-      const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/chat`;
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      if (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL') || supabaseUrl.includes('your-supabase-ref')) {
+        const errorMsg = "Supabase URL is not configured. Please set VITE_SUPABASE_URL environment variable.";
+        console.error("[useChat]", errorMsg, "Current value:", supabaseUrl);
+        setIsLoading(false);
+        setMessages(prev => prev.slice(0, -1));
+        toast({
+          title: "Configuration Error",
+          description: errorMsg + " Check your environment variables.",
+          variant: "destructive",
+        });
+        return;
+      }
+      
+      const CHAT_URL = `${supabaseUrl}/functions/v1/chat`;
+      console.log("[useChat] CHAT_URL:", CHAT_URL);
       const history = [...messages, userMsg].map(({ role, content }) => ({ role, content }));
       const documentContextPayload =
         documentContext && documentContext.length > 0
@@ -2142,11 +2175,52 @@ export function useChat() {
         payload.documentContext = documentContextPayload;
       }
 
-      const response = await fetch(CHAT_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload),
-      });
+      // Add timeout to the fetch request itself
+      const FETCH_TIMEOUT_MS = 30_000; // 30 seconds to establish connection
+      const fetchController = new AbortController();
+      const fetchTimeoutId = setTimeout(() => {
+        fetchController.abort();
+      }, FETCH_TIMEOUT_MS);
+
+      console.log("[useChat] Sending request to:", CHAT_URL);
+      console.log("[useChat] Payload:", JSON.stringify(payload).slice(0, 200));
+      
+      let response: Response;
+      try {
+        const fetchStartTime = Date.now();
+        response = await fetch(CHAT_URL, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload),
+          signal: fetchController.signal,
+        });
+        const fetchDuration = Date.now() - fetchStartTime;
+        console.log("[useChat] Fetch completed in", fetchDuration, "ms, status:", response.status);
+        clearTimeout(fetchTimeoutId);
+        
+        if (!response.ok) {
+          console.error("[useChat] Response not OK:", response.status, response.statusText);
+        }
+        if (!response.body) {
+          console.error("[useChat] Response has no body!");
+        }
+      } catch (fetchError) {
+        clearTimeout(fetchTimeoutId);
+        console.error("[useChat] Fetch error:", fetchError);
+        if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+          setIsLoading(false);
+          setMessages(prev => prev.slice(0, -1));
+          toast({
+            title: "Connection Timeout",
+            description: "The server took too long to respond (30s timeout). Please check if the backend is running.",
+            variant: "destructive",
+          });
+          return;
+        }
+        setIsLoading(false);
+        setMessages(prev => prev.slice(0, -1));
+        throw fetchError;
+      }
 
       if (!response.ok || !response.body) {
         let errorMessage = "Failed to start stream";
@@ -2238,11 +2312,34 @@ export function useChat() {
         });
       }, STREAM_TIMEOUT_MS);
 
+      // Add initial connection timeout - if no data arrives within 10 seconds, cancel
+      // Reduced from 30s to 10s to fail faster if backend isn't responding
+      console.log("[useChat] Starting stream read, setting initial timeout...");
+      const initialConnectionTimeout = setTimeout(() => {
+        const timeSinceStart = Date.now() - lastDataTime;
+        console.error("[useChat] Initial connection timeout triggered, time since start:", timeSinceStart, "ms");
+        if (timeSinceStart > 10_000) {
+          console.error("[useChat] No data received within 10 seconds of connection, canceling stream");
+          reader.cancel();
+          setIsLoading(false);
+          toast({
+            title: "Stream Timeout",
+            description: "The server connected but didn't send any data within 10 seconds. Check Supabase logs for backend errors.",
+            variant: "destructive",
+          });
+          setMessages(prev => prev.slice(0, -1));
+        }
+      }, 10_000);
+
       try {
         while (!streamDone) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            clearTimeout(initialConnectionTimeout);
+            break;
+          }
           
+          clearTimeout(initialConnectionTimeout); // Clear once we get first data
           lastDataTime = Date.now();
           resetStreamTimeout();
           textBuffer += decoder.decode(value, { stream: true });
@@ -2282,10 +2379,22 @@ export function useChat() {
             }
           }
         }
+      } catch (streamError) {
+        console.error("Stream reading error:", streamError);
+        reader.cancel();
+        setIsLoading(false);
+        const errorMsg = streamError instanceof Error ? streamError.message : "Stream error";
+        toast({
+          title: "Stream Error",
+          description: errorMsg || "Failed to read response stream. Please try again.",
+          variant: "destructive",
+        });
+        setMessages(prev => prev.slice(0, -1));
       } finally {
         // Cleanup timeouts
         if (streamTimeoutId) clearTimeout(streamTimeoutId);
         clearTimeout(overallTimeoutId);
+        clearTimeout(initialConnectionTimeout);
       }
 
       if (textBuffer.trim()) {

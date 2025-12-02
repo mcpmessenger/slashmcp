@@ -136,7 +136,9 @@ export function Workflows() {
                     if (isAuthLoading) return;
                     setIsAuthLoading(true);
                     try {
-                      const redirectTo = import.meta.env.VITE_SUPABASE_REDIRECT_URL ?? window.location.origin;
+                      const baseUrl = import.meta.env.VITE_SUPABASE_REDIRECT_URL ?? window.location.origin;
+                      // Remove trailing slash if present, then append /auth/callback
+                      const redirectTo = `${baseUrl.replace(/\/$/, '')}/auth/callback`;
                       await supabaseClient.auth.signInWithOAuth({
                         provider: "google",
                         options: {
