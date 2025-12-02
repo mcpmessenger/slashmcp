@@ -975,6 +975,14 @@ export function useChat() {
       const hash = (window as any).oauthHash;
       if (!hash || !hash.includes("access_token")) return false;
 
+      // Check if we've already processed this hash to prevent loops
+      const hashKey = `oauth_hash_processed_${hash.substring(0, 50)}`;
+      if (sessionStorage.getItem(hashKey)) {
+        console.log("[Auth] OAuth hash already processed, skipping");
+        delete (window as any).oauthHash;
+        return false;
+      }
+
       try {
         const params = new URLSearchParams(hash.replace(/^#/, ""));
         const accessToken = params.get("access_token");
@@ -982,30 +990,43 @@ export function useChat() {
 
         if (!accessToken || !refreshToken) {
           // Clear invalid hash
+          console.warn("[Auth] OAuth hash missing tokens");
           delete (window as any).oauthHash;
           return false;
         }
 
+        console.log("[Auth] Processing OAuth hash...");
         const { data, error } = await supabaseClient.auth.setSession({
           access_token: accessToken,
           refresh_token: refreshToken,
         });
 
         if (error) {
-          console.warn("Failed to set session from OAuth hash", error);
+          console.error("[Auth] Failed to set session from OAuth hash", error);
+          // Mark as processed to prevent retry loop
+          sessionStorage.setItem(hashKey, "failed");
           delete (window as any).oauthHash;
           return false;
         }
 
         if (data.session) {
+          console.log("[Auth] OAuth session set successfully");
           updateSession(data.session);
+          // Mark as successfully processed
+          sessionStorage.setItem(hashKey, "success");
           // Clear hash after successful processing
           delete (window as any).oauthHash;
           return true;
         }
+        console.warn("[Auth] OAuth setSession returned no session");
+        sessionStorage.setItem(hashKey, "no_session");
+        delete (window as any).oauthHash;
         return false;
       } catch (error) {
-        console.error("Error processing OAuth hash", error);
+        console.error("[Auth] Error processing OAuth hash", error);
+        // Mark as processed to prevent retry loop
+        const hashKey = `oauth_hash_processed_${hash.substring(0, 50)}`;
+        sessionStorage.setItem(hashKey, "error");
         delete (window as any).oauthHash;
         return false;
       }
@@ -1029,28 +1050,38 @@ export function useChat() {
         }
         
         // Check for session even if OAuth processing failed
+        // Always check getSession - it might have a valid session from localStorage
         supabaseClient.auth
           .getSession()
           .then(({ data, error }) => {
             if (isCancelled) return;
             if (error) {
-              console.warn("Failed to fetch Supabase session", error);
+              console.warn("[Auth] Failed to fetch Supabase session", error);
+              // Only set null if OAuth processing also failed
+              // If OAuth succeeded, the session should already be set
               if (!processed) {
                 updateSession(null);
               }
             } else if (data.session) {
+              // We have a session - use it
+              console.log("[Auth] Found existing session");
               updateSession(data.session);
             } else if (!processed) {
+              // No session and OAuth failed - user needs to sign in
+              console.log("[Auth] No session found");
               updateSession(null);
             }
+            // Always set authReady so UI can show
             setAuthReady(true);
           })
           .catch((error) => {
             if (isCancelled) return;
-            console.error("Supabase getSession error", error);
+            console.error("[Auth] Supabase getSession error", error);
+            // Only set null if OAuth processing also failed
             if (!processed) {
               updateSession(null);
             }
+            // Always set authReady so UI can show
             setAuthReady(true);
           });
       })
