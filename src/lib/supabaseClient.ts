@@ -4,7 +4,16 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn("Supabase URL or anon key is missing. Authentication-dependent features will fail.");
+  const errorMsg = `Supabase configuration missing! 
+    VITE_SUPABASE_URL: ${supabaseUrl ? 'set' : 'MISSING'}
+    VITE_SUPABASE_PUBLISHABLE_KEY: ${supabaseAnonKey ? 'set' : 'MISSING'}
+    
+    This is a configuration error. Please check:
+    1. GitHub Secrets are set (VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY)
+    2. Vercel environment variables are configured
+    3. The deployment completed successfully`;
+  console.error("[Supabase Client]", errorMsg);
+  throw new Error("Supabase configuration is missing. Check environment variables.");
 }
 
 export const supabaseClient = createClient(supabaseUrl ?? "", supabaseAnonKey ?? "", {
