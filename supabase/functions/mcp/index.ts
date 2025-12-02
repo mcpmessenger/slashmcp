@@ -3281,7 +3281,7 @@ serve(async req => {
     };
   }
 
-  // Try to get authenticated user (optional - for key manager lookup)
+  // Try to get authenticated user (required for email sending)
   let userId: string | undefined;
   let userEmail: string | undefined;
   const authHeader = req.headers.get("Authorization");
@@ -3294,16 +3294,25 @@ serve(async req => {
           auth: { persistSession: false, autoRefreshToken: false },
         });
         const accessToken = authHeader.replace(/Bearer\s+/i, "").trim();
-        const { data: { user } } = await supabase.auth.getUser(accessToken);
+        const { data: { user }, error: getUserError } = await supabase.auth.getUser(accessToken);
+        if (getUserError) {
+          console.error("[MCP] Error getting user from token:", getUserError.message);
+        }
         if (user) {
           userId = user.id;
-          userEmail = user.email;
+          userEmail = user.email || undefined;
+          console.log("[MCP] User extracted:", { userId, userEmail: userEmail ? `${userEmail.substring(0, 5)}...` : "none" });
+        } else {
+          console.warn("[MCP] No user found from auth token");
         }
+      } else {
+        console.warn("[MCP] Missing SUPABASE_URL or SERVICE_ROLE_KEY for user lookup");
       }
     } catch (error) {
-      // Silently fail - user lookup is optional
-      console.log("Could not get user from auth header:", error);
+      console.error("[MCP] Exception getting user from auth header:", error);
     }
+  } else {
+    console.warn("[MCP] No Authorization header provided");
   }
 
   try {
