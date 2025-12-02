@@ -1064,7 +1064,10 @@ export function useChat() {
       return false;
     };
 
-    // Set a timeout to prevent infinite loading (2 seconds max for faster guest mode access)
+    // Set a timeout to prevent infinite loading (only for OAuth cases)
+    const hasOAuthHash = typeof window !== "undefined" && 
+      ((window as any).oauthHash || window.location.hash.includes("access_token"));
+    
     timeoutId = setTimeout(() => {
       if (resolved || isCancelled) return;
       console.warn("Auth check timeout - attempting local session restore");
@@ -1081,18 +1084,41 @@ export function useChat() {
             updateSession(null);
           }
         });
-    }, 2000);
+    }, hasOAuthHash ? 5000 : 1000); // Longer timeout for OAuth, shorter for normal flow
 
     const initializeAuth = async () => {
-      // If there's no OAuth hash, set authReady immediately to allow guest mode
+      // If there's no OAuth hash, try to restore from storage immediately and set authReady
       const hasOAuthHash = typeof window !== "undefined" && 
         ((window as any).oauthHash || window.location.hash.includes("access_token"));
       
       if (!hasOAuthHash) {
-        // No OAuth redirect, allow immediate access (guest mode or existing session)
-        setAuthReady(true);
+        // No OAuth redirect - try to restore from storage immediately
+        const restored = await hydrateSupabaseSessionFromStorage();
+        if (restored) {
+          updateSession(restored);
+        }
+        // Set authReady immediately to allow guest mode or show login
+        resolved = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        if (!isCancelled) {
+          setAuthReady(true);
+        }
+        // Still check getSession in background, but don't block
+        supabaseClient.auth.getSession().then(async ({ data, error }) => {
+          if (isCancelled) return;
+          if (error) {
+            console.warn("Background session check failed", error);
+            return;
+          }
+          if (data.session && !isCancelled) {
+            // Update with fresh session if we got one
+            updateSession(data.session);
+          }
+        }).catch(() => {});
+        return;
       }
       
+      // We have an OAuth hash - process it
       const restoredFromUrl = await applySessionFromUrl();
       if (restoredFromUrl) {
         resolved = true;
@@ -1103,6 +1129,7 @@ export function useChat() {
         return;
       }
 
+      // OAuth hash exists but processing failed - check existing session
       supabaseClient.auth
         .getSession()
         .then(async ({ data, error }) => {
