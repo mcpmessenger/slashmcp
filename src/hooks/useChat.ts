@@ -2277,7 +2277,9 @@ export function useChat() {
       console.error("[useChat] Inside try block");
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       console.error("[useChat] Raw VITE_SUPABASE_URL from env:", supabaseUrl);
-      console.error("[useChat] All env vars:", Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
+      const envVars = Object.keys(import.meta.env).filter(k => k.startsWith('VITE_'));
+      console.error("[useChat] All env vars:", envVars);
+      console.error("[useChat] Env vars logged, continuing execution...");
       
       console.error("[useChat] Checking supabaseUrl validity");
       if (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL') || supabaseUrl.includes('your-supabase-ref')) {
