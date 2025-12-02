@@ -2266,10 +2266,27 @@ export function useChat() {
 
       console.log("[useChat] Sending request to:", CHAT_URL);
       console.log("[useChat] Payload:", JSON.stringify(payload).slice(0, 200));
+      console.log("[useChat] Headers:", headers);
+      console.log("[useChat] Method: POST");
+      
+      // Validate URL before making request
+      if (!CHAT_URL || CHAT_URL.includes('undefined') || !CHAT_URL.startsWith('http')) {
+        const errorMsg = `Invalid CHAT_URL: ${CHAT_URL}. Check VITE_SUPABASE_URL environment variable.`;
+        console.error("[useChat]", errorMsg);
+        setIsLoading(false);
+        setMessages(prev => prev.slice(0, -1));
+        toast({
+          title: "Configuration Error",
+          description: `Invalid chat URL: ${CHAT_URL}. Please check your environment variables.`,
+          variant: "destructive",
+        });
+        return;
+      }
       
       let response: Response;
       try {
         const fetchStartTime = Date.now();
+        console.log("[useChat] Starting fetch to:", CHAT_URL);
         response = await fetch(CHAT_URL, {
           method: "POST",
           headers,
@@ -2278,10 +2295,13 @@ export function useChat() {
         });
         const fetchDuration = Date.now() - fetchStartTime;
         console.log("[useChat] Fetch completed in", fetchDuration, "ms, status:", response.status);
+        console.log("[useChat] Response headers:", Object.fromEntries(response.headers.entries()));
         clearTimeout(fetchTimeoutId);
         
         if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
           console.error("[useChat] Response not OK:", response.status, response.statusText);
+          console.error("[useChat] Error response body:", errorText);
         }
         if (!response.body) {
           console.error("[useChat] Response has no body!");
@@ -2289,6 +2309,9 @@ export function useChat() {
       } catch (fetchError) {
         clearTimeout(fetchTimeoutId);
         console.error("[useChat] Fetch error:", fetchError);
+        console.error("[useChat] Error type:", fetchError instanceof Error ? fetchError.constructor.name : typeof fetchError);
+        console.error("[useChat] Error message:", fetchError instanceof Error ? fetchError.message : String(fetchError));
+        console.error("[useChat] Error stack:", fetchError instanceof Error ? fetchError.stack : 'No stack');
         if (fetchError instanceof Error && fetchError.name === 'AbortError') {
           setIsLoading(false);
           setMessages(prev => prev.slice(0, -1));
@@ -2301,6 +2324,11 @@ export function useChat() {
         }
         setIsLoading(false);
         setMessages(prev => prev.slice(0, -1));
+        toast({
+          title: "Request Failed",
+          description: fetchError instanceof Error ? fetchError.message : "Failed to connect to chat service. Check console for details.",
+          variant: "destructive",
+        });
         throw fetchError;
       }
 
