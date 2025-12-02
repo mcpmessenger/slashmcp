@@ -690,6 +690,20 @@ export function ChatInput({
     console.log("[ChatInput] value:", value);
     console.log("[ChatInput] disabled:", disabled);
     console.log("[ChatInput] value.trim():", value.trim());
+    console.log("[ChatInput] value.trim() check:", !!value.trim());
+    console.log("[ChatInput] !disabled check:", !disabled);
+    console.log("[ChatInput] Will submit?", value.trim() && !disabled);
+    
+    if (!value.trim()) {
+      console.warn("[ChatInput] Cannot submit: value is empty");
+      return;
+    }
+    
+    if (disabled) {
+      console.warn("[ChatInput] Cannot submit: input is disabled");
+      return;
+    }
+    
     if (value.trim() && !disabled) {
       console.log("[ChatInput] Calling onSubmit with:", value.trim());
       try {
@@ -1156,12 +1170,17 @@ export function ChatInput({
               ref={textareaRef}
               value={value}
               onChange={handleChange}
-              onKeyDown={handleKeyDown}
+              onKeyDown={(e) => {
+                console.log("[ChatInput] textarea onKeyDown:", e.key, "disabled:", disabled);
+                handleKeyDown(e);
+              }}
               placeholder={placeholder}
               aria-label="Message Input"
               rows={1}
               disabled={disabled}
               className="w-full min-h-8 max-h-24 bg-transparent text-sm font-normal text-foreground placeholder-muted-foreground border-0 outline-none focus:outline-none px-3 pr-10 py-1 resize-none overflow-y-auto"
+              onFocus={() => console.log("[ChatInput] textarea focused, disabled:", disabled)}
+              onBlur={() => console.log("[ChatInput] textarea blurred")}
             />
 
             {isSlashMenuOpen && filteredSlashCommands.length > 0 && (
