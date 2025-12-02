@@ -18,4 +18,11 @@ export const supabaseClient = createClient(supabaseUrl ?? "", supabaseAnonKey ??
 // Expose to window for debugging (browser console access)
 if (typeof window !== "undefined") {
   (window as any).supabase = supabaseClient;
+  // Expose environment variables for debugging
+  (window as any).env = {
+    VITE_SUPABASE_URL: supabaseUrl,
+    VITE_SUPABASE_PUBLISHABLE_KEY: supabaseAnonKey ? `${supabaseAnonKey.slice(0, 20)}...` : undefined,
+  };
+  console.log("[Debug] Environment variables exposed to window.env");
+  console.log("[Debug] VITE_SUPABASE_URL:", supabaseUrl);
 }
