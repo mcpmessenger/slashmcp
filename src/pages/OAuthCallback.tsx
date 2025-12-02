@@ -38,8 +38,21 @@ export default function OAuthCallback() {
       while (attempts < maxAttempts && !sessionPersisted) {
         await new Promise(resolve => setTimeout(resolve, 300));
         
-        // Check if session exists in Supabase
-        const { data: { session: checkSession }, error } = await supabaseClient.auth.getSession();
+        // Check if session exists in Supabase (with timeout to prevent hanging)
+        let checkSession: any = null;
+        let error: any = null;
+        try {
+          const getSessionPromise = supabaseClient.auth.getSession();
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('getSession timeout')), 5000)
+          );
+          const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
+          checkSession = result.data?.session;
+          error = result.error;
+        } catch (timeoutError) {
+          console.warn('[OAuthCallback] getSession timeout (attempt', attempts + 1, ')');
+          error = timeoutError;
+        }
         
         if (checkSession && checkSession.user) {
           // Also verify it's in localStorage (Supabase persists there)
@@ -83,7 +96,13 @@ export default function OAuthCallback() {
       // Try to capture OAuth tokens now (before navigating away)
       // This ensures tokens are captured even if the useChat hook isn't mounted yet
       try {
-        const { data: { session: finalSession } } = await supabaseClient.auth.getSession();
+        // Add timeout to prevent hanging
+        const getSessionPromise = supabaseClient.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('getSession timeout')), 5000)
+        );
+        const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
+        const finalSession = result.data?.session;
         if (finalSession?.access_token && typeof window !== 'undefined') {
           // Get provider tokens from localStorage
           const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -149,8 +168,13 @@ export default function OAuthCallback() {
       // This prevents race conditions where the main page loads before session is ready
       // We wait 2 seconds total to give Supabase plenty of time to persist to localStorage
       setTimeout(() => {
-        // Double-check session is still valid before redirecting
-        supabaseClient.auth.getSession().then(({ data: { session: finalCheck } }) => {
+        // Double-check session is still valid before redirecting (with timeout)
+        const getSessionPromise = supabaseClient.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('getSession timeout')), 5000)
+        );
+        Promise.race([getSessionPromise, timeoutPromise]).then((result: any) => {
+          const finalCheck = result.data?.session;
           if (finalCheck && finalCheck.user) {
             // Also verify it's actually in localStorage
             const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -228,7 +252,12 @@ export default function OAuthCallback() {
     const fallbackTimeout = setTimeout(() => {
       if (!isHandled) {
         console.warn('[OAuthCallback] Timeout waiting for auth state change, checking session...');
-        supabaseClient.auth.getSession().then(({ data: { session } }) => {
+        const getSessionPromise = supabaseClient.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('getSession timeout')), 5000)
+        );
+        Promise.race([getSessionPromise, timeoutPromise]).then((result: any) => {
+          const session = result.data?.session;
           if (session && session.user) {
             console.log('[OAuthCallback] Session found on timeout, handling...');
             handleSessionEstablished();
@@ -241,7 +270,17 @@ export default function OAuthCallback() {
         }).catch((error) => {
           console.error('[OAuthCallback] Error checking session on timeout:', error);
           isHandled = true;
-          setStatus('Timeout. Redirecting...');
+          if (error?.message?.includes('timeout')) {
+            console.warn('[OAuthCallback] getSession timed out, redirecting anyway');
+            setStatus('Session check timed out. Redirecting...');
+          } else {
+            setStatus('Timeout. Redirecting...');
+          }
+          // Set flag so main page knows OAuth was attempted
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem('oauth_just_completed', 'true');
+            sessionStorage.setItem('oauth_completed_at', Date.now().toString());
+          }
           window.location.href = '/';
         });
       }
