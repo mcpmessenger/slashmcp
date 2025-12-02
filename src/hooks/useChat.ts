@@ -1349,46 +1349,67 @@ export function useChat() {
 
   const signOut = useCallback(async () => {
     try {
-      // Sign out from Supabase first (this will trigger onAuthStateChange with SIGNED_OUT)
-      await supabaseClient.auth.signOut();
+      // 1. Call Supabase sign-out
+      const { error } = await supabaseClient.auth.signOut();
       
-      // Then clear all localStorage session entries
+      if (error) {
+        console.error("Supabase sign-out failed:", error);
+        toast({
+          title: "Sign-out Failed",
+          description: error.message,
+          variant: "destructive",
+        });
+        // Still clear local state even if Supabase sign-out fails
+      }
+      
+      // 2. Clear custom local storage session
+      persistSessionToStorage(null);
       if (typeof window !== "undefined") {
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
         }
-        if (CUSTOM_SUPABASE_SESSION_KEY) {
-          window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
-        }
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
+        // Also clear sessionStorage OAuth tracking
+        Object.keys(sessionStorage).forEach(key => {
+          if (key.startsWith('oauth_hash_processed_')) {
+            sessionStorage.removeItem(key);
+          }
+        });
       }
       
-      // Clear all session state
+      // 3. Reset local state
       updateSession(null);
+      setGuestMode(false);
       setRegistry([]);
       setLoginPrompt(false);
       
       toast({
         title: "Signed out",
-        description: "You have been signed out.",
+        description: error ? "You have been signed out locally." : "You have been successfully signed out.",
+        variant: error ? "default" : "default",
       });
     } catch (error) {
-      console.error("Supabase sign-out failed", error);
-      // Even if Supabase signOut fails, clear local state
+      console.error("Sign-out error:", error);
+      // Even if sign-out fails, clear local state
+      persistSessionToStorage(null);
       if (typeof window !== "undefined") {
         if (SUPABASE_STORAGE_KEY) {
           window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
         }
-        if (CUSTOM_SUPABASE_SESSION_KEY) {
-          window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
-        }
         if ((window as any).oauthHash) {
           delete (window as any).oauthHash;
         }
+        // Clear sessionStorage OAuth tracking
+        Object.keys(sessionStorage).forEach(key => {
+          if (key.startsWith('oauth_hash_processed_')) {
+            sessionStorage.removeItem(key);
+          }
+        });
       }
       updateSession(null);
+      setGuestMode(false);
       setRegistry([]);
       setLoginPrompt(false);
       toast({
