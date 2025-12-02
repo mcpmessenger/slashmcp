@@ -37,13 +37,31 @@ export async function transcribeAudio(blob: Blob, language?: string): Promise<Tr
     formData.append("language", language);
   }
 
-  const response = await fetch(`${SUPABASE_EDGE_URL}/whisper`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-    },
-    body: formData,
-  });
+  // Add timeout to prevent hanging
+  const TRANSCRIBE_TIMEOUT_MS = 150_000; // 2.5 minutes for client-side timeout
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, TRANSCRIBE_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(`${SUPABASE_EDGE_URL}/whisper`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+      },
+      body: formData,
+      signal: abortController.signal,
+    });
+    clearTimeout(timeoutId);
+  } catch (fetchError) {
+    clearTimeout(timeoutId);
+    if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+      throw new Error("Transcription timeout: The request took too long. Please try again with a shorter audio clip.");
+    }
+    throw fetchError;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -60,17 +78,35 @@ export async function synthesizeSpeech(text: string, options: SynthesisOptions =
     throw new Error("Cannot synthesize empty text.");
   }
 
-  const response = await fetch(`${SUPABASE_EDGE_URL}/google-tts`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      text,
-      ...options,
-    }),
-  });
+  // Add timeout to prevent hanging
+  const SYNTHESIS_TIMEOUT_MS = 60_000; // 1 minute for TTS
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, SYNTHESIS_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(`${SUPABASE_EDGE_URL}/google-tts`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        text,
+        ...options,
+      }),
+      signal: abortController.signal,
+    });
+    clearTimeout(timeoutId);
+  } catch (fetchError) {
+    clearTimeout(timeoutId);
+    if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+      throw new Error("Speech synthesis timeout: The request took too long. Please try again.");
+    }
+    throw fetchError;
+  }
 
   if (!response.ok) {
     const errorText = await response.text();

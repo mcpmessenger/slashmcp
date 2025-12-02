@@ -56,13 +56,38 @@ serve(async (req) => {
     }
     whisperPayload.append("file", audio, audio.name || "audio.webm");
 
-    const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openAiKey}`,
-      },
-      body: whisperPayload,
-    });
+    // Add timeout to prevent hanging
+    const WHISPER_TIMEOUT_MS = 120_000; // 2 minutes for audio transcription
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, WHISPER_TIMEOUT_MS);
+    
+    let response: Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${openAiKey}`,
+        },
+        body: whisperPayload,
+        signal: abortController.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        console.error("Whisper API fetch timeout after", WHISPER_TIMEOUT_MS, "ms");
+        return new Response(
+          JSON.stringify({ error: "Transcription timeout: The request took too long to complete. Please try again with a shorter audio clip." }),
+          {
+            status: 408,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+      throw fetchError;
+    }
 
     const bodyText = await response.text();
 
