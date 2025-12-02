@@ -1293,6 +1293,19 @@ export function useChat() {
   const signOut = useCallback(async () => {
     try {
       await supabaseClient.auth.signOut();
+      try {
+        if (typeof window !== "undefined") {
+          if (SUPABASE_STORAGE_KEY) {
+            window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
+          }
+          if (CUSTOM_SUPABASE_SESSION_KEY) {
+            window.localStorage.removeItem(CUSTOM_SUPABASE_SESSION_KEY);
+          }
+          window.sessionStorage.removeItem(OAUTH_HASH_STORAGE_KEY);
+        }
+      } catch (error) {
+        console.warn("Failed to clear stored session data during sign-out", error);
+      }
       updateSession(null);
       setRegistry([]);
       setLoginPrompt(false);
