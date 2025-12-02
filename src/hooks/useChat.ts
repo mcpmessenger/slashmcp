@@ -938,6 +938,7 @@ export function useChat() {
   }, []);
   const [authReady, setAuthReady] = useState(false);
   const [isAuthLoading, setIsAuthLoading] = useState(false);
+  const [guestMode, setGuestMode] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -1435,13 +1436,14 @@ export function useChat() {
       if (!commandRequiresSession(command)) {
         return true;
       }
-      if (!authReady) {
+      if (!authReady && !guestMode) {
         appendAssistantText("Still checking your Supabase session. Try again in a moment.");
         return false;
       }
-      if (!session) {
+      // Allow guest mode for most commands, but some sensitive ones still need auth
+      if (!session && !guestMode) {
         appendAssistantText(
-          "Sign in first: run /slashmcp login to open Google sign-in or provide email/password credentials.",
+          "Sign in first: run /slashmcp login to open Google sign-in or provide email/password credentials. Or continue as guest for basic features.",
         );
         return false;
       }
@@ -2398,6 +2400,15 @@ export function useChat() {
     }
   }, [toast, updateSession]);
 
+  const enableGuestMode = useCallback(() => {
+    setGuestMode(true);
+    setAuthReady(true);
+    toast({
+      title: "Guest mode enabled",
+      description: "You can now use MCP Messenger without signing in.",
+    });
+  }, [toast]);
+
   return {
     messages,
     sendMessage,
@@ -2412,6 +2423,8 @@ export function useChat() {
     session,
     authReady,
     isAuthLoading,
+    guestMode,
+    enableGuestMode,
     signInWithGoogle,
     signInWithMicrosoft,
     signOut,

@@ -52,6 +52,8 @@ const Index = () => {
     session,
     authReady,
     isAuthLoading,
+    guestMode,
+    enableGuestMode,
     signInWithGoogle,
     signOut,
     appendAssistantText,
@@ -61,10 +63,10 @@ const Index = () => {
     resetChat,
   } = useChat();
   const { toast } = useToast();
-  const hasChatHistory = !!session && (messages.length > 0 || mcpEvents.length > 0);
+  const hasChatHistory = (!!session || guestMode) && (messages.length > 0 || mcpEvents.length > 0);
 
   const handleRefreshChat = useCallback(() => {
-    if (!session) return;
+    if (!session && !guestMode) return;
     resetChat();
     toast({
       title: "Chat refreshed",
@@ -244,7 +246,7 @@ const Index = () => {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Sign-in prompt banner */}
-      {authReady && !session && (
+      {authReady && !session && !guestMode && (
         <div className="mx-4 mt-4 mb-0 rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
           <div className="flex-1">
@@ -273,7 +275,7 @@ const Index = () => {
       {/* Header with logo and navigation */}
       <PageHeader>
         {authReady && (
-          session ? (
+          (session || guestMode) ? (
             <>
               <button
                 type="button"
@@ -297,7 +299,11 @@ const Index = () => {
                     title="Account menu"
                   >
                     <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border border-border/50 shadow-sm">
-                      {avatarUrl ? (
+                      {guestMode ? (
+                        <AvatarFallback className="text-xs sm:text-sm bg-muted/50">
+                          <LogIn className="h-4 w-4" />
+                        </AvatarFallback>
+                      ) : avatarUrl ? (
                         <AvatarImage src={avatarUrl} alt={displayName ?? "Signed in user"} />
                       ) : (
                         <AvatarFallback className="text-xs sm:text-sm">{avatarInitial}</AvatarFallback>
@@ -308,16 +314,26 @@ const Index = () => {
                 <DropdownMenuContent align="end">
                   <DropdownMenuLabel>
                     <div className="flex flex-col">
-                      <span>{displayName}</span>
-                      {session?.user?.email && (
+                      <span>{guestMode ? "Guest User" : displayName}</span>
+                      {session?.user?.email ? (
                         <span className="text-xs text-muted-foreground font-normal">{session.user.email}</span>
-                      )}
+                      ) : guestMode ? (
+                        <span className="text-xs text-muted-foreground font-normal">Limited features available</span>
+                      ) : null}
                     </div>
                   </DropdownMenuLabel>
-                  <DropdownMenuItem onClick={handleSignOut} className="cursor-pointer">
-                    <LogIn className="mr-2 h-4 w-4" />
-                    Sign out
-                  </DropdownMenuItem>
+                  {guestMode && (
+                    <DropdownMenuItem onClick={() => void signInWithGoogle()} className="cursor-pointer">
+                      <LogIn className="mr-2 h-4 w-4" />
+                      Sign in with Google
+                    </DropdownMenuItem>
+                  )}
+                  {session && (
+                    <DropdownMenuItem onClick={handleSignOut} className="cursor-pointer">
+                      <LogIn className="mr-2 h-4 w-4" />
+                      Sign out
+                    </DropdownMenuItem>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
             </>
@@ -367,7 +383,7 @@ const Index = () => {
           <ResizablePanel defaultSize={70} minSize={40} className="min-w-0">
             <div className="h-full overflow-y-auto px-4 py-8">
               <div className="max-w-4xl mx-auto space-y-6">
-                {!authReady || !session ? (
+                {!authReady || (!session && !guestMode) ? (
                   <div className="text-center mt-20 space-y-4">
                     <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
                     <p className="text-muted-foreground text-lg">
@@ -383,22 +399,31 @@ const Index = () => {
                     ) : (
                       <div className="space-y-4">
                         <p className="text-muted-foreground">
-                          Sign in to start chatting and using workflows.
+                          Sign in to access all features, or continue as guest.
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => void signInWithGoogle()}
-                          disabled={isAuthLoading}
-                          className={cn(
-                            "inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground transition-colors",
-                            isAuthLoading
-                              ? "opacity-60 cursor-not-allowed"
-                              : "hover:bg-primary/90"
-                          )}
-                        >
-                          <LogIn className="h-5 w-5" />
-                          <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
-                        </button>
+                        <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+                          <button
+                            type="button"
+                            onClick={enableGuestMode}
+                            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-6 py-3 text-base font-medium text-foreground transition-colors hover:bg-muted"
+                          >
+                            <span>Continue as Guest</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void signInWithGoogle()}
+                            disabled={isAuthLoading}
+                            className={cn(
+                              "inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground transition-colors",
+                              isAuthLoading
+                                ? "opacity-60 cursor-not-allowed"
+                                : "hover:bg-primary/90"
+                            )}
+                          >
+                            <LogIn className="h-5 w-5" />
+                            <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
