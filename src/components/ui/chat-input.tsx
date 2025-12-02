@@ -686,12 +686,6 @@ export function ChatInput({
   );
 
   const submitValue = useCallback(() => {
-    console.log("[ChatInput] submitValue called");
-    console.log("[ChatInput] value:", value);
-    console.log("[ChatInput] disabled:", disabled);
-    console.log("[ChatInput] value.trim():", value.trim());
-    console.log("[ChatInput] value.trim() check:", !!value.trim());
-    console.log("[ChatInput] !disabled check:", !disabled);
     console.log("[ChatInput] Will submit?", value.trim() && !disabled);
     
     if (!value.trim()) {
