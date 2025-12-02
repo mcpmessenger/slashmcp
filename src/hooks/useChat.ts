@@ -996,10 +996,20 @@ export function useChat() {
         }
 
         console.log("[Auth] Processing OAuth hash...");
-        const { data, error } = await supabaseClient.auth.setSession({
+        
+        // Add timeout to setSession to prevent hanging
+        const setSessionPromise = supabaseClient.auth.setSession({
           access_token: accessToken,
           refresh_token: refreshToken,
         });
+
+        const timeoutPromise = new Promise<{ data: { session: null }, error: { message: "Timeout" } }>((resolve) => {
+          setTimeout(() => {
+            resolve({ data: { session: null }, error: { message: "Timeout" } });
+          }, 2000); // 2 second timeout for setSession
+        });
+
+        const { data, error } = await Promise.race([setSessionPromise, timeoutPromise]);
 
         if (error) {
           console.error("[Auth] Failed to set session from OAuth hash", error);
