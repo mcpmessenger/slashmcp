@@ -1,6 +1,21 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <!-- CRITICAL: Strip OAuth hash BEFORE any JavaScript loads to prevent GoTrue from seeing it -->
+    <script>
+      (function() {
+        if (typeof window === 'undefined') return;
+        const hash = window.location.hash;
+        if (hash && hash.includes('access_token')) {
+          try {
+            sessionStorage.setItem('slashmcp.oauth.hash', hash);
+          } catch (e) {
+            console.warn('Failed to store OAuth hash:', e);
+          }
+          window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MCP Messenger - Scrape anything with MCP Messenger</title>
