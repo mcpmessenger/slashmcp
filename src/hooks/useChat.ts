@@ -2319,19 +2319,28 @@ export function useChat() {
         console.error("[useChat] Including document context payload:", documentContextPayload);
       }
       
-      // Get session token for authentication
+      // Get session token for authentication (with timeout to prevent hanging)
       console.error("[useChat] About to call supabaseClient.auth.getSession()");
       let sessionToken: string | null = null;
       try {
-        const {
-          data: { session: authSession },
-        } = await supabaseClient.auth.getSession();
+        const getSessionPromise = supabaseClient.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('getSession timeout after 5 seconds')), 5000)
+        );
+        const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
         console.error("[useChat] getSession() completed successfully");
+        const authSession = result.data?.session;
         console.error("[useChat] Session exists?", !!authSession);
         sessionToken = authSession?.access_token ?? null;
       } catch (error) {
         console.error("[useChat] ERROR in getSession():", error);
-        throw error;
+        if (error instanceof Error && error.message.includes('timeout')) {
+          console.error("[useChat] getSession timed out - continuing without session token");
+          // Continue without session token - will use publishable key instead
+          sessionToken = null;
+        } else {
+          throw error;
+        }
       }
       
       console.error("[useChat] Building headers");
