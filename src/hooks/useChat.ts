@@ -907,6 +907,32 @@ export function useChat() {
   const [registry, setRegistry] = useState<McpRegistryEntry[]>([]);
   const [loginPrompt, setLoginPrompt] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  
+  // Safety mechanism: Reset isLoading if it's been stuck for too long
+  useEffect(() => {
+    if (!isLoading) return;
+    
+    const LOADING_TIMEOUT_MS = 60_000; // 60 seconds max loading time
+    const timeoutId = setTimeout(() => {
+      console.warn("[useChat] Loading state stuck for 60+ seconds, resetting...");
+      setIsLoading(false);
+      setMessages(prev => {
+        // Remove the last "Thinking..." message if it exists
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.content?.includes("Thinking")) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
+      toast({
+        title: "Request Timeout",
+        description: "The request timed out. The input has been re-enabled. Please try again.",
+        variant: "destructive",
+      });
+    }, LOADING_TIMEOUT_MS);
+    
+    return () => clearTimeout(timeoutId);
+  }, [isLoading, toast]);
   const updateSession = useCallback((nextSession: Session | null) => {
     setSession(nextSession);
     persistSessionToStorage(nextSession);
@@ -2185,11 +2211,33 @@ export function useChat() {
     console.log("[useChat] Session:", session ? "exists" : "none");
     console.log("[useChat] Guest mode:", guestMode);
     
+    // Set loading state with safety timeout
     setIsLoading(true);
     // Clear previous MCP events when starting a new message
     setMcpEvents([]);
     
     console.log("[useChat] Loading set to true, proceeding to chat request...");
+    
+    // Safety: Ensure isLoading is reset even if execution stops unexpectedly
+    let loadingResetTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      console.warn("[useChat] Execution appears to have stopped, resetting loading state");
+      setIsLoading(false);
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        if (last?.role === "assistant" && last.content?.includes("Thinking")) {
+          return prev.slice(0, -1);
+        }
+        return prev;
+      });
+    }, 30_000); // 30 second safety net
+    
+    // Cleanup function to clear timeout if execution completes normally
+    const cleanupLoadingTimeout = () => {
+      if (loadingResetTimeout) {
+        clearTimeout(loadingResetTimeout);
+        loadingResetTimeout = null;
+      }
+    };
     let assistantContent = "";
 
     const updateAssistantMessage = (chunk: string) => {
@@ -2544,6 +2592,7 @@ export function useChat() {
       }
 
       setIsLoading(false);
+      cleanupLoadingTimeout();
     } catch (error) {
       console.error("Chat error:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -2565,6 +2614,7 @@ export function useChat() {
       
       setMessages(prev => prev.slice(0, -1));
       setIsLoading(false);
+      cleanupLoadingTimeout();
     }
   }, [
     messages,

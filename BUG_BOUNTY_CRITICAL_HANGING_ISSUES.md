@@ -20,7 +20,29 @@ The MCP Messenger application is experiencing critical hanging issues that rende
 
 ### Issue #1: Chat Requests Not Reaching Backend Function
 **Severity:** P0 - CRITICAL  
-**Status:** 🔴 UNRESOLVED  
+**Status:** 🔴 UNRESOLVED
+
+### Issue #1b: Input Field Becomes Disabled After First Message
+**Severity:** P0 - CRITICAL  
+**Status:** 🟡 PARTIALLY ADDRESSED
+
+**Description:**
+- User can type and send first message
+- After sending, input field becomes disabled/blocked
+- Cannot type additional messages
+- Input appears "in use" or permanently disabled
+
+**Root Cause:**
+- `isLoading` state is set to `true` when message is sent
+- If request never completes or errors silently, `isLoading` never resets to `false`
+- ChatInput component has `disabled={isLoading || hasPendingUploads}`
+- When `isLoading` is stuck at `true`, input is permanently disabled
+
+**Fix Applied:**
+- ✅ Added safety timeout (30 seconds) to reset `isLoading` if stuck
+- ✅ Added useEffect hook to monitor `isLoading` and reset after 60 seconds
+- ✅ Added cleanup in all error paths
+- 🟡 **Needs testing to verify fix works**  
 
 **Description:**
 - User sends a message (e.g., "test")
