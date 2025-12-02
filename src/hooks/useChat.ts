@@ -2279,6 +2279,7 @@ export function useChat() {
       console.error("[useChat] Raw VITE_SUPABASE_URL from env:", supabaseUrl);
       console.error("[useChat] All env vars:", Object.keys(import.meta.env).filter(k => k.startsWith('VITE_')));
       
+      console.error("[useChat] Checking supabaseUrl validity");
       if (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL') || supabaseUrl.includes('your-supabase-ref')) {
         const errorMsg = "Supabase URL is not configured. Please set VITE_SUPABASE_URL environment variable.";
         console.error("[useChat]", errorMsg, "Current value:", supabaseUrl);
@@ -2292,13 +2293,19 @@ export function useChat() {
         return;
       }
       
+      console.error("[useChat] Supabase URL is valid, constructing CHAT_URL");
       const CHAT_URL = `${supabaseUrl}/functions/v1/chat`;
-      console.log("[useChat] ===== CHAT REQUEST DEBUG =====");
-      console.log("[useChat] VITE_SUPABASE_URL:", supabaseUrl);
-      console.log("[useChat] CHAT_URL:", CHAT_URL);
-      console.log("[useChat] Full URL will be:", CHAT_URL);
-      console.log("[useChat] ===============================");
+      console.error("[useChat] ===== CHAT REQUEST DEBUG =====");
+      console.error("[useChat] VITE_SUPABASE_URL:", supabaseUrl);
+      console.error("[useChat] CHAT_URL:", CHAT_URL);
+      console.error("[useChat] Full URL will be:", CHAT_URL);
+      console.error("[useChat] ===============================");
+      
+      console.error("[useChat] Building message history");
       const history = [...messages, userMsg].map(({ role, content }) => ({ role, content }));
+      console.error("[useChat] History length:", history.length);
+      
+      console.error("[useChat] Building document context payload");
       const documentContextPayload =
         documentContext && documentContext.length > 0
           ? documentContext.map((doc) => ({
@@ -2307,25 +2314,43 @@ export function useChat() {
               textLength: doc.textLength ?? 0,
             }))
           : [];
+      console.error("[useChat] Document context payload length:", documentContextPayload.length);
       if (documentContextPayload.length > 0) {
-        console.log("[useChat] Including document context payload:", documentContextPayload);
+        console.error("[useChat] Including document context payload:", documentContextPayload);
       }
       
       // Get session token for authentication
-      const {
-        data: { session },
-      } = await supabaseClient.auth.getSession();
+      console.error("[useChat] About to call supabaseClient.auth.getSession()");
+      let sessionToken: string | null = null;
+      try {
+        const {
+          data: { session: authSession },
+        } = await supabaseClient.auth.getSession();
+        console.error("[useChat] getSession() completed successfully");
+        console.error("[useChat] Session exists?", !!authSession);
+        sessionToken = authSession?.access_token ?? null;
+      } catch (error) {
+        console.error("[useChat] ERROR in getSession():", error);
+        throw error;
+      }
       
+      console.error("[useChat] Building headers");
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
       };
       
       // Use session token if available, otherwise fall back to anon key
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`;
+      console.error("[useChat] Setting Authorization header");
+      if (sessionToken) {
+        console.error("[useChat] Using session token for auth");
+        headers.Authorization = `Bearer ${sessionToken}`;
       } else if (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY) {
+        console.error("[useChat] Using publishable key for auth");
         headers.Authorization = `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`;
+      } else {
+        console.error("[useChat] WARNING: No auth token available!");
       }
+      console.error("[useChat] Headers:", headers);
       
       const payload: Record<string, unknown> = {
         messages: history,
