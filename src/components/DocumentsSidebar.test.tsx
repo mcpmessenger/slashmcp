@@ -19,20 +19,37 @@ export const DocumentsSidebarTest: React.FC = () => {
 
   useEffect(() => {
     console.log("[DocumentsSidebarTest] ===== MOUNTED =====");
+    console.log("[DocumentsSidebarTest] useEffect running...");
+    setDebugInfo({ step: "mounted", timestamp: new Date().toISOString() });
     
     const testQuery = async () => {
       try {
         console.log("[DocumentsSidebarTest] Step 1: Getting session...");
-        const { data: { session }, error: sessionError } = await supabaseClient.auth.getSession();
+        setDebugInfo(prev => ({ ...prev, step: "getting_session" }));
+        
+        const sessionPromise = supabaseClient.auth.getSession();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error("getSession timeout after 5s")), 5000)
+        );
+        
+        const sessionResult = await Promise.race([sessionPromise, timeoutPromise]) as any;
+        const { data: { session }, error: sessionError } = sessionResult;
+        
+        console.log("[DocumentsSidebarTest] Session result:", {
+          hasSession: !!session,
+          hasError: !!sessionError,
+          error: sessionError,
+        });
         
         if (sessionError) {
           throw new Error(`Session error: ${sessionError.message}`);
         }
         
         if (!session) {
-          setError("No session found");
+          console.warn("[DocumentsSidebarTest] No session found");
+          setError("No session found - user may not be logged in");
           setIsLoading(false);
-          setDebugInfo({ step: "no_session" });
+          setDebugInfo({ step: "no_session", message: "User not authenticated" });
           return;
         }
 
@@ -40,42 +57,79 @@ export const DocumentsSidebarTest: React.FC = () => {
           userId: session.user.id,
           hasAccessToken: !!session.access_token,
         });
-        setDebugInfo({ step: "session_found", userId: session.user.id });
+        setDebugInfo(prev => ({ 
+          ...prev, 
+          step: "session_found", 
+          userId: session.user.id,
+          hasAccessToken: !!session.access_token,
+        }));
 
         console.log("[DocumentsSidebarTest] Step 3: Querying database...");
-        const { data, error: queryError } = await supabaseClient
+        setDebugInfo(prev => ({ ...prev, step: "querying" }));
+        
+        const queryPromise = supabaseClient
           .from("processing_jobs")
           .select("*")
           .eq("user_id", session.user.id)
           .limit(10);
+        
+        const queryTimeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Query timeout after 10s")), 10000)
+        );
+        
+        const queryResult = await Promise.race([queryPromise, queryTimeoutPromise]) as any;
+        const { data, error: queryError } = queryResult;
 
         console.log("[DocumentsSidebarTest] Step 4: Query result:", {
           dataLength: data?.length || 0,
+          hasError: !!queryError,
           error: queryError,
           firstItem: data?.[0],
         });
 
         if (queryError) {
-          throw new Error(`Query error: ${queryError.message}`);
+          throw new Error(`Query error: ${queryError.message} (code: ${queryError.code})`);
         }
 
+        console.log("[DocumentsSidebarTest] Step 5: Setting documents...");
         setDocuments(data || []);
         setDebugInfo({
           step: "query_complete",
           userId: session.user.id,
           documentCount: data?.length || 0,
           analysisTargets: data ? [...new Set(data.map(d => d.analysis_target))] : [],
+          sampleDocument: data?.[0] ? {
+            id: data[0].id,
+            fileName: data[0].file_name,
+            status: data[0].status,
+            analysisTarget: data[0].analysis_target,
+          } : null,
         });
         setIsLoading(false);
+        console.log("[DocumentsSidebarTest] ===== COMPLETE =====");
       } catch (err) {
         console.error("[DocumentsSidebarTest] ERROR:", err);
-        setError(err instanceof Error ? err.message : String(err));
+        console.error("[DocumentsSidebarTest] Error stack:", err instanceof Error ? err.stack : "No stack");
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        setError(errorMessage);
         setIsLoading(false);
-        setDebugInfo({ step: "error", error: err instanceof Error ? err.message : String(err) });
+        setDebugInfo({ 
+          step: "error", 
+          error: errorMessage,
+          errorType: err instanceof Error ? err.constructor.name : typeof err,
+        });
       }
     };
 
-    testQuery();
+    // Wrap in try-catch to catch any sync errors
+    try {
+      testQuery();
+    } catch (syncErr) {
+      console.error("[DocumentsSidebarTest] SYNC ERROR:", syncErr);
+      setError(syncErr instanceof Error ? syncErr.message : String(syncErr));
+      setIsLoading(false);
+      setDebugInfo({ step: "sync_error", error: String(syncErr) });
+    }
   }, []);
 
   return (
