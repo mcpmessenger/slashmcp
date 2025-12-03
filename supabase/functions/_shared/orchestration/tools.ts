@@ -269,7 +269,59 @@ export function createRagTools(
           const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
           const supabase = createClient(supabaseUrl, supabaseServiceKey);
           
-          // Call doc-context Edge Function
+          // First, check document status
+          let statusQuery = supabase
+            .from("processing_jobs")
+            .select("id, file_name, status, metadata")
+            .eq("user_id", userId);
+          
+          if (jobIds && jobIds.length > 0) {
+            statusQuery = statusQuery.in("id", jobIds);
+          }
+          
+          const { data: docs, error: docError } = await statusQuery;
+          
+          if (docError) {
+            return `Error checking document status: ${docError.message}`;
+          }
+          
+          if (!docs || docs.length === 0) {
+            return "You don't have any uploaded documents yet. Please upload a document first.";
+          }
+          
+          // Check for processing documents
+          const processingDocs = docs.filter(d => {
+            const status = d.status;
+            const metadata = d.metadata as Record<string, unknown> | null;
+            const stage = metadata?.job_stage as string || "unknown";
+            return status !== "completed" || (stage !== "indexed" && stage !== "injected");
+          });
+          
+          if (processingDocs.length > 0 && processingDocs.length === docs.length) {
+            // All documents are still processing
+            const docNames = processingDocs.map(d => d.file_name).join(", ");
+            const statuses = processingDocs.map(d => {
+              const metadata = d.metadata as Record<string, unknown> | null;
+              const stage = metadata?.job_stage as string || "unknown";
+              return `${d.file_name} (${d.status}, stage: ${stage})`;
+            }).join("; ");
+            return `Your documents are still being processed: ${docNames}. Current status: ${statuses}. Please wait a few moments and try again. The documents will be searchable once processing completes.`;
+          }
+          
+          // Filter to only completed documents for search
+          const readyJobIds = docs
+            .filter(d => {
+              const metadata = d.metadata as Record<string, unknown> | null;
+              const stage = metadata?.job_stage as string || "unknown";
+              return d.status === "completed" && (stage === "indexed" || stage === "injected");
+            })
+            .map(d => d.id);
+          
+          if (readyJobIds.length === 0) {
+            return "Your documents are still being processed. Please wait a few moments for processing to complete, then try searching again.";
+          }
+          
+          // Call doc-context Edge Function with only ready documents
           const functionsUrl = supabaseUrl.replace(/\/$/, "") + "/functions/v1";
           const response = await fetch(`${functionsUrl}/doc-context`, {
             method: "POST",
@@ -279,7 +331,7 @@ export function createRagTools(
             },
             body: JSON.stringify({
               query,
-              jobIds: jobIds || [],
+              jobIds: readyJobIds,
               limit,
               similarity_threshold: 0.7,
             }),
@@ -292,6 +344,11 @@ export function createRagTools(
 
           const data = await response.json();
           if (!data.contexts || data.contexts.length === 0) {
+            // If some docs are processing, mention that
+            if (processingDocs.length > 0) {
+              const processingNames = processingDocs.map(d => d.file_name).join(", ");
+              return `No relevant results found in your processed documents. Note: ${processingNames} ${processingDocs.length === 1 ? 'is' : 'are'} still processing and will be searchable once complete.`;
+            }
             return "No relevant documents found for your query.";
           }
 
