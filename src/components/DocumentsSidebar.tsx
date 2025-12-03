@@ -216,9 +216,9 @@ export const DocumentsSidebar: React.FC<{
 
       console.log("[DocumentsSidebar] Querying documents for user:", userId);
       console.log("[DocumentsSidebar] Session details:", {
-        hasAccessToken: !!session.access_token,
-        userId: session.user.id,
-        tokenPreview: session.access_token?.substring(0, 20) + "...",
+        hasAccessToken: !!session?.access_token,
+        userId: session?.user?.id || userId,
+        tokenPreview: session?.access_token?.substring(0, 20) + "..." || "none",
       });
       
       const queryStartTime = Date.now();
@@ -467,7 +467,7 @@ export const DocumentsSidebar: React.FC<{
       setIsLoading(false);
       setIsLoadingRef(false);
     };
-  }, []); // Empty deps - only run on mount
+  }, [propUserId]); // Include propUserId so it reloads if userId changes
 
   // Refresh when external trigger changes (e.g., when files are uploaded)
   useEffect(() => {
