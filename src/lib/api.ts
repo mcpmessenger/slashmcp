@@ -374,11 +374,33 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
   try {
     const headers = await getAuthHeaders();
     const url = `${FUNCTIONS_URL}${textractFunctionPath}`;
-    console.log(`[triggerTextractJob] Calling: ${url}`, { jobId });
+    console.log(`[triggerTextractJob] Calling: ${url}`, { 
+      jobId,
+      FUNCTIONS_URL,
+      textractFunctionPath,
+      fullUrl: url,
+      hasHeaders: !!headers,
+      headerKeys: Object.keys(headers),
+    });
     
     // Wrap fetch in try-catch to catch network errors
     let response: Response;
     try {
+      // First, try OPTIONS preflight to check CORS
+      console.log(`[triggerTextractJob] Testing OPTIONS preflight to: ${url}`);
+      const preflightResponse = await fetch(url, {
+        method: "OPTIONS",
+        headers: {
+          "Origin": window.location.origin,
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "authorization,content-type",
+        },
+      });
+      console.log(`[triggerTextractJob] OPTIONS preflight response:`, {
+        status: preflightResponse.status,
+        headers: Object.fromEntries(preflightResponse.headers.entries()),
+      });
+      
       response = await fetch(url, {
         method: "POST",
         headers,
