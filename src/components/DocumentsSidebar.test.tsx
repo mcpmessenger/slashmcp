@@ -11,7 +11,7 @@ import { supabaseClient } from "@/lib/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 
-export const DocumentsSidebarTest: React.FC = () => {
+export const DocumentsSidebarTest: React.FC<{ userId?: string }> = ({ userId: propUserId }) => {
   const [documents, setDocuments] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -105,59 +105,79 @@ export const DocumentsSidebarTest: React.FC = () => {
 
   useEffect(() => {
     console.log("[DocumentsSidebarTest] ===== MOUNTED =====");
+    console.log("[DocumentsSidebarTest] Props:", { propUserId });
     console.log("[DocumentsSidebarTest] useEffect running...");
-    setDebugInfo({ step: "mounted", timestamp: new Date().toISOString() });
+    setDebugInfo({ step: "mounted", timestamp: new Date().toISOString(), propUserId });
     
     const testQuery = async () => {
       try {
-        console.log("[DocumentsSidebarTest] Step 1: Getting session from localStorage...");
-        setDebugInfo(prev => ({ ...prev, step: "getting_session" }));
+        let userId: string | undefined = propUserId;
+        let session: { access_token?: string; refresh_token?: string; user?: { id: string } } | null = null;
         
-        // Use localStorage session directly (avoid getSession() timeout)
-        let session = getSessionFromStorage();
-        
-        console.log("[DocumentsSidebarTest] Session from localStorage:", {
-          hasSession: !!session,
-          hasAccessToken: !!session?.access_token,
-          hasUser: !!session?.user,
-          userId: session?.user?.id,
-        });
-        
-        if (!session || !session.access_token || !session.user?.id) {
-          console.warn("[DocumentsSidebarTest] No session found in localStorage");
-          console.warn("[DocumentsSidebarTest] This might mean:");
-          console.warn("  1. User is not logged in");
-          console.warn("  2. Session expired");
-          console.warn("  3. Session stored in different format");
+        // If userId prop provided, use it directly (from useChat hook)
+        if (propUserId) {
+          console.log("[DocumentsSidebarTest] Using userId from props:", propUserId);
+          setDebugInfo(prev => ({ ...prev, step: "using_prop_userid", userId: propUserId }));
           
-          setError("No session found - user may not be logged in. Please sign in.");
-          setIsLoading(false);
-          setDebugInfo({ 
-            step: "no_session", 
-            message: "User not authenticated",
-            suggestion: "Try logging in again or check if you're signed in"
+          // Still need to get session token for RLS
+          session = getSessionFromStorage();
+          if (!session || !session.access_token) {
+            console.warn("[DocumentsSidebarTest] Have userId but no session token - query may fail RLS");
+          }
+        } else {
+          // Try localStorage session
+          console.log("[DocumentsSidebarTest] Step 1: Getting session from localStorage...");
+          setDebugInfo(prev => ({ ...prev, step: "getting_session" }));
+          
+          session = getSessionFromStorage();
+          
+          console.log("[DocumentsSidebarTest] Session from localStorage:", {
+            hasSession: !!session,
+            hasAccessToken: !!session?.access_token,
+            hasUser: !!session?.user,
+            userId: session?.user?.id,
           });
-          return;
+          
+          if (!session || !session.access_token || !session.user?.id) {
+            console.warn("[DocumentsSidebarTest] No session found in localStorage");
+            setError("No session found - user may not be logged in. Please sign in.");
+            setIsLoading(false);
+            setDebugInfo({ 
+              step: "no_session", 
+              message: "User not authenticated",
+              suggestion: "Try logging in again or check if you're signed in"
+            });
+            return;
+          }
+          
+          userId = session.user.id;
+          console.log("[DocumentsSidebarTest] ✅ Session found, userId:", userId);
+          setDebugInfo(prev => ({ ...prev, step: "session_found_in_storage", userId }));
         }
         
-        console.log("[DocumentsSidebarTest] ✅ Session found, proceeding to set on client...");
-        setDebugInfo(prev => ({ ...prev, step: "session_found_in_storage", userId: session.user.id }));
+        if (!userId) {
+          throw new Error("No userId available");
+        }
         
-        // Set session on supabaseClient for RLS
-        console.log("[DocumentsSidebarTest] Step 1.5: Setting session on supabaseClient...");
-        try {
-          const { error: setSessionError } = await supabaseClient.auth.setSession({
-            access_token: session.access_token,
-            refresh_token: (session as any).refresh_token || "",
-          });
-          
-          if (setSessionError) {
-            throw new Error(`Failed to set session: ${setSessionError.message}`);
+        // Set session on supabaseClient for RLS (if we have session token)
+        if (session?.access_token) {
+          console.log("[DocumentsSidebarTest] Step 1.5: Setting session on supabaseClient...");
+          try {
+            const { error: setSessionError } = await supabaseClient.auth.setSession({
+              access_token: session.access_token,
+              refresh_token: session.refresh_token || "",
+            });
+            
+            if (setSessionError) {
+              console.warn("[DocumentsSidebarTest] Failed to set session (non-fatal):", setSessionError);
+              // Don't throw - continue with query anyway
+            } else {
+              console.log("[DocumentsSidebarTest] ✅ Session set on supabaseClient");
+            }
+          } catch (setErr) {
+            console.warn("[DocumentsSidebarTest] Exception setting session (non-fatal):", setErr);
+            // Continue anyway
           }
-          console.log("[DocumentsSidebarTest] ✅ Session set on supabaseClient");
-        } catch (setErr) {
-          console.error("[DocumentsSidebarTest] Failed to set session:", setErr);
-          throw setErr;
         }
 
         console.log("[DocumentsSidebarTest] Step 2: Session found:", {
@@ -171,13 +191,13 @@ export const DocumentsSidebarTest: React.FC = () => {
           hasAccessToken: !!session.access_token,
         }));
 
-        console.log("[DocumentsSidebarTest] Step 3: Querying database...");
-        setDebugInfo(prev => ({ ...prev, step: "querying" }));
+        console.log("[DocumentsSidebarTest] Step 3: Querying database for userId:", userId);
+        setDebugInfo(prev => ({ ...prev, step: "querying", queryUserId: userId }));
         
         const queryPromise = supabaseClient
           .from("processing_jobs")
           .select("*")
-          .eq("user_id", session.user.id)
+          .eq("user_id", userId)
           .limit(10);
         
         const queryTimeoutPromise = new Promise((_, reject) =>
@@ -202,7 +222,7 @@ export const DocumentsSidebarTest: React.FC = () => {
         setDocuments(data || []);
         setDebugInfo({
           step: "query_complete",
-          userId: session.user.id,
+          userId: userId,
           documentCount: data?.length || 0,
           analysisTargets: data ? [...new Set(data.map(d => d.analysis_target))] : [],
           sampleDocument: data?.[0] ? {

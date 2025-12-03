@@ -517,7 +517,7 @@ const Index = () => {
             <>
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
-                  {/* TEMPORARY: Using test version to debug */}
+                  {/* TEMPORARY: Using test version to debug - pass session from useChat */}
                   {false ? (
                     <DocumentsSidebar
                       refreshTrigger={documentsSidebarRefreshTrigger}
@@ -527,7 +527,7 @@ const Index = () => {
                       }}
                     />
                   ) : (
-                    <DocumentsSidebarTest />
+                    <DocumentsSidebarTest userId={session?.user?.id} />
                   )}
                 </div>
               </ResizablePanel>
