@@ -17,6 +17,34 @@ export const DocumentsSidebarTest: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<any>({});
 
+  // Get session from localStorage (same pattern as DocumentsSidebar)
+  const getSessionFromStorage = (): { access_token?: string; user?: { id: string } } | null => {
+    if (typeof window === "undefined") return null;
+    
+    try {
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+      if (!SUPABASE_URL) return null;
+      
+      const projectRef = SUPABASE_URL.replace("https://", "").split(".supabase.co")[0]?.split(".")[0];
+      if (!projectRef) return null;
+      
+      const storageKey = `sb-${projectRef}-auth-token`;
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return null;
+      
+      const parsed = JSON.parse(raw);
+      const session = parsed?.currentSession ?? parsed?.session ?? parsed;
+      
+      if (session?.access_token && session?.user?.id) {
+        return session;
+      }
+    } catch (error) {
+      console.warn("[DocumentsSidebarTest] Failed to read localStorage:", error);
+    }
+    
+    return null;
+  };
+
   useEffect(() => {
     console.log("[DocumentsSidebarTest] ===== MOUNTED =====");
     console.log("[DocumentsSidebarTest] useEffect running...");
@@ -24,33 +52,42 @@ export const DocumentsSidebarTest: React.FC = () => {
     
     const testQuery = async () => {
       try {
-        console.log("[DocumentsSidebarTest] Step 1: Getting session...");
+        console.log("[DocumentsSidebarTest] Step 1: Getting session from localStorage...");
         setDebugInfo(prev => ({ ...prev, step: "getting_session" }));
         
-        const sessionPromise = supabaseClient.auth.getSession();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error("getSession timeout after 5s")), 5000)
-        );
+        // Use localStorage session directly (avoid getSession() timeout)
+        let session = getSessionFromStorage();
         
-        const sessionResult = await Promise.race([sessionPromise, timeoutPromise]) as any;
-        const { data: { session }, error: sessionError } = sessionResult;
-        
-        console.log("[DocumentsSidebarTest] Session result:", {
+        console.log("[DocumentsSidebarTest] Session from localStorage:", {
           hasSession: !!session,
-          hasError: !!sessionError,
-          error: sessionError,
+          hasAccessToken: !!session?.access_token,
+          hasUser: !!session?.user,
+          userId: session?.user?.id,
         });
         
-        if (sessionError) {
-          throw new Error(`Session error: ${sessionError.message}`);
-        }
-        
-        if (!session) {
-          console.warn("[DocumentsSidebarTest] No session found");
+        if (!session || !session.access_token || !session.user?.id) {
+          console.warn("[DocumentsSidebarTest] No session found in localStorage");
           setError("No session found - user may not be logged in");
           setIsLoading(false);
           setDebugInfo({ step: "no_session", message: "User not authenticated" });
           return;
+        }
+        
+        // Set session on supabaseClient for RLS
+        console.log("[DocumentsSidebarTest] Step 1.5: Setting session on supabaseClient...");
+        try {
+          const { error: setSessionError } = await supabaseClient.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: (session as any).refresh_token || "",
+          });
+          
+          if (setSessionError) {
+            throw new Error(`Failed to set session: ${setSessionError.message}`);
+          }
+          console.log("[DocumentsSidebarTest] ✅ Session set on supabaseClient");
+        } catch (setErr) {
+          console.error("[DocumentsSidebarTest] Failed to set session:", setErr);
+          throw setErr;
         }
 
         console.log("[DocumentsSidebarTest] Step 2: Session found:", {
