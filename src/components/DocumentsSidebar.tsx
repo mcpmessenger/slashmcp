@@ -57,14 +57,25 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       });
 
       if (error) {
-        console.error("[DocumentsSidebar] Error loading documents:", error);
+        console.error("[DocumentsSidebar] Database query error:", error);
         console.error("[DocumentsSidebar] Error details:", JSON.stringify(error, null, 2));
+        console.error("[DocumentsSidebar] Query was:", {
+          table: "processing_jobs",
+          filters: {
+            user_id: session.user.id,
+            analysis_target: "document-analysis",
+          },
+        });
+        
+        // CRITICAL: Always clear loading state on error
+        setIsLoading(false);
+        setDocuments([]);
+        
         toast({
           title: "Error loading documents",
           description: error.message || "Failed to load documents. Check console for details.",
           variant: "destructive",
         });
-        setIsLoading(false);
         return;
       }
 
@@ -97,12 +108,35 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       console.log("[DocumentsSidebar] Setting documents:", docs.length, {
         documents: docs.map(d => ({ fileName: d.fileName, status: d.status, stage: d.stage })),
       });
+      
+      // CRITICAL: Always set documents and clear loading, even if empty
       setDocuments(docs);
+      setIsLoading(false);
+      
+      if (docs.length === 0) {
+        console.warn("[DocumentsSidebar] No documents found. Query filters:", {
+          userId: session.user.id,
+          analysisTarget: "document-analysis",
+        });
+        console.warn("[DocumentsSidebar] This might indicate:");
+        console.warn("  1. No documents uploaded yet");
+        console.warn("  2. Documents have different user_id");
+        console.warn("  3. Documents have different analysis_target");
+        console.warn("  4. RLS policies blocking the query");
+      }
     } catch (error) {
       console.error("[DocumentsSidebar] Error loading documents:", error);
-    } finally {
-      console.log("[DocumentsSidebar] Setting isLoading to false");
+      console.error("[DocumentsSidebar] Error details:", JSON.stringify(error, null, 2));
+      // CRITICAL: Always clear loading state even on error
       setIsLoading(false);
+      setDocuments([]); // Clear documents on error
+      
+      // Show error toast
+      toast({
+        title: "Error loading documents",
+        description: error instanceof Error ? error.message : "Failed to load documents. Check console for details.",
+        variant: "destructive",
+      });
     }
   };
 
