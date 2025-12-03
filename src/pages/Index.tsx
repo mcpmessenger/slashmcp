@@ -2,6 +2,7 @@ import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
 import { FileUploadStatus } from "@/components/FileUploadStatus";
 import { DocumentsSidebar } from "@/components/DocumentsSidebar";
+import { DocumentsSidebarTest } from "@/components/DocumentsSidebar.test";
 import { useChat } from "@/hooks/useChat";
 import { fetchJobStatus } from "@/lib/api";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -516,13 +517,18 @@ const Index = () => {
             <>
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
-                  <DocumentsSidebar
-                    refreshTrigger={documentsSidebarRefreshTrigger}
-                    onDocumentClick={(jobId) => {
-                      // When document is clicked, could trigger a search or show details
-                      console.log("Document clicked:", jobId);
-                    }}
-                  />
+                  {/* TEMPORARY: Using test version to debug */}
+                  {false ? (
+                    <DocumentsSidebar
+                      refreshTrigger={documentsSidebarRefreshTrigger}
+                      onDocumentClick={(jobId) => {
+                        // When document is clicked, could trigger a search or show details
+                        console.log("Document clicked:", jobId);
+                      }}
+                    />
+                  ) : (
+                    <DocumentsSidebarTest />
+                  )}
                 </div>
               </ResizablePanel>
               <ResizableHandle withHandle className="hidden lg:flex" />

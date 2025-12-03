@@ -107,7 +107,13 @@ export const DocumentsSidebar: React.FC<{
   onDocumentClick?: (jobId: string) => void;
   refreshTrigger?: number; // External trigger to force refresh
 }> = ({ onDocumentClick, refreshTrigger }) => {
+  // CRITICAL: Log immediately when component renders (before any hooks)
   console.log("[DocumentsSidebar] ===== COMPONENT RENDERED =====");
+  console.log("[DocumentsSidebar] Render props:", { 
+    hasOnDocumentClick: !!onDocumentClick, 
+    refreshTrigger 
+  });
+  
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [isLoading, setIsLoading] = useState(true);
