@@ -429,11 +429,20 @@ export const DocumentsSidebar: React.FC<{
   useEffect(() => {
     console.log("[DocumentsSidebar] ===== useEffect MOUNTED =====");
     console.log("[DocumentsSidebar] Component mounted, starting initial load");
+    console.log("[DocumentsSidebar] Environment check:", {
+      hasSupabaseUrl: !!import.meta.env.VITE_SUPABASE_URL,
+      supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
+      hasSupabaseKey: !!import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    });
     
     // Immediate load
     loadDocuments().catch((error) => {
       console.error("[DocumentsSidebar] CRITICAL: Initial load failed:", error);
       console.error("[DocumentsSidebar] Error stack:", error instanceof Error ? error.stack : "No stack");
+      console.error("[DocumentsSidebar] Error details:", {
+        message: error instanceof Error ? error.message : String(error),
+        name: error instanceof Error ? error.name : "Unknown",
+      });
       // Ensure loading state is cleared even if loadDocuments throws
       setIsLoading(false);
       setIsLoadingRef(false);
