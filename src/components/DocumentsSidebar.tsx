@@ -103,7 +103,10 @@ interface Document {
   updatedAt: string;
 }
 
-export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => void }> = ({ onDocumentClick }) => {
+export const DocumentsSidebar: React.FC<{ 
+  onDocumentClick?: (jobId: string) => void;
+  refreshTrigger?: number; // External trigger to force refresh
+}> = ({ onDocumentClick, refreshTrigger }) => {
   console.log("[DocumentsSidebar] ===== COMPONENT RENDERED =====");
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -392,6 +395,17 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       setIsLoadingRef(false);
     };
   }, []); // Empty deps - only run on mount
+
+  // Refresh when external trigger changes (e.g., when files are uploaded)
+  useEffect(() => {
+    if (refreshTrigger && refreshTrigger > 0) {
+      console.log("[DocumentsSidebar] External refresh triggered:", refreshTrigger);
+      setHasError(false); // Reset error state on manual refresh
+      loadDocuments().catch((error) => {
+        console.error("[DocumentsSidebar] Error on external refresh:", error);
+      });
+    }
+  }, [refreshTrigger]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {

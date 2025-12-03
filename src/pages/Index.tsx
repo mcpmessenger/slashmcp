@@ -80,6 +80,7 @@ const Index = () => {
   const lastSpokenRef = useRef<string>("");
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
+  const [documentsSidebarRefreshTrigger, setDocumentsSidebarRefreshTrigger] = useState(0);
   
   // Manual reset function for stuck uploads
   const resetStuckUpload = useCallback(() => {
@@ -516,6 +517,7 @@ const Index = () => {
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
                   <DocumentsSidebar
+                    refreshTrigger={documentsSidebarRefreshTrigger}
                     onDocumentClick={(jobId) => {
                       // When document is clicked, could trigger a search or show details
                       console.log("Document clicked:", jobId);
@@ -685,8 +687,9 @@ const Index = () => {
         </ResizablePanelGroup>
         </div>
 
-        {/* File Upload Status - Separated from chat input */}
-        {authReady && session && (
+        {/* File Upload Status - Hidden since DocumentsSidebar is the primary display */}
+        {/* Files now appear in Documents & Knowledge sidebar instead */}
+        {false && authReady && session && (
           <FileUploadStatus
             jobs={uploadJobs}
             isRegisteringUpload={isRegisteringUpload}
@@ -830,6 +833,11 @@ const Index = () => {
             onJobsChange={(jobs, isRegistering) => {
               setUploadJobs(jobs);
               setIsRegisteringUpload(isRegistering);
+              // Trigger DocumentsSidebar refresh when new jobs are added or status changes
+              if (jobs.length > 0) {
+                console.log("[Index] Triggering DocumentsSidebar refresh due to job changes");
+                setDocumentsSidebarRefreshTrigger(prev => prev + 1);
+              }
             }}
             onEvent={(event) => {
               // Add upload events to MCP Event Log
