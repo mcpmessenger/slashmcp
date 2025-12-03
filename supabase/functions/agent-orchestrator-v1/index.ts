@@ -179,18 +179,38 @@ async function executeOrchestration(
     // Enhance orchestrator instructions with document context
     let enhancedInstructions = "";
     if (documentContext && documentContext.availableDocuments.length > 0) {
-      enhancedInstructions = `\n\nCURRENT USER CONTEXT:\n${formatDocumentContext(documentContext)}\n\n`;
-      if (classification.intent === "document" && classification.confidence >= 0.5) {
-        enhancedInstructions += `QUERY ANALYSIS:\n- User is asking about documents (confidence: ${classification.confidence})\n`;
+      enhancedInstructions = `\n\n=== CURRENT USER CONTEXT ===\n${formatDocumentContext(documentContext)}\n\n`;
+      
+      // Always provide context if user has documents, even if classification is uncertain
+      if (classification.intent === "document" || classification.intent === "hybrid" || classification.confidence >= 0.3) {
+        enhancedInstructions += `=== QUERY ANALYSIS ===\n`;
+        enhancedInstructions += `- User query intent: ${classification.intent} (confidence: ${classification.confidence.toFixed(2)})\n`;
+        enhancedInstructions += `- Suggested tool: ${classification.suggestedTool}\n`;
+        
         if (classification.context.documentName) {
           enhancedInstructions += `- User mentioned document: ${classification.context.documentName}\n`;
         }
-        if (documentContext.readyDocuments > 0) {
-          enhancedInstructions += `- ${documentContext.readyDocuments} document(s) are ready for search - USE search_documents tool NOW\n`;
-        } else if (documentContext.processingDocuments > 0) {
-          enhancedInstructions += `- ${documentContext.processingDocuments} document(s) are still processing - inform user and check status\n`;
+        if (classification.context.mentionsDocument || classification.context.mentionsFile) {
+          enhancedInstructions += `- Query mentions documents/files - this is a DOCUMENT QUERY\n`;
         }
-        enhancedInstructions += `- You MUST use the search_documents tool - DO NOT use web search\n\n`;
+        
+        if (documentContext.readyDocuments > 0) {
+          enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
+          enhancedInstructions += `- ${documentContext.readyDocuments} document(s) are ready for search\n`;
+          enhancedInstructions += `- YOU MUST use the search_documents tool immediately\n`;
+          enhancedInstructions += `- DO NOT ask for clarification - use search_documents with the user's query\n`;
+          enhancedInstructions += `- DO NOT use web search - use search_documents instead\n\n`;
+        } else if (documentContext.processingDocuments > 0) {
+          enhancedInstructions += `\n=== DOCUMENT STATUS ===\n`;
+          enhancedInstructions += `- ${documentContext.processingDocuments} document(s) are still processing\n`;
+          enhancedInstructions += `- Inform user that documents are processing and will be available soon\n`;
+          enhancedInstructions += `- You can still try search_documents - it will return status information\n\n`;
+        } else {
+          enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
+          enhancedInstructions += `- User has documents but they may not be ready\n`;
+          enhancedInstructions += `- Try search_documents tool first - it will handle the status appropriately\n`;
+          enhancedInstructions += `- DO NOT ask for clarification about which document - search all available documents\n\n`;
+        }
       }
     }
     
