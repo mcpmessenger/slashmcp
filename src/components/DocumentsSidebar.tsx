@@ -109,16 +109,26 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
   const [documents, setDocuments] = useState<Document[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [hasCheckedSession, setHasCheckedSession] = useState(false);
+  const [isLoadingRef, setIsLoadingRef] = useState(false); // Prevent concurrent loads
+  const [hasError, setHasError] = useState(false); // Track if there's a persistent error
   
   console.log("[DocumentsSidebar] Initial state:", { isLoading, documentCount: documents.length });
 
   const loadDocuments = async () => {
+    // Prevent concurrent loads
+    if (isLoadingRef) {
+      console.log("[DocumentsSidebar] Load already in progress, skipping...");
+      return;
+    }
+    
     console.log("[DocumentsSidebar] ===== loadDocuments START =====");
     console.log("[DocumentsSidebar] Current state:", { isLoading, documentCount: documents.length });
     
     try {
+      setIsLoadingRef(true);
       console.log("[DocumentsSidebar] Setting isLoading to true");
       setIsLoading(true);
+      setHasError(false); // Clear error state on new attempt
       
       console.log("[DocumentsSidebar] Getting session...");
       let session;
@@ -269,6 +279,8 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       setDocuments(docs);
       setIsLoading(false);
       setHasCheckedSession(true);
+      setIsLoadingRef(false);
+      setHasError(false);
       
       if (docs.length === 0) {
         console.warn("[DocumentsSidebar] No documents found. Query filters:", {
@@ -288,14 +300,21 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       console.error("[DocumentsSidebar] Error details:", JSON.stringify(error, null, 2));
       // CRITICAL: Always clear loading state even on error
       setIsLoading(false);
+      setIsLoadingRef(false);
       setDocuments([]); // Clear documents on error
+      setHasError(true); // Mark that there's an error
       
-      // Show error toast
-      toast({
-        title: "Error loading documents",
-        description: error instanceof Error ? error.message : "Failed to load documents. Check console for details.",
-        variant: "destructive",
-      });
+      // Only show error toast if it's not a timeout (to avoid spam)
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const isTimeout = errorMessage.includes("timeout");
+      
+      if (!isTimeout) {
+        toast({
+          title: "Error loading documents",
+          description: errorMessage,
+          variant: "destructive",
+        });
+      }
     }
   };
 
@@ -309,23 +328,37 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       console.error("[DocumentsSidebar] Error stack:", error instanceof Error ? error.stack : "No stack");
       // Ensure loading state is cleared even if loadDocuments throws
       setIsLoading(false);
+      setIsLoadingRef(false);
       setDocuments([]);
+      setHasError(true);
     });
     
-    // Refresh every 5 seconds to show status updates
+    // Refresh every 10 seconds to show status updates (only if no persistent error)
     const interval = setInterval(() => {
+      // Skip refresh if there's a persistent error (like timeout) to avoid spam
+      if (hasError) {
+        console.log("[DocumentsSidebar] Skipping refresh due to persistent error");
+        return;
+      }
+      
       console.log("[DocumentsSidebar] Interval refresh triggered");
       loadDocuments().catch((error) => {
         console.error("[DocumentsSidebar] Error refreshing documents:", error);
         // Don't show toast on every refresh error to avoid spam
         setIsLoading(false);
+        setIsLoadingRef(false);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes("timeout")) {
+          setHasError(true); // Stop polling on timeout errors
+        }
       });
-    }, 5000);
+    }, 10_000); // Increased to 10 seconds to reduce load
     
     return () => {
       console.log("[DocumentsSidebar] Cleanup - clearing interval and resetting state");
       clearInterval(interval);
       setIsLoading(false);
+      setIsLoadingRef(false);
     };
   }, []); // Empty deps - only run on mount
 
