@@ -4,6 +4,8 @@
 
 export * from "./agents.ts";
 export * from "./tools.ts";
+export * from "./queryClassifier.ts";
+export * from "./contextManager.ts";
 
 // Re-export specific tools for convenience
 export { listCommandsTool, helpTool, createRagTools } from "./tools.ts";

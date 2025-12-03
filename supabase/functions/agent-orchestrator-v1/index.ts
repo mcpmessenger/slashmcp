@@ -20,6 +20,9 @@ import {
   createRagTools,
   helpTool,
   listCommandsTool,
+  classifyQuery,
+  getDocumentContext,
+  formatDocumentContext,
 } from "../_shared/orchestration/index.ts";
 
 const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
@@ -150,6 +153,47 @@ async function executeOrchestration(
       finalHandoff,
     );
 
+    // Get document context for intelligent routing
+    let documentContext: Awaited<ReturnType<typeof getDocumentContext>> | null = null;
+    if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && input.userId) {
+      try {
+        documentContext = await getDocumentContext(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, input.userId);
+        console.log(`Document context: ${documentContext.availableDocuments.length} docs, ${documentContext.readyDocuments} ready, ${documentContext.processingDocuments} processing`);
+      } catch (error) {
+        console.error("Failed to get document context:", error);
+        // Continue without context
+      }
+    }
+    
+    // Classify query for intelligent routing
+    const classification = classifyQuery(
+      input.message,
+      documentContext?.availableDocuments.map(d => ({
+        id: d.id,
+        fileName: d.fileName,
+        status: d.status,
+      }))
+    );
+    console.log(`Query classification: intent=${classification.intent}, confidence=${classification.confidence}, tool=${classification.suggestedTool}`);
+    
+    // Enhance orchestrator instructions with document context
+    let enhancedInstructions = "";
+    if (documentContext && documentContext.availableDocuments.length > 0) {
+      enhancedInstructions = `\n\nCURRENT USER CONTEXT:\n${formatDocumentContext(documentContext)}\n\n`;
+      if (classification.intent === "document" && classification.confidence >= 0.5) {
+        enhancedInstructions += `QUERY ANALYSIS:\n- User is asking about documents (confidence: ${classification.confidence})\n`;
+        if (classification.context.documentName) {
+          enhancedInstructions += `- User mentioned document: ${classification.context.documentName}\n`;
+        }
+        if (documentContext.readyDocuments > 0) {
+          enhancedInstructions += `- ${documentContext.readyDocuments} document(s) are ready for search - USE search_documents tool NOW\n`;
+        } else if (documentContext.processingDocuments > 0) {
+          enhancedInstructions += `- ${documentContext.processingDocuments} document(s) are still processing - inform user and check status\n`;
+        }
+        enhancedInstructions += `- You MUST use the search_documents tool - DO NOT use web search\n\n`;
+      }
+    }
+    
     // Prepare conversation history
     const conversationHistory = input.conversationHistory || [];
     const conversation: Array<{ role: "user" | "assistant"; content: string }> = [
