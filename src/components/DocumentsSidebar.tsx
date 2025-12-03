@@ -194,32 +194,18 @@ export const DocumentsSidebar: React.FC<{
         return;
       }
       
-      // CRITICAL: Don't call setSession() - it hangs!
-      // The Supabase client should automatically use the session from localStorage
-      // This matches how ragService.ts successfully queries processing_jobs
-      console.log("[DocumentsSidebar] Step 5: Skipping setSession() - Supabase client should auto-use localStorage session");
-      console.log("[DocumentsSidebar] Step 5: We have userId from props:", userId);
-      console.log("[DocumentsSidebar] Step 5: Session token available:", !!session?.access_token);
+      // CRITICAL FIX: Call getSession() to ensure the client is fully initialized and has the session.
+      // This is the key difference from the working ragService.ts.
+      // Without this, the Supabase client doesn't "wake up" and the query promise never executes.
+      console.log("[DocumentsSidebar] Step 5.0: Calling getSession() to initialize client...");
+      const { data: { session: clientSession } } = await supabaseClient.auth.getSession();
+      console.log("[DocumentsSidebar] Step 5.0: getSession() completed. Client session status:", {
+        hasSession: !!clientSession,
+        userId: clientSession?.user?.id,
+        matches: clientSession?.user?.id === userId,
+      });
       
-      // Just verify the client can see a session (non-blocking with timeout)
-      console.log("[DocumentsSidebar] Step 5.1: Quick check if client has session (non-blocking)...");
-      try {
-        const checkPromise = supabaseClient.auth.getSession();
-        const checkTimeout = new Promise<{ data: { session: null } }>((resolve) => {
-          setTimeout(() => resolve({ data: { session: null } }), 500); // Short timeout
-        });
-        const checkResult = await Promise.race([checkPromise, checkTimeout]);
-        const existingSession = 'data' in checkResult ? checkResult.data?.session : null;
-        console.log("[DocumentsSidebar] Step 5.1: Client session check:", {
-          hasSession: !!existingSession,
-          userId: existingSession?.user?.id,
-          matches: existingSession?.user?.id === userId,
-        });
-      } catch (checkErr) {
-        console.warn("[DocumentsSidebar] Step 5.1: Could not check session (non-fatal, continuing):", checkErr);
-      }
-      
-      console.log("[DocumentsSidebar] Step 5.2: Proceeding to query with userId:", userId);
+      console.log("[DocumentsSidebar] Step 5: Client initialized, proceeding to query with userId:", userId);
       
       console.log("[DocumentsSidebar] Step 5.5: Setting hasCheckedSession to true");
       setHasCheckedSession(true);
