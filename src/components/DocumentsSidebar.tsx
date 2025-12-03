@@ -209,6 +209,27 @@ export const DocumentsSidebar: React.FC<{
         tokenPreview: session.access_token?.substring(0, 20) + "...",
       });
       
+      // Verify session is actually set on the client
+      const { data: { session: verifiedSession } } = await supabaseClient.auth.getSession();
+      console.log("[DocumentsSidebar] Verified session on client:", {
+        hasSession: !!verifiedSession,
+        userId: verifiedSession?.user?.id,
+        matches: verifiedSession?.user?.id === session.user.id,
+      });
+      
+      if (!verifiedSession || verifiedSession.user.id !== session.user.id) {
+        console.error("[DocumentsSidebar] Session verification failed - session not properly set on client");
+        setIsLoading(false);
+        setDocuments([]);
+        setHasError(true);
+        toast({
+          title: "Session Error",
+          description: "Session not properly authenticated. Please refresh the page.",
+          variant: "destructive",
+        });
+        return;
+      }
+      
       const queryStartTime = Date.now();
       
       // Build query with explicit filters
@@ -235,13 +256,22 @@ export const DocumentsSidebar: React.FC<{
       let data, error;
       try {
         // Use .then() to properly handle Supabase query promise
-        const queryPromise = query.then((result) => ({
-          data: result.data,
-          error: result.error,
-        }));
+        const queryPromise = query.then((result) => {
+          console.log("[DocumentsSidebar] Query promise resolved:", {
+            hasData: !!result.data,
+            dataLength: result.data?.length || 0,
+            hasError: !!result.error,
+            errorMessage: result.error?.message,
+          });
+          return {
+            data: result.data,
+            error: result.error,
+          };
+        });
         
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
           setTimeout(() => {
+            console.error("[DocumentsSidebar] Query timeout triggered after 10 seconds");
             resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
           }, 10_000); // 10 second timeout
         });
@@ -272,16 +302,54 @@ export const DocumentsSidebar: React.FC<{
           },
         });
         
-        // CRITICAL: Always clear loading state on error
-        setIsLoading(false);
-        setDocuments([]);
+        // Try a simpler query without analysis_target filter to debug
+        console.log("[DocumentsSidebar] Attempting fallback query without analysis_target filter...");
+        try {
+          const fallbackQuery = supabaseClient
+            .from("processing_jobs")
+            .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(50);
+          
+          const fallbackResult = await Promise.race([
+            fallbackQuery.then(r => ({ data: r.data, error: r.error })),
+            new Promise<{ data: null; error: { message: string } }>((resolve) => 
+              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout" } }), 5000)
+            ),
+          ]);
+          
+          if (fallbackResult.data) {
+            console.log("[DocumentsSidebar] Fallback query succeeded:", {
+              totalJobs: fallbackResult.data.length,
+              documentAnalysisJobs: fallbackResult.data.filter(j => j.analysis_target === "document-analysis").length,
+              allAnalysisTargets: [...new Set(fallbackResult.data.map(j => j.analysis_target))],
+            });
+            
+            // Use the fallback data if it has document-analysis jobs
+            const docJobs = fallbackResult.data.filter(j => j.analysis_target === "document-analysis");
+            if (docJobs.length > 0) {
+              console.log("[DocumentsSidebar] Using fallback query results");
+              data = docJobs;
+              error = null;
+            }
+          }
+        } catch (fallbackError) {
+          console.error("[DocumentsSidebar] Fallback query also failed:", fallbackError);
+        }
         
-        toast({
-          title: "Error loading documents",
-          description: error.message || "Failed to load documents. Check console for details.",
-          variant: "destructive",
-        });
-        return;
+        if (error) {
+          // CRITICAL: Always clear loading state on error
+          setIsLoading(false);
+          setDocuments([]);
+          
+          toast({
+            title: "Error loading documents",
+            description: error.message || "Failed to load documents. Check console for details.",
+            variant: "destructive",
+          });
+          return;
+        }
       }
 
       console.log("[DocumentsSidebar] Raw data from query:", {
