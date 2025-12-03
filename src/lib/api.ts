@@ -120,7 +120,10 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
 
   try {
     const headers = await getAuthHeaders();
-    const response = await fetch(`${FUNCTIONS_URL}${textractFunctionPath}`, {
+    const url = `${FUNCTIONS_URL}${textractFunctionPath}`;
+    console.log(`[triggerTextractJob] Calling: ${url}`, { jobId });
+    
+    const response = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({ jobId }),
@@ -130,14 +133,20 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(error?.error || "Failed to trigger Textract job");
+      const errorText = await response.text().catch(() => "Unknown error");
+      console.error(`[triggerTextractJob] Failed: ${response.status} ${errorText}`);
+      const error = await response.json().catch(() => ({ error: errorText }));
+      throw new Error(error?.error || `Failed to trigger Textract job: ${response.status} ${errorText}`);
     }
+    
+    console.log(`[triggerTextractJob] Success for job ${jobId}`);
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
+      console.error(`[triggerTextractJob] Timeout after ${TRIGGER_TEXTRACT_TIMEOUT_MS}ms`);
       throw new Error(`Textract job trigger timed out after ${TRIGGER_TEXTRACT_TIMEOUT_MS}ms`);
     }
+    console.error(`[triggerTextractJob] Error:`, error);
     throw error;
   }
 }
