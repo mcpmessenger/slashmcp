@@ -218,6 +218,18 @@ The Documents & Knowledge sidebar integration is experiencing critical issues pr
 
 ---
 
+## 🔧 Debugging Guide
+
+**📖 For detailed step-by-step debugging instructions, see:** [`docs/DEBUGGING_GUIDE.md`](./DEBUGGING_GUIDE.md)
+
+This guide provides:
+- Prioritized debugging steps for each issue
+- SQL queries to check RLS policies and indexes
+- CORS troubleshooting for Edge Functions
+- Testing procedures and expected outcomes
+
+---
+
 ## 🔧 Debugging Commands
 
 ### Check RLS Policies
