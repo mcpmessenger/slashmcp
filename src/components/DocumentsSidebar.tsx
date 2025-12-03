@@ -121,6 +121,7 @@ export const DocumentsSidebar: React.FC<{
   const [hasCheckedSession, setHasCheckedSession] = useState(false);
   const [isLoadingRef, setIsLoadingRef] = useState(false); // Prevent concurrent loads
   const [hasError, setHasError] = useState(false); // Track if there's a persistent error
+  const [deletingJobIds, setDeletingJobIds] = useState<Set<string>>(new Set()); // Track jobs being deleted
   
   console.log("[DocumentsSidebar] Initial state:", { isLoading, documentCount: documents.length });
 
@@ -671,7 +672,7 @@ export const DocumentsSidebar: React.FC<{
                     onClick={(e) => handleDelete(doc.jobId, doc.fileName, e)}
                     disabled={deletingJobIds.has(doc.jobId)}
                     className={cn(
-                      "h-5 px-1.5 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity",
+                      "h-5 w-5 p-0 text-[10px] opacity-70 hover:opacity-100 transition-opacity",
                       "text-destructive hover:text-destructive hover:bg-destructive/10"
                     )}
                     title="Delete document"
@@ -679,7 +680,7 @@ export const DocumentsSidebar: React.FC<{
                     {deletingJobIds.has(doc.jobId) ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
-                      <Trash2 className="h-3 w-3" />
+                      <XCircle className="h-3 w-3" />
                     )}
                   </Button>
                 </div>
