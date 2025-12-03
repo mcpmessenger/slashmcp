@@ -194,88 +194,32 @@ export const DocumentsSidebar: React.FC<{
         return;
       }
       
-      // Set session on supabaseClient for RLS (if we have session token)
-      // CRITICAL: We MUST set the session before querying, or RLS will block the query
-      // But we also need to prevent hanging, so use a timeout
-      let sessionSet = false;
-      if (session?.access_token) {
-        console.log("[DocumentsSidebar] Step 5: Setting session on supabaseClient for RLS...");
-        try {
-          const setSessionPromise = supabaseClient.auth.setSession({
-            access_token: session.access_token,
-            refresh_token: session.refresh_token || "",
-          });
-          
-          const setSessionTimeout = new Promise<{ error: { message: string } }>((resolve) => {
-            setTimeout(() => {
-              console.warn("[DocumentsSidebar] Step 5: ⚠️ setSession() timed out after 3 seconds");
-              console.warn("[DocumentsSidebar] Step 5: ⚠️ This may cause query to hang - trying alternative approach");
-              resolve({ error: { message: "setSession timeout" } });
-            }, 3_000); // 3 second timeout
-          });
-          
-          const setSessionResult = await Promise.race([setSessionPromise, setSessionTimeout]);
-          
-          if ('error' in setSessionResult && setSessionResult.error && setSessionResult.error.message !== "setSession timeout") {
-            console.warn("[DocumentsSidebar] Step 5: ⚠️ Failed to set session:", setSessionResult.error);
-            sessionSet = false;
-          } else if (!('error' in setSessionResult)) {
-            console.log("[DocumentsSidebar] Step 5: ✅ Session set successfully on supabaseClient");
-            sessionSet = true;
-          } else {
-            console.warn("[DocumentsSidebar] Step 5: ⚠️ setSession() timed out - session may not be set");
-            sessionSet = false;
-          }
-          
-          // Verify session is actually set (non-blocking check with timeout)
-          console.log("[DocumentsSidebar] Step 5.1: Verifying session on client...");
-          try {
-            const verifyPromise = supabaseClient.auth.getSession();
-            const verifyTimeout = new Promise<{ data: { session: null } }>((resolve) => {
-              setTimeout(() => resolve({ data: { session: null } }), 1_000);
-            });
-            const verifyResult = await Promise.race([verifyPromise, verifyTimeout]);
-            const verifiedSession = 'data' in verifyResult ? verifyResult.data?.session : null;
-            console.log("[DocumentsSidebar] Step 5.1: Verified session:", {
-              hasSession: !!verifiedSession,
-              userId: verifiedSession?.user?.id,
-              matches: verifiedSession?.user?.id === userId,
-              sessionSet,
-            });
-            if (verifiedSession && !sessionSet) {
-              console.log("[DocumentsSidebar] Step 5.1: ✅ Session exists on client even though setSession timed out");
-              sessionSet = true;
-            }
-          } catch (verifyErr) {
-            console.warn("[DocumentsSidebar] Step 5.1: Could not verify session (non-fatal):", verifyErr);
-          }
-        } catch (setSessionErr) {
-          console.warn("[DocumentsSidebar] Step 5: ⚠️ Exception setting session (non-fatal):", setSessionErr);
-          sessionSet = false;
-        }
-      } else {
-        console.log("[DocumentsSidebar] Step 5: Skipping setSession (no session token)");
-        console.log("[DocumentsSidebar] Step 5.1: Checking if session exists on client anyway...");
-        try {
-          const checkPromise = supabaseClient.auth.getSession();
-          const checkTimeout = new Promise<{ data: { session: null } }>((resolve) => {
-            setTimeout(() => resolve({ data: { session: null } }), 1_000);
-          });
-          const checkResult = await Promise.race([checkPromise, checkTimeout]);
-          const existingSession = 'data' in checkResult ? checkResult.data?.session : null;
-          console.log("[DocumentsSidebar] Step 5.1: Existing session on client:", {
-            hasSession: !!existingSession,
-            userId: existingSession?.user?.id,
-          });
-          if (existingSession) {
-            sessionSet = true;
-          }
-        } catch (checkErr) {
-          console.warn("[DocumentsSidebar] Step 5.1: Could not check existing session:", checkErr);
-        }
+      // CRITICAL: Don't call setSession() - it hangs!
+      // The Supabase client should automatically use the session from localStorage
+      // This matches how ragService.ts successfully queries processing_jobs
+      console.log("[DocumentsSidebar] Step 5: Skipping setSession() - Supabase client should auto-use localStorage session");
+      console.log("[DocumentsSidebar] Step 5: We have userId from props:", userId);
+      console.log("[DocumentsSidebar] Step 5: Session token available:", !!session?.access_token);
+      
+      // Just verify the client can see a session (non-blocking with timeout)
+      console.log("[DocumentsSidebar] Step 5.1: Quick check if client has session (non-blocking)...");
+      try {
+        const checkPromise = supabaseClient.auth.getSession();
+        const checkTimeout = new Promise<{ data: { session: null } }>((resolve) => {
+          setTimeout(() => resolve({ data: { session: null } }), 500); // Short timeout
+        });
+        const checkResult = await Promise.race([checkPromise, checkTimeout]);
+        const existingSession = 'data' in checkResult ? checkResult.data?.session : null;
+        console.log("[DocumentsSidebar] Step 5.1: Client session check:", {
+          hasSession: !!existingSession,
+          userId: existingSession?.user?.id,
+          matches: existingSession?.user?.id === userId,
+        });
+      } catch (checkErr) {
+        console.warn("[DocumentsSidebar] Step 5.1: Could not check session (non-fatal, continuing):", checkErr);
       }
       
-      console.log("[DocumentsSidebar] Step 5.2: Session status:", { sessionSet, hasToken: !!session?.access_token });
+      console.log("[DocumentsSidebar] Step 5.2: Proceeding to query with userId:", userId);
       
       console.log("[DocumentsSidebar] Step 5.5: Setting hasCheckedSession to true");
       setHasCheckedSession(true);
