@@ -198,8 +198,19 @@ async function executeOrchestration(
     const conversationHistory = input.conversationHistory || [];
     const conversation: Array<{ role: "user" | "assistant"; content: string }> = [
       ...conversationHistory,
-      { role: "user", content: input.message },
     ];
+    
+    // Inject context into conversation if available
+    if (enhancedInstructions && documentContext) {
+      // Add context as system information before user message
+      conversation.push({
+        role: "assistant",
+        content: enhancedInstructions,
+      });
+    }
+    
+    // Add user message
+    conversation.push({ role: "user", content: input.message });
 
     // Convert to AgentInputItem format
     const agentInput = conversation.map((msg) => ({
