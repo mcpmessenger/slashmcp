@@ -336,16 +336,44 @@ export const DocumentsSidebar: React.FC<{
         queryConstructor: query?.constructor?.name 
       });
       
+      // CRITICAL: Check if query has a 'then' method (it should be a promise)
+      console.log("[DocumentsSidebar] Step 9.1: Checking if query is thenable:", {
+        hasThen: typeof (query as any)?.then === 'function',
+        hasCatch: typeof (query as any)?.catch === 'function',
+        hasFinally: typeof (query as any)?.finally === 'function',
+      });
+      
       let data, error;
       try {
         // CRITICAL: Try direct await first to see if query executes
         console.log("[DocumentsSidebar] Step 9a: Attempting direct query execution...");
         console.log("[DocumentsSidebar] Step 9a: About to await query directly...");
         
+        // CRITICAL: The query should be a promise, but if it's not executing,
+        // it might be waiting for something. Let's try calling it directly.
+        console.log("[DocumentsSidebar] Step 9a.1: Checking query internals...");
+        const queryAny = query as any;
+        console.log("[DocumentsSidebar] Step 9a.1: Query internals:", {
+          hasUrl: !!queryAny?.url,
+          hasHeaders: !!queryAny?.headers,
+          hasBody: !!queryAny?.body,
+          hasMethod: queryAny?.method,
+          hasTable: queryAny?.table,
+        });
+        
         // Create a promise that will timeout if query hangs
         const directQueryPromise = (async () => {
           try {
-            console.log("[DocumentsSidebar] Step 9a.1: Inside query promise, about to await...");
+            console.log("[DocumentsSidebar] Step 9a.2: Inside query promise, about to await...");
+            console.log("[DocumentsSidebar] Step 9a.2: Query type check:", typeof query);
+            
+            // Try to see if we can inspect the promise state
+            if (queryAny && typeof queryAny.then === 'function') {
+              console.log("[DocumentsSidebar] Step 9a.2: Query is a promise, awaiting...");
+            } else {
+              console.error("[DocumentsSidebar] Step 9a.2: Query is NOT a promise!");
+            }
+            
             const result = await query;
             console.log("[DocumentsSidebar] Step 9b: Direct query completed:", {
               hasData: !!result.data,
@@ -367,13 +395,14 @@ export const DocumentsSidebar: React.FC<{
           }
         })();
         
-        console.log("[DocumentsSidebar] Step 9a.2: Query promise created, type:", typeof directQueryPromise);
+        console.log("[DocumentsSidebar] Step 9a.3: Query promise created, type:", typeof directQueryPromise);
         
         console.log("[DocumentsSidebar] Step 9c: Creating timeout promise...");
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
           setTimeout(() => {
             console.error("[DocumentsSidebar] Step 9d: Query timeout triggered after 10 seconds");
             console.error("[DocumentsSidebar] Step 9d: This means the query promise never resolved");
+            console.error("[DocumentsSidebar] Step 9d: The Supabase client is not executing the HTTP request");
             resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
           }, 10_000); // 10 second timeout
         });
