@@ -31,10 +31,40 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     "Content-Type": "application/json",
   };
 
+  console.log("[getAuthHeaders] Starting auth header preparation...");
+  const sessionStartTime = Date.now();
+  
   // Get the user's session token - this allows edge functions to access OAuth provider tokens
-  const {
-    data: { session },
-  } = await supabaseClient.auth.getSession();
+  // Add timeout to prevent hanging on getSession()
+  let session: { access_token?: string } | null = null;
+  try {
+    console.log("[getAuthHeaders] Calling supabaseClient.auth.getSession()...");
+    const sessionPromise = supabaseClient.auth.getSession();
+    
+    // Add 5-second timeout to prevent hanging
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error("getSession() timed out after 5 seconds - using anon key fallback"));
+      }, 5_000);
+    });
+    
+    const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
+    session = sessionResult.data?.session || null;
+    const sessionDuration = Date.now() - sessionStartTime;
+    console.log(`[getAuthHeaders] Session retrieved in ${sessionDuration}ms`, {
+      hasSession: !!session,
+      hasAccessToken: !!session?.access_token,
+    });
+  } catch (sessionError) {
+    const sessionDuration = Date.now() - sessionStartTime;
+    console.warn(`[getAuthHeaders] getSession() failed after ${sessionDuration}ms`, {
+      error: sessionError instanceof Error ? sessionError.message : String(sessionError),
+      name: sessionError instanceof Error ? sessionError.name : "Unknown",
+    });
+    // Continue with anon key fallback instead of throwing
+    console.warn("[getAuthHeaders] Falling back to anon key due to session error");
+    session = null;
+  }
 
   if (session?.access_token) {
     // Use the user's session token so edge functions can extract OAuth provider tokens
@@ -42,10 +72,14 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     if (SUPABASE_ANON_KEY) {
       headers.apikey = SUPABASE_ANON_KEY;
     }
+    console.log("[getAuthHeaders] Using session token for authorization");
   } else if (SUPABASE_ANON_KEY) {
-    // Fallback to anon key if not signed in
+    // Fallback to anon key if not signed in or session failed
     headers.apikey = SUPABASE_ANON_KEY;
     headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
+    console.log("[getAuthHeaders] Using anon key for authorization (no session or session failed)");
+  } else {
+    console.warn("[getAuthHeaders] WARNING: No session and no anon key available");
   }
 
   return headers;
@@ -102,8 +136,27 @@ export async function registerUploadJob(params: {
 
   console.log("[registerUploadJob] Request body prepared", { body: { ...body, metadata: "..." } });
   
-  const headers = await getAuthHeaders();
-  console.log("[registerUploadJob] Auth headers prepared", { hasAuth: !!headers.Authorization });
+  console.log("[registerUploadJob] About to get auth headers...");
+  const authHeadersStartTime = Date.now();
+  let headers: Record<string, string>;
+  try {
+    headers = await getAuthHeaders();
+    const authHeadersDuration = Date.now() - authHeadersStartTime;
+    console.log(`[registerUploadJob] Auth headers prepared in ${authHeadersDuration}ms`, { 
+      hasAuth: !!headers.Authorization,
+      hasApikey: !!headers.apikey,
+    });
+  } catch (authError) {
+    const authHeadersDuration = Date.now() - authHeadersStartTime;
+    console.error(`[registerUploadJob] CRITICAL: getAuthHeaders() failed after ${authHeadersDuration}ms`, {
+      error: authError instanceof Error ? authError.message : String(authError),
+      name: authError instanceof Error ? authError.name : "Unknown",
+    });
+    throw new Error(
+      `Failed to get authentication headers: ${authError instanceof Error ? authError.message : String(authError)}. ` +
+      "This may indicate an issue with the Supabase auth session."
+    );
+  }
   
   // Add timeout to fetch request - increased to 30s to allow for slow AWS operations
   const controller = new AbortController();
