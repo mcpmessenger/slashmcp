@@ -299,49 +299,20 @@ export const DocumentsSidebar: React.FC<{
     }
   };
 
+  // Set up polling interval for status updates (only when client is ready)
   useEffect(() => {
-    console.log("[DocumentsSidebar] ===== useEffect MOUNTED =====");
-    console.log("[DocumentsSidebar] Component mounted, starting initial load");
-    console.log("[DocumentsSidebar] propUserId value:", propUserId);
-    console.log("[DocumentsSidebar] propUserId type:", typeof propUserId);
-    console.log("[DocumentsSidebar] propUserId truthy?", !!propUserId);
-    console.log("[DocumentsSidebar] Environment check:", {
-      hasSupabaseUrl: !!import.meta.env.VITE_SUPABASE_URL,
-      supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
-      hasSupabaseKey: !!import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-    });
-    
-    // Immediate load
-    console.log("[DocumentsSidebar] About to call loadDocuments()...");
-    const loadPromise = loadDocuments();
-    console.log("[DocumentsSidebar] loadDocuments() called, promise:", loadPromise);
-    
-    loadPromise.catch((error) => {
-      console.error("[DocumentsSidebar] CRITICAL: Initial load failed:", error);
-      console.error("[DocumentsSidebar] Error stack:", error instanceof Error ? error.stack : "No stack");
-      console.error("[DocumentsSidebar] Error details:", {
-        message: error instanceof Error ? error.message : String(error),
-        name: error instanceof Error ? error.name : "Unknown",
-      });
-      // Ensure loading state is cleared even if loadDocuments throws
-      setIsLoading(false);
-      setIsLoadingRef(false);
-      setDocuments([]);
-      setHasError(true);
-    });
+    if (!isClientReady || !propUserId) {
+      return; // Don't start polling until client is ready
+    }
     
     // Refresh every 10 seconds to show status updates (only if no persistent error)
     const interval = setInterval(() => {
-      // Skip refresh if there's a persistent error (like timeout) to avoid spam
       if (hasError) {
-        console.log("[DocumentsSidebar] Skipping refresh due to persistent error");
-        return;
+        return; // Skip refresh if there's a persistent error
       }
       
-      console.log("[DocumentsSidebar] Interval refresh triggered");
       loadDocuments().catch((error) => {
         console.error("[DocumentsSidebar] Error refreshing documents:", error);
-        // Don't show toast on every refresh error to avoid spam
         setIsLoading(false);
         setIsLoadingRef(false);
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -349,15 +320,12 @@ export const DocumentsSidebar: React.FC<{
           setHasError(true); // Stop polling on timeout errors
         }
       });
-    }, 10_000); // Increased to 10 seconds to reduce load
+    }, 10_000);
     
     return () => {
-      console.log("[DocumentsSidebar] Cleanup - clearing interval and resetting state");
       clearInterval(interval);
-      setIsLoading(false);
-      setIsLoadingRef(false);
     };
-  }, []); // DIAGNOSTIC: Changed back to [] to match working version
+  }, [isClientReady, propUserId, hasError]);
 
   // Load documents when client is ready or when refreshTrigger changes
   useEffect(() => {
