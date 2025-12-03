@@ -376,12 +376,28 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
     const url = `${FUNCTIONS_URL}${textractFunctionPath}`;
     console.log(`[triggerTextractJob] Calling: ${url}`, { jobId });
     
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ jobId }),
-      signal: abortController.signal,
-    });
+    // Wrap fetch in try-catch to catch network errors
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ jobId }),
+        signal: abortController.signal,
+      });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error(`[triggerTextractJob] Fetch error:`, fetchError);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        throw new Error(`Textract job trigger timed out after ${TRIGGER_TEXTRACT_TIMEOUT_MS}ms`);
+      }
+      // Network error, CORS, or other fetch failures
+      throw new Error(
+        `Failed to trigger Textract job: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
+        "This may indicate a network issue, CORS problem, or the textract-worker function is unavailable. " +
+        "Check Supabase Edge Function logs for more details."
+      );
+    }
 
     clearTimeout(timeoutId);
 
