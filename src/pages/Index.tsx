@@ -525,10 +525,6 @@ const Index = () => {
                     userId: session?.user?.id,
                     userIdType: typeof session?.user?.id
                   })}
-                  {/* TEMPORARY: Test minimal component to isolate the issue */}
-                  {session?.user?.id && (
-                    <DocumentsSidebarMinimalTest userId={session.user.id} />
-                  )}
                   <DocumentsSidebar
                     refreshTrigger={documentsSidebarRefreshTrigger}
                     userId={session?.user?.id}

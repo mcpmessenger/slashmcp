@@ -1,4 +1,6 @@
-# Bug Report: DocumentsSidebar Query Timeout
+# Bug Report: DocumentsSidebar Query Timeout - ✅ RESOLVED
+
+**Status**: ✅ **FIXED** - See "Resolution" section below
 
 ## Summary
 The `DocumentsSidebar` component is unable to query the `processing_jobs` table from Supabase. The query promise is created but never resolves, and no HTTP request is made to the Supabase API. The query consistently times out after 10 seconds.
@@ -143,16 +145,30 @@ export async function getQueryableDocumentJobs(userId?: string): Promise<string[
 
 **Hypothesis**: Maybe calling `getSession()` first "wakes up" the Supabase client? Testing this now.
 
-## Next Steps
+## Resolution ✅
 
-1. **Test if `getSession()` call is required** - Add `getSession()` call before query in minimal test
-2. **Compare execution context**:
-   - When is `ragService.ts` called? (user-initiated action vs component mount)
-   - Is there a timing difference?
-3. **Check Supabase client internals**:
-   - Is there a connection pool or queue?
-   - Does the client need to be "initialized" before queries?
-4. **External help** - If `getSession()` doesn't fix it, we need Supabase community help
+**Root Cause Identified**: The Supabase client needs to be explicitly "woken up" by calling `getSession()` before executing database queries in React components. Without this call, the client's internal state isn't fully initialized, causing query promises to be created but never execute their HTTP requests.
+
+**The Fix**: Added `await supabaseClient.auth.getSession()` call before the database query in `DocumentsSidebar.tsx`, matching the pattern used in the working `ragService.ts` code.
+
+**Implementation**:
+```typescript
+// CRITICAL FIX: Call getSession() to ensure the client is fully initialized
+console.log("[DocumentsSidebar] Step 5.0: Calling getSession() to initialize client...");
+const { data: { session: clientSession } } = await supabaseClient.auth.getSession();
+console.log("[DocumentsSidebar] Step 5.0: getSession() completed. Client session status:", {
+  hasSession: !!clientSession,
+  userId: clientSession?.user?.id,
+});
+```
+
+**Why This Works**: 
+- `getSession()` forces the Supabase client to initialize its internal state
+- It ensures the session is loaded from localStorage and set on the client
+- This "wakes up" the client so subsequent queries can execute HTTP requests
+- The working `ragService.ts` code implicitly did this by calling `getSession()` when `userId` wasn't provided
+
+**Status**: ✅ **RESOLVED** - Query now executes successfully and documents load in the sidebar.
 
 3. **Check Supabase client internals**:
    - Is there a queue or batching mechanism?
