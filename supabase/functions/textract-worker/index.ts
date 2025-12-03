@@ -123,30 +123,50 @@ async function generateEmbeddings(
   texts: string[],
   apiKey: string,
   maxRetries: number = 3,
+  startTime?: number,
+  totalTimeoutMs: number = 300_000, // 5 minutes total timeout
 ): Promise<number[][]> {
   if (texts.length === 0) return [];
 
   const embeddings: number[][] = [];
   const batchSize = 100; // OpenAI allows up to 2048 inputs per request, but we'll use smaller batches
+  const batchTimeoutMs = 30_000; // 30 seconds per batch
+  const processStartTime = startTime ?? Date.now();
 
   for (let i = 0; i < texts.length; i += batchSize) {
+    // Check overall timeout before processing each batch
+    const elapsed = Date.now() - processStartTime;
+    if (elapsed > totalTimeoutMs) {
+      console.warn(`Embedding generation exceeded total timeout (${totalTimeoutMs}ms), processed ${i}/${texts.length} chunks`);
+      throw new Error(`Embedding generation timeout: processed ${i}/${texts.length} chunks in ${elapsed}ms`);
+    }
+
     const batch = texts.slice(i, i + batchSize);
     let retries = 0;
     let success = false;
 
     while (retries < maxRetries && !success) {
+      // Add timeout to each API call
+      const abortController = new AbortController();
+      const timeoutId = setTimeout(() => {
+        abortController.abort();
+      }, batchTimeoutMs);
+
       try {
-          const response = await fetch("https://api.openai.com/v1/embeddings", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify({
-              model: "text-embedding-3-small",
-              input: batch,
-            }),
-          });
+        const response = await fetch("https://api.openai.com/v1/embeddings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "text-embedding-3-small",
+            input: batch,
+          }),
+          signal: abortController.signal,
+        });
+
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -179,6 +199,12 @@ async function generateEmbeddings(
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
       } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          clearTimeout(timeoutId);
+          console.error(`Embedding batch ${i / batchSize + 1} timed out after ${batchTimeoutMs}ms`);
+          throw new Error(`Embedding batch timeout: batch ${i / batchSize + 1} exceeded ${batchTimeoutMs}ms`);
+        }
+        clearTimeout(timeoutId);
         retries++;
         if (retries >= maxRetries) {
           throw error;
@@ -187,6 +213,13 @@ async function generateEmbeddings(
         console.error(`Embedding generation error, retrying in ${delay}ms:`, error);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
+    }
+
+    // Log progress for large documents
+    if ((i + batchSize) % 500 === 0 || i + batchSize >= texts.length) {
+      const progress = ((i + batchSize) / texts.length * 100).toFixed(1);
+      const elapsed = Date.now() - processStartTime;
+      console.log(`Embedding progress: ${i + batchSize}/${texts.length} chunks (${progress}%) in ${elapsed}ms`);
     }
   }
 
@@ -486,6 +519,10 @@ serve(async (req) => {
     });
   }
 
+  // Track overall execution time to prevent Supabase timeout (60s default, allow 50s for processing)
+  const WORKER_TIMEOUT_MS = 50_000; // 50 seconds before Supabase timeout
+  const workerStartTime = Date.now();
+
   let currentJobId: string | undefined;
   let currentJobMetadata: Record<string, unknown> | null = null;
 
@@ -726,9 +763,10 @@ serve(async (req) => {
         console.log(`Created ${chunks.length} chunks for indexing`);
 
         if (chunks.length > 0) {
-          // Generate embeddings for all chunks
+          // Generate embeddings for all chunks with timeout tracking
           const chunkTexts = chunks.map((chunk) => chunk.text);
-          const embeddings = await generateEmbeddings(chunkTexts, OPENAI_API_KEY);
+          const embeddingStartTime = Date.now();
+          const embeddings = await generateEmbeddings(chunkTexts, OPENAI_API_KEY, 3, embeddingStartTime);
 
           if (embeddings.length !== chunks.length) {
             throw new Error(`Embedding count mismatch: expected ${chunks.length}, got ${embeddings.length}`);
@@ -787,12 +825,34 @@ serve(async (req) => {
       // Job remains at "extracted" stage, can use old prompt injection
     }
 
+    // Check overall timeout before returning
+    const elapsed = Date.now() - workerStartTime;
+    if (elapsed > WORKER_TIMEOUT_MS) {
+      console.warn(`Worker exceeded timeout (${WORKER_TIMEOUT_MS}ms), elapsed: ${elapsed}ms`);
+      // Job may be partially processed, but we return success to avoid double-processing
+    }
+
     return new Response(JSON.stringify({ status: "completed", jobId: job.id }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
     console.error("textract-worker error", error);
+    
+    // Check if error is due to timeout
+    const elapsed = Date.now() - workerStartTime;
+    if (elapsed > WORKER_TIMEOUT_MS) {
+      const timeoutError = `Worker timeout after ${elapsed}ms (limit: ${WORKER_TIMEOUT_MS}ms)`;
+      console.error(timeoutError);
+      if (supabase && currentJobId) {
+        await markJobFailed(currentJobId, timeoutError, currentJobMetadata);
+      }
+      return new Response(JSON.stringify({ error: timeoutError }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    
     if (supabase && currentJobId) {
       const message = error instanceof Error ? error.message : "Unknown error";
       await markJobFailed(currentJobId, message, currentJobMetadata);

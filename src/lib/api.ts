@@ -112,16 +112,33 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
     throw new Error("Functions URL is not configured");
   }
 
-  const headers = await getAuthHeaders();
-  const response = await fetch(`${FUNCTIONS_URL}${textractFunctionPath}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ jobId }),
-  });
+  const TRIGGER_TEXTRACT_TIMEOUT_MS = 30_000; // 30 seconds
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, TRIGGER_TEXTRACT_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error?.error || "Failed to trigger Textract job");
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${FUNCTIONS_URL}${textractFunctionPath}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ jobId }),
+      signal: abortController.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error?.error || "Failed to trigger Textract job");
+    }
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Textract job trigger timed out after ${TRIGGER_TEXTRACT_TIMEOUT_MS}ms`);
+    }
+    throw error;
   }
 }
 
@@ -159,18 +176,35 @@ export async function fetchJobStatus(jobId: string): Promise<JobStatusResponse> 
     throw new Error("Functions URL is not configured");
   }
 
-  const headers = await getAuthHeaders();
-  const response = await fetch(`${FUNCTIONS_URL}${jobStatusPath}?jobId=${encodeURIComponent(jobId)}`, {
-    method: "GET",
-    headers,
-  });
+  const FETCH_STATUS_TIMEOUT_MS = 10_000; // 10 seconds
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort();
+  }, FETCH_STATUS_TIMEOUT_MS);
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error?.error || "Failed to fetch job status");
+  try {
+    const headers = await getAuthHeaders();
+    const response = await fetch(`${FUNCTIONS_URL}${jobStatusPath}?jobId=${encodeURIComponent(jobId)}`, {
+      method: "GET",
+      headers,
+      signal: abortController.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error?.error || "Failed to fetch job status");
+    }
+
+    return response.json();
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Job status fetch timed out after ${FETCH_STATUS_TIMEOUT_MS}ms`);
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 export async function triggerVisionJob(params: {
