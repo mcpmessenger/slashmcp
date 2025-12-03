@@ -17,32 +17,90 @@ export const DocumentsSidebarTest: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [debugInfo, setDebugInfo] = useState<any>({});
 
-  // Get session from localStorage (same pattern as DocumentsSidebar)
-  const getSessionFromStorage = (): { access_token?: string; user?: { id: string } } | null => {
-    if (typeof window === "undefined") return null;
+  // Get session from localStorage (same comprehensive pattern as DocumentsSidebar)
+  const getSessionFromStorage = (): { access_token?: string; refresh_token?: string; user?: { id: string } } | null => {
+    if (typeof window === "undefined") {
+      console.log("[DocumentsSidebarTest] Window undefined (SSR)");
+      return null;
+    }
     
     try {
       const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-      if (!SUPABASE_URL) return null;
+      if (!SUPABASE_URL) {
+        console.warn("[DocumentsSidebarTest] No SUPABASE_URL in env");
+        return null;
+      }
       
       const projectRef = SUPABASE_URL.replace("https://", "").split(".supabase.co")[0]?.split(".")[0];
-      if (!projectRef) return null;
-      
-      const storageKey = `sb-${projectRef}-auth-token`;
-      const raw = window.localStorage.getItem(storageKey);
-      if (!raw) return null;
-      
-      const parsed = JSON.parse(raw);
-      const session = parsed?.currentSession ?? parsed?.session ?? parsed;
-      
-      if (session?.access_token && session?.user?.id) {
-        return session;
+      if (!projectRef) {
+        console.warn("[DocumentsSidebarTest] Could not extract project ref from URL:", SUPABASE_URL);
+        return null;
       }
+      
+      console.log("[DocumentsSidebarTest] Project ref:", projectRef);
+      console.log("[DocumentsSidebarTest] Checking localStorage keys...");
+      
+      // Try multiple possible storage keys (Supabase might use different formats)
+      const possibleKeys = [
+        `sb-${projectRef}-auth-token`,
+        `sb-${projectRef}-auth-token-code-verifier`,
+        `supabase.auth.token`,
+      ];
+      
+      for (const storageKey of possibleKeys) {
+        const raw = window.localStorage.getItem(storageKey);
+        if (raw) {
+          console.log("[DocumentsSidebarTest] Found key:", storageKey);
+          try {
+            const parsed = JSON.parse(raw);
+            // Try different possible structures
+            const session = parsed?.currentSession ?? parsed?.session ?? (parsed?.access_token ? parsed : null);
+            
+            if (session?.access_token && session?.user?.id) {
+              console.log("[DocumentsSidebarTest] ✅ Valid session found in:", storageKey);
+              return session;
+            }
+          } catch (parseError) {
+            console.warn("[DocumentsSidebarTest] Failed to parse key:", storageKey, parseError);
+          }
+        }
+      }
+      
+      // Also check all localStorage keys for Supabase/auth related
+      console.log("[DocumentsSidebarTest] Checking all localStorage keys...");
+      const allKeys: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const key = window.localStorage.key(i);
+        if (key) allKeys.push(key);
+      }
+      console.log("[DocumentsSidebarTest] All localStorage keys:", allKeys.filter(k => 
+        k.includes('supabase') || k.includes('auth') || k.includes(projectRef)
+      ));
+      
+      for (const key of allKeys) {
+        if (key && (key.includes('supabase') || key.includes('auth') || key.includes(projectRef))) {
+          try {
+            const raw = window.localStorage.getItem(key);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              const potentialSession = parsed?.currentSession ?? parsed?.session ?? parsed;
+              if (potentialSession?.access_token && potentialSession?.user?.id) {
+                console.log("[DocumentsSidebarTest] ✅ Found valid session in:", key);
+                return potentialSession;
+              }
+            }
+          } catch (e) {
+            // Skip invalid JSON
+          }
+        }
+      }
+      
+      console.warn("[DocumentsSidebarTest] No valid session found in localStorage");
+      return null;
     } catch (error) {
-      console.warn("[DocumentsSidebarTest] Failed to read localStorage:", error);
+      console.error("[DocumentsSidebarTest] Error reading localStorage:", error);
+      return null;
     }
-    
-    return null;
   };
 
   useEffect(() => {
