@@ -26,13 +26,16 @@ export interface QueryClassification {
  */
 const DOCUMENT_KEYWORDS = [
   "document", "documents", "uploaded", "file", "files", "pdf", "pdfs",
-  "what i uploaded", "my document", "my documents", "the document", "that document",
+  "what i uploaded", "my document", "my documents", "the document", "that document", "the documents", "those documents",
   "tell me about", "what does it say", "what can you tell me", "analyze",
-  "search my documents", "find in my documents", "in my document",
-  "from my document", "document says", "document contains", "document mentions",
+  "search my documents", "find in my documents", "in my document", "in my documents",
+  "from my document", "from my documents", "document says", "documents say",
+  "document contains", "documents contain", "document mentions", "documents mention",
   "what's in", "what is in", "content of", "information in",
-  "about the document", "about the file", "about my document", "about my file",
+  "about the document", "about the documents", "about the file", "about the files",
+  "about my document", "about my documents", "about my file", "about my files",
   "what can you tell me about", "tell me about the", "what does the document",
+  "what do the documents", "what can you tell me about the", "tell me about my",
 ];
 
 /**
@@ -106,7 +109,7 @@ export function classifyQuery(
   
   // Document intent scoring
   if (hasDocumentKeyword || hasFileKeyword || documentName) {
-    confidence += 0.4;
+    confidence += 0.5; // Increased from 0.4 - stronger signal
   }
   if (matchesQuestionPattern) {
     confidence += 0.3;
@@ -115,7 +118,17 @@ export function classifyQuery(
     confidence += 0.2; // Strong signal if document name is mentioned
   }
   if (availableDocuments && availableDocuments.length > 0) {
-    confidence += 0.1; // User has documents available
+    confidence += 0.2; // Increased from 0.1 - user has documents available is important
+  }
+  
+  // Boost confidence if query contains "about" + document/file keywords
+  if (lowerQuery.includes("about") && (hasDocumentKeyword || hasFileKeyword)) {
+    confidence += 0.2;
+  }
+  
+  // Boost confidence for "tell me" + document/file keywords
+  if ((lowerQuery.includes("tell me") || lowerQuery.includes("what can you tell")) && (hasDocumentKeyword || hasFileKeyword)) {
+    confidence += 0.2;
   }
   
   // Determine intent
