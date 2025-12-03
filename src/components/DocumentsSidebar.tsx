@@ -248,16 +248,6 @@ export const DocumentsSidebar: React.FC<{
         }
       }
 
-        dataLength: data?.length || 0,
-        firstItem: data?.[0] ? {
-          id: data[0].id,
-          file_name: data[0].file_name,
-          status: data[0].status,
-          user_id: (data[0] as any).user_id, // Log user_id if available
-          analysis_target: (data[0] as any).analysis_target, // Log analysis_target if available
-        } : null,
-      });
-
       const docs = (data || []).map((job: any) => {
         const metadata = job.metadata as Record<string, unknown> | null;
         const stage = metadata?.job_stage as string | undefined;
