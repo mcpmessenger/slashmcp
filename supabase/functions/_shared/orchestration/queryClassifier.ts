@@ -88,15 +88,24 @@ export function classifyQuery(
     // Check if query mentions any document filename
     for (const doc of availableDocuments) {
       const fileNameLower = doc.fileName.toLowerCase();
-      const fileNameWords = fileNameLower.replace(/\.(pdf|docx?|txt|csv)/, "").split(/[\s_-]+/);
+      const fileNameBase = fileNameLower.replace(/\.(pdf|docx?|txt|csv)/, "");
+      const fileNameWords = fileNameBase.split(/[\s_-]+/);
+      
+      // Check if query contains the full filename (with or without extension)
+      if (lowerQuery.includes(fileNameBase) || lowerQuery.includes(fileNameLower)) {
+        documentName = doc.fileName;
+        confidence += 0.3; // Strong signal if exact filename is mentioned
+        break;
+      }
       
       // Check if query contains significant words from filename
       const matchingWords = fileNameWords.filter(word => 
-        word.length > 3 && lowerQuery.includes(word)
+        word.length > 3 && lowerQuery.includes(word.toLowerCase())
       );
       
       if (matchingWords.length >= 2 || (matchingWords.length === 1 && fileNameWords.length <= 3)) {
         documentName = doc.fileName;
+        confidence += 0.2; // Boost confidence if filename words match
         break;
       }
     }
