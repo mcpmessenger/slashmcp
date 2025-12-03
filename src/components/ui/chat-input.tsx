@@ -859,6 +859,15 @@ export function ChatInput({
         fileType: file.type,
       });
       
+      // Debug: Check FUNCTIONS_URL
+      const FUNCTIONS_URL_CHECK = import.meta.env.VITE_SUPABASE_FUNCTIONS_URL ||
+        (import.meta.env.VITE_SUPABASE_URL ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1` : undefined);
+      console.log("[ChatInput] FUNCTIONS_URL check:", {
+        VITE_SUPABASE_FUNCTIONS_URL: import.meta.env.VITE_SUPABASE_FUNCTIONS_URL,
+        VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+        computed: FUNCTIONS_URL_CHECK,
+      });
+      
       // Log upload start event
       onEvent?.({
         type: "system",
@@ -897,10 +906,10 @@ export function ChatInput({
         const timeoutPromise = new Promise<never>((_, reject) => {
           registrationTimeoutId = setTimeout(() => {
             const elapsed = Date.now() - uploadStartTime;
-            console.warn(`[ChatInput] Registration timeout after ${elapsed}ms (15s limit)`);
+            console.warn(`[ChatInput] Registration timeout after ${elapsed}ms (30s limit)`);
             setIsRegisteringUpload(false);
-            reject(new Error("Upload registration timed out after 15 seconds. The uploads Edge Function may be slow or unavailable. Please check your network connection and try again."));
-          }, 15_000); // 15 seconds max for registration
+            reject(new Error("Upload registration timed out after 30 seconds. The uploads Edge Function may be slow or unavailable. Please check your network connection and Supabase logs."));
+          }, 30_000); // 30 seconds max for registration (allows for slow AWS operations)
         });
         
         // Race between registration and timeout

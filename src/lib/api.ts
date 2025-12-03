@@ -53,6 +53,10 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 
 if (!FUNCTIONS_URL) {
   console.warn("Missing VITE_SUPABASE_FUNCTIONS_URL. Upload API calls will fail until configured.");
+  console.warn("VITE_SUPABASE_URL:", import.meta.env.VITE_SUPABASE_URL);
+  console.warn("VITE_SUPABASE_FUNCTIONS_URL:", import.meta.env.VITE_SUPABASE_FUNCTIONS_URL);
+} else {
+  console.log("[api.ts] FUNCTIONS_URL configured:", FUNCTIONS_URL);
 }
 
 export async function registerUploadJob(params: {
@@ -87,23 +91,33 @@ export async function registerUploadJob(params: {
   const headers = await getAuthHeaders();
   console.log("[registerUploadJob] Auth headers prepared", { hasAuth: !!headers.Authorization });
   
-  // Add timeout to fetch request
+  // Add timeout to fetch request - increased to 30s to allow for slow AWS operations
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
-    console.warn("[registerUploadJob] Timeout reached (12s), aborting request");
+    console.warn("[registerUploadJob] Timeout reached (30s), aborting request");
     controller.abort();
-  }, 12_000); // 12 seconds timeout (slightly less than the 15s in chat-input)
+  }, 30_000); // 30 seconds timeout (allows for slow AWS presigned URL generation)
   
   try {
-    console.log("[registerUploadJob] Sending fetch request to:", `${FUNCTIONS_URL}/uploads`);
+    const fetchUrl = `${FUNCTIONS_URL}/uploads`;
+    console.log("[registerUploadJob] Sending fetch request to:", fetchUrl);
+    console.log("[registerUploadJob] Request details:", {
+      method: "POST",
+      url: fetchUrl,
+      hasHeaders: !!headers.Authorization,
+      bodySize: JSON.stringify(body).length,
+      signal: controller.signal ? "AbortController active" : "No signal",
+    });
     const fetchStartTime = Date.now();
     
-    const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
+    console.log("[registerUploadJob] About to call fetch()...");
+    const response = await fetch(fetchUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    console.log("[registerUploadJob] fetch() returned, processing response...");
     
     const fetchDuration = Date.now() - fetchStartTime;
     console.log(`[registerUploadJob] Fetch completed in ${fetchDuration}ms`, {
