@@ -1,5 +1,5 @@
 import { supabaseClient } from "./supabaseClient";
-import { registerUploadJob, fetchJobStatus, triggerTextractJob, type JobStatusResponse } from "./api";
+import { registerUploadJob, fetchJobStatus, triggerTextractJob, updateJobStage, type JobStatusResponse } from "./api";
 import type { AnalysisTarget } from "./api";
 
 const FUNCTIONS_URL =
@@ -108,8 +108,21 @@ export async function uploadAndProcessDocument(
       throw new Error(`Failed to upload file: ${uploadResponse.statusText}`);
     }
 
+    // Update job stage to "uploaded" before triggering processing
+    try {
+      await updateJobStage(response.jobId, "uploaded");
+    } catch (error) {
+      console.warn("Failed to update job stage to uploaded:", error);
+      // Continue anyway - textract worker will handle it
+    }
+
     // Trigger the textract worker to process the document
     await triggerTextractJob(response.jobId);
+  } else {
+    // If no uploadUrl, the file might already be uploaded or needs manual upload
+    // Still trigger processing if the job exists
+    console.warn("No uploadUrl provided - job may need manual upload or file is already uploaded");
+    // Don't throw error - job is registered and can be processed later
   }
 
   return response.jobId;

@@ -1,7 +1,8 @@
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
 import { FileUploadStatus } from "@/components/FileUploadStatus";
-import { DocumentsSidebar } from "@/components/DocumentsSidebar";
+import { DocumentUpload } from "@/components/DocumentUpload";
+import { SemanticSearchChat } from "@/components/SemanticSearchChat";
 import { useChat } from "@/hooks/useChat";
 import { fetchJobStatus } from "@/lib/api";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -495,29 +496,17 @@ const Index = () => {
       
       <div className="flex-1 flex flex-col overflow-hidden">
 
-        {/* Chat Messages with Documents Sidebar and Chat Layout */}
+        {/* Chat Messages with Dual-Terminal Layout */}
         <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Left Pane: Documents Sidebar */}
-          {(session || guestMode) && (
-            <>
-              <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="hidden lg:block min-w-0 border-r">
-                <div className="h-full p-4">
-                  <DocumentsSidebar
-                    onDocumentClick={(jobId) => {
-                      // When document is clicked, could trigger a search or show details
-                      console.log("Document clicked:", jobId);
-                    }}
-                  />
-                </div>
-              </ResizablePanel>
-              <ResizableHandle withHandle className="hidden lg:flex" />
-            </>
-          )}
-          {/* Middle Pane: Chat */}
-          <ResizablePanel defaultSize={session || guestMode ? 50 : 100} minSize={40} className="min-w-0">
+          {/* Left Pane: Chat */}
+          <ResizablePanel defaultSize={70} minSize={40} className="min-w-0">
             <div className="h-full overflow-y-auto px-4 py-8">
               <div className="max-w-4xl mx-auto space-y-6">
+                  {/* New RAG Components */}
+                  <DocumentUpload />
+                  <SemanticSearchChat />
+                  {/* End New RAG Components */}
                 {!authReady || (!session && !guestMode) ? (
                   <div className="text-center mt-20 space-y-4">
                     <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
@@ -659,14 +648,14 @@ const Index = () => {
             </div>
           </ResizablePanel>
 
-          {/* Resizable Handle - Only show when MCP events panel is expanded */}
+          {/* Resizable Handle - Only show when panel is expanded */}
           {mcpEvents.length > 0 && (
             <ResizableHandle withHandle className="hidden lg:flex" />
           )}
 
           {/* Right Pane: MCP Event Log - Collapsible */}
           {mcpEvents.length > 0 && (
-            <ResizablePanel defaultSize={session || guestMode ? 30 : 50} minSize={15} maxSize={40} className="hidden lg:block min-w-0">
+            <ResizablePanel defaultSize={25} minSize={15} maxSize={40} className="hidden lg:block min-w-0">
               <McpEventLog events={mcpEvents} className="h-full border-l" />
             </ResizablePanel>
           )}
