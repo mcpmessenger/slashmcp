@@ -239,14 +239,15 @@ export const DocumentsSidebar: React.FC<{
         analysisTarget: "document-analysis",
       });
       
-      // Create query builder
+      // Create query builder - REMOVED analysis_target filter temporarily to debug
+      // We'll filter client-side to see what's actually in the database
       let query = supabaseClient
         .from("processing_jobs")
-        .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at");
+        .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target");
       
-      // Apply filters explicitly
+      // Apply filters explicitly (removed analysis_target filter for now)
       query = query.eq("user_id", userId);
-      query = query.eq("analysis_target", "document-analysis");
+      // query = query.eq("analysis_target", "document-analysis"); // TEMPORARILY REMOVED FOR DEBUGGING
       query = query.order("created_at", { ascending: false });
       query = query.limit(50);
       
