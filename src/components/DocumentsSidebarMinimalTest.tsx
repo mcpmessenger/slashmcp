@@ -25,6 +25,19 @@ export const DocumentsSidebarMinimalTest: React.FC<{ userId: string }> = ({ user
 
     const testQuery = async () => {
       try {
+        // CRITICAL: Try calling getSession() first like ragService.ts does
+        console.log("[MinimalTest] Step 0: Calling getSession() first (like ragService.ts)...");
+        try {
+          const sessionResult = await supabaseClient.auth.getSession();
+          console.log("[MinimalTest] Step 0: getSession() result:", {
+            hasSession: !!sessionResult.data?.session,
+            userId: sessionResult.data?.session?.user?.id,
+            matches: sessionResult.data?.session?.user?.id === userId,
+          });
+        } catch (sessionErr) {
+          console.warn("[MinimalTest] Step 0: getSession() failed (non-fatal):", sessionErr);
+        }
+        
         console.log("[MinimalTest] Step 1: Building query...");
         const query = supabaseClient
           .from("processing_jobs")
