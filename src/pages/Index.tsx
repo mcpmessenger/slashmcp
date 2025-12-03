@@ -79,9 +79,85 @@ const Index = () => {
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const { enabled: voicePlaybackEnabled, toggle: toggleVoicePlayback, speak, stop, isSpeaking } = useVoicePlayback();
   const hasPendingUploads = useMemo(
-    () => isRegisteringUpload || uploadJobs.some(job => ["uploading", "queued"].includes(job.status)),
+    () => isRegisteringUpload || uploadJobs.some(job => ["uploading", "queued", "processing"].includes(job.status)),
     [uploadJobs, isRegisteringUpload],
   );
+
+  // Poll for jobs stuck in "processing" status
+  useEffect(() => {
+    const processingJobs = uploadJobs.filter(job => job.status === "processing");
+    if (processingJobs.length === 0) return;
+
+    const POLL_INTERVAL_MS = 5000; // Poll every 5 seconds
+    const POLL_TIMEOUT_MS = 300_000; // 5 minutes max per job
+    const jobStartTimes = new Map<string, number>();
+
+    // Initialize start times for jobs that don't have one
+    processingJobs.forEach(job => {
+      if (!jobStartTimes.has(job.id)) {
+        jobStartTimes.set(job.id, job.updatedAt ? new Date(job.updatedAt).getTime() : Date.now());
+      }
+    });
+
+    const pollInterval = setInterval(async () => {
+      const now = Date.now();
+      const jobsToCheck = processingJobs.filter(job => {
+        const startTime = jobStartTimes.get(job.id) ?? now;
+        return (now - startTime) < POLL_TIMEOUT_MS;
+      });
+
+      if (jobsToCheck.length === 0) {
+        clearInterval(pollInterval);
+        return;
+      }
+
+      const refreshResults = await Promise.all(
+        jobsToCheck.map(async (job) => {
+          try {
+            return await fetchJobStatus(job.id);
+          } catch (error) {
+            console.warn(`[Index] Failed to poll job ${job.id}:`, error);
+            return null;
+          }
+        }),
+      );
+
+      let updated = false;
+      const jobMap = new Map(uploadJobs.map(job => [job.id, { ...job }]));
+
+      refreshResults.forEach((result) => {
+        if (!result) return;
+        const current = jobMap.get(result.job.id);
+        if (!current) return;
+
+        const newStatus = result.job.status as UploadJob["status"];
+        if (newStatus !== current.status) {
+          updated = true;
+          const stageMetadata = parseStageMetadata(result.job.metadata);
+          jobMap.set(result.job.id, {
+            ...current,
+            status: newStatus,
+            resultText: result.result?.ocr_text ?? current.resultText ?? null,
+            visionSummary: result.result?.vision_summary ?? current.visionSummary ?? null,
+            visionMetadata: result.result?.vision_metadata ?? current.visionMetadata ?? null,
+            updatedAt: result.job.updated_at,
+            ...stageMetadata,
+          });
+
+          // If job completed or failed, remove from tracking
+          if (newStatus === "completed" || newStatus === "failed") {
+            jobStartTimes.delete(result.job.id);
+          }
+        }
+      });
+
+      if (updated) {
+        setUploadJobs(Array.from(jobMap.values()));
+      }
+    }, POLL_INTERVAL_MS);
+
+    return () => clearInterval(pollInterval);
+  }, [uploadJobs]);
 
   const sortedRegistry = useMemo(
     () => [...registry].sort((a, b) => a.name.localeCompare(b.name)),

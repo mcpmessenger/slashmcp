@@ -946,7 +946,45 @@ export function ChatInput({
           if (shouldRunOCR) {
             try {
               await triggerTextractJob(response.jobId);
-              const statusResponse = await fetchJobStatus(response.jobId);
+              
+              // Poll for job completion with timeout
+              const POLL_INTERVAL_MS = 2000; // Check every 2 seconds
+              const POLL_TIMEOUT_MS = 300_000; // 5 minutes max
+              const pollStartTime = Date.now();
+              let pollAttempts = 0;
+              let statusResponse = await fetchJobStatus(response.jobId);
+              
+              // Poll until job is completed, failed, or timeout
+              while (
+                statusResponse.job.status === "processing" || 
+                statusResponse.job.status === "queued"
+              ) {
+                const elapsed = Date.now() - pollStartTime;
+                if (elapsed > POLL_TIMEOUT_MS) {
+                  throw new Error(`Job processing timed out after ${POLL_TIMEOUT_MS}ms`);
+                }
+                
+                // Update job status in UI while polling
+                const currentStatus = statusResponse.job.status as JobStatus;
+                const stageMetadata = parseStageMetadata(statusResponse.job.metadata);
+                updateJob(response.jobId, (currentJob) => ({
+                  status: currentStatus,
+                  updatedAt: statusResponse.job.updated_at,
+                  ...stageMetadata,
+                }));
+                
+                // Wait before next poll
+                await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+                
+                pollAttempts++;
+                if (pollAttempts % 10 === 0) {
+                  console.log(`[Upload] Polling job ${response.jobId}, attempt ${pollAttempts}, elapsed: ${elapsed}ms`);
+                }
+                
+                statusResponse = await fetchJobStatus(response.jobId);
+              }
+              
+              // Job completed or failed
               const jobStatus = statusResponse.job.status as JobStatus;
               const normalizedStatus =
                 jobStatus === "failed" && visionSucceeded ? "completed" : jobStatus;
