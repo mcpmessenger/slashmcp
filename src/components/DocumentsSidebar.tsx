@@ -108,6 +108,7 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasCheckedSession, setHasCheckedSession] = useState(false);
   
   console.log("[DocumentsSidebar] Initial state:", { isLoading, documentCount: documents.length });
 
