@@ -26,6 +26,46 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
  * Get authentication headers using the signed-in user's session token
  * This allows edge functions to access the user's OAuth provider tokens
  */
+/**
+ * Get session from localStorage directly (fast, no network call)
+ * Falls back to getSession() if localStorage doesn't have it
+ */
+function getSessionFromStorage(): { access_token?: string } | null {
+  if (typeof window === "undefined") return null;
+  
+  try {
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+    if (!SUPABASE_URL) return null;
+    
+    const projectRef = SUPABASE_URL.replace("https://", "").split(".supabase.co")[0]?.split(".")[0];
+    if (!projectRef) return null;
+    
+    const storageKey = `sb-${projectRef}-auth-token`;
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    
+    const parsed = JSON.parse(raw);
+    const session = parsed?.currentSession ?? parsed?.session ?? parsed;
+    
+    // Validate session has access_token and is not expired
+    if (session?.access_token) {
+      const expiresAt = session.expires_at;
+      if (expiresAt && typeof expiresAt === 'number') {
+        const now = Math.floor(Date.now() / 1000);
+        if (expiresAt < now) {
+          console.log("[getAuthHeaders] Session in localStorage is expired");
+          return null;
+        }
+      }
+      return session;
+    }
+  } catch (error) {
+    console.warn("[getAuthHeaders] Failed to read session from localStorage", error);
+  }
+  
+  return null;
+}
+
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -34,36 +74,42 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   console.log("[getAuthHeaders] Starting auth header preparation...");
   const sessionStartTime = Date.now();
   
-  // Get the user's session token - this allows edge functions to access OAuth provider tokens
-  // Add timeout to prevent hanging on getSession()
-  let session: { access_token?: string } | null = null;
-  try {
-    console.log("[getAuthHeaders] Calling supabaseClient.auth.getSession()...");
-    const sessionPromise = supabaseClient.auth.getSession();
-    
-    // Add 5-second timeout to prevent hanging
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        reject(new Error("getSession() timed out after 5 seconds - using anon key fallback"));
-      }, 5_000);
-    });
-    
-    const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
-    session = sessionResult.data?.session || null;
+  // Try localStorage first (fast, no network call)
+  let session: { access_token?: string } | null = getSessionFromStorage();
+  
+  if (session?.access_token) {
     const sessionDuration = Date.now() - sessionStartTime;
-    console.log(`[getAuthHeaders] Session retrieved in ${sessionDuration}ms`, {
-      hasSession: !!session,
-      hasAccessToken: !!session?.access_token,
-    });
-  } catch (sessionError) {
-    const sessionDuration = Date.now() - sessionStartTime;
-    console.warn(`[getAuthHeaders] getSession() failed after ${sessionDuration}ms`, {
-      error: sessionError instanceof Error ? sessionError.message : String(sessionError),
-      name: sessionError instanceof Error ? sessionError.name : "Unknown",
-    });
-    // Continue with anon key fallback instead of throwing
-    console.warn("[getAuthHeaders] Falling back to anon key due to session error");
-    session = null;
+    console.log(`[getAuthHeaders] Session retrieved from localStorage in ${sessionDuration}ms`);
+  } else {
+    // Fallback to getSession() if localStorage doesn't have it
+    console.log("[getAuthHeaders] No session in localStorage, trying getSession()...");
+    try {
+      const sessionPromise = supabaseClient.auth.getSession();
+      
+      // Add 2-second timeout (shorter since localStorage failed)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => {
+          reject(new Error("getSession() timed out after 2 seconds - using anon key fallback"));
+        }, 2_000);
+      });
+      
+      const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
+      session = sessionResult.data?.session || null;
+      const sessionDuration = Date.now() - sessionStartTime;
+      console.log(`[getAuthHeaders] Session retrieved from getSession() in ${sessionDuration}ms`, {
+        hasSession: !!session,
+        hasAccessToken: !!session?.access_token,
+      });
+    } catch (sessionError) {
+      const sessionDuration = Date.now() - sessionStartTime;
+      console.warn(`[getAuthHeaders] getSession() failed after ${sessionDuration}ms`, {
+        error: sessionError instanceof Error ? sessionError.message : String(sessionError),
+        name: sessionError instanceof Error ? sessionError.name : "Unknown",
+      });
+      // Continue with anon key fallback instead of throwing
+      console.warn("[getAuthHeaders] Falling back to anon key due to session error");
+      session = null;
+    }
   }
 
   if (session?.access_token) {
