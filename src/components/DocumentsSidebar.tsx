@@ -159,15 +159,41 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       }
 
       console.log("[DocumentsSidebar] Querying documents for user:", session.user.id);
-      const queryStartTime = Date.now();
-      
-      // Add timeout to prevent hanging
-      const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
-        setTimeout(() => {
-          resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
-        }, 10_000); // 10 second timeout
+      console.log("[DocumentsSidebar] Session details:", {
+        hasAccessToken: !!session.access_token,
+        userId: session.user.id,
+        tokenPreview: session.access_token?.substring(0, 20) + "...",
       });
       
+      const queryStartTime = Date.now();
+      
+      // Try a simpler query first to test connectivity
+      console.log("[DocumentsSidebar] Testing Supabase connection...");
+      let testResult;
+      try {
+        testResult = await Promise.race([
+          supabaseClient.from("processing_jobs").select("id").limit(1),
+          new Promise<{ data: null; error: { message: string } }>((resolve) => {
+            setTimeout(() => resolve({ data: null, error: { message: "Connection test timeout" } }), 5_000);
+          }),
+        ]);
+        console.log("[DocumentsSidebar] Connection test result:", {
+          hasData: !!testResult.data,
+          hasError: !!testResult.error,
+          errorMessage: testResult.error?.message,
+        });
+      } catch (testError) {
+        console.error("[DocumentsSidebar] Connection test failed:", testError);
+      }
+      
+      // Add timeout to prevent hanging - increased to 15s for slow connections
+      const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
+        setTimeout(() => {
+          resolve({ data: null, error: { message: "Query timeout after 15 seconds" } });
+        }, 15_000); // 15 second timeout
+      });
+      
+      console.log("[DocumentsSidebar] Executing main query...");
       const queryPromise = supabaseClient
         .from("processing_jobs")
         .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at")
