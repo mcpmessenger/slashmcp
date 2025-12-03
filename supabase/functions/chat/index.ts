@@ -281,6 +281,7 @@ serve(async (req) => {
     let userPreferences: Record<string, unknown> = {};
     let systemPrompt = BASE_SYSTEM_PROMPT;
     let relevantMemories: Array<{ key: string; value: unknown }> = [];
+    let user: { id: string } | null = null; // Store user for RAG tools
 
     const authHeader = req.headers.get("Authorization");
     if (authHeader && SUPABASE_URL && SUPABASE_ANON_KEY) {
@@ -290,14 +291,15 @@ serve(async (req) => {
         });
 
         const {
-          data: { user },
+          data: { user: authUser },
           error: userError,
         } = await supabase.auth.getUser();
 
-        if (!userError && user) {
+        if (!userError && authUser) {
+          user = authUser; // Store user for later use
           try {
             // User is authenticated - create memory service
-            memoryService = createMemoryService(supabase, user.id);
+            memoryService = createMemoryService(supabase, authUser.id);
 
             // Load user preferences and recent memories (truly non-blocking)
             // Start loading but don't wait - we'll use what we have when the stream starts
