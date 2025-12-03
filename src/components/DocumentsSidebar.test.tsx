@@ -180,18 +180,7 @@ export const DocumentsSidebarTest: React.FC<{ userId?: string }> = ({ userId: pr
           }
         }
 
-        console.log("[DocumentsSidebarTest] Step 2: Session found:", {
-          userId: session.user.id,
-          hasAccessToken: !!session.access_token,
-        });
-        setDebugInfo(prev => ({ 
-          ...prev, 
-          step: "session_found", 
-          userId: session.user.id,
-          hasAccessToken: !!session.access_token,
-        }));
-
-        console.log("[DocumentsSidebarTest] Step 3: Querying database for userId:", userId);
+        console.log("[DocumentsSidebarTest] Step 2: Ready to query, userId:", userId);
         setDebugInfo(prev => ({ ...prev, step: "querying", queryUserId: userId }));
         
         const queryPromise = supabaseClient
