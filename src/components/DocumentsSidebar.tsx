@@ -116,6 +116,7 @@ export const DocumentsSidebar: React.FC<{
   const [isLoadingRef, setIsLoadingRef] = useState(false); // Prevent concurrent loads
   const [hasError, setHasError] = useState(false); // Track if there's a persistent error
   const [deletingJobIds, setDeletingJobIds] = useState<Set<string>>(new Set()); // Track jobs being deleted
+  const [isClientReady, setIsClientReady] = useState(false); // Track if Supabase client is initialized
 
   const loadDocuments = async () => {
     // Prevent concurrent loads
@@ -157,25 +158,10 @@ export const DocumentsSidebar: React.FC<{
         return;
       }
       
-      // CRITICAL FIX: The Supabase client needs to be initialized before queries
-      // Instead of calling getSession() (which hangs), try accessing the client's auth state
-      // This might "wake up" the client without blocking
-      try {
-        // Just access the auth property - this might initialize the client
-        const _auth = supabaseClient.auth;
-        // Try a non-blocking check
-        if (_auth) {
-          // Client is accessible, continue
-        }
-      } catch (authErr) {
-        // Ignore - continue anyway
-      }
-      
+      // Client should be ready at this point (checked by onAuthStateChange)
       setHasCheckedSession(true);
       
       // Execute query directly - matching ragService.ts pattern exactly
-      // Note: We're skipping getSession() because it hangs, but the query might still work
-      // if the client auto-initializes from localStorage
       let data, error;
       try {
         const { data: queryData, error: queryError } = await supabaseClient
