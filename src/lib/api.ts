@@ -510,6 +510,27 @@ export interface ImageGenerationResponse {
   usageMetadata?: unknown;
 }
 
+/**
+ * Delete a processing job and optionally its associated S3 file
+ */
+export async function deleteProcessingJob(jobId: string, deleteS3File: boolean = false): Promise<void> {
+  if (!FUNCTIONS_URL) {
+    throw new Error("Functions URL is not configured");
+  }
+
+  const headers = await getAuthHeaders();
+  const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
+    method: "DELETE",
+    headers,
+    body: JSON.stringify({ jobId, deleteS3File }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error?.error || `Failed to delete job: ${response.statusText}`);
+  }
+}
+
 export async function generateImages(params: {
   prompt: string;
   negativePrompt?: string;

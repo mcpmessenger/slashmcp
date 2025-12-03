@@ -2,9 +2,10 @@ import React, { useState, useEffect } from "react";
 import { supabaseClient } from "@/lib/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText, Image, Loader2, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { FileText, Image, Loader2, CheckCircle2, XCircle, Clock, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
+import { deleteProcessingJob } from "@/lib/api";
 
 interface Document {
   jobId: string;
@@ -138,20 +139,109 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   };
 
+  const handleDelete = async (jobId: string, fileName: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent triggering document click
+    
+    if (!confirm(`Delete "${fileName}"? This will remove the job and all associated data.`)) {
+      return;
+    }
+
+    setDeletingJobIds(prev => new Set(prev).add(jobId));
+    
+    try {
+      await deleteProcessingJob(jobId, true); // Delete S3 file too
+      toast({
+        title: "Document deleted",
+        description: `"${fileName}" has been deleted.`,
+      });
+      // Remove from local state immediately
+      setDocuments(prev => prev.filter(doc => doc.jobId !== jobId));
+    } catch (error) {
+      console.error("Failed to delete job:", error);
+      toast({
+        title: "Delete failed",
+        description: error instanceof Error ? error.message : "Failed to delete document.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingJobIds(prev => {
+        const next = new Set(prev);
+        next.delete(jobId);
+        return next;
+      });
+    }
+  };
+
+  const handleBulkDeleteFailed = async () => {
+    const failedJobs = documents.filter(doc => doc.status === "failed");
+    if (failedJobs.length === 0) {
+      toast({
+        title: "No failed jobs",
+        description: "There are no failed jobs to delete.",
+      });
+      return;
+    }
+
+    if (!confirm(`Delete ${failedJobs.length} failed job(s)? This cannot be undone.`)) {
+      return;
+    }
+
+    const jobIdsToDelete = new Set(failedJobs.map(doc => doc.jobId));
+    setDeletingJobIds(jobIdsToDelete);
+
+    try {
+      await Promise.all(
+        failedJobs.map(doc => deleteProcessingJob(doc.jobId, true))
+      );
+      toast({
+        title: "Failed jobs deleted",
+        description: `Deleted ${failedJobs.length} failed job(s).`,
+      });
+      // Remove from local state
+      setDocuments(prev => prev.filter(doc => doc.status !== "failed"));
+    } catch (error) {
+      console.error("Failed to delete failed jobs:", error);
+      toast({
+        title: "Bulk delete failed",
+        description: error instanceof Error ? error.message : "Failed to delete some jobs.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingJobIds(new Set());
+    }
+  };
+
+  const failedCount = documents.filter(doc => doc.status === "failed").length;
+
   return (
     <Card className="h-full">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm font-semibold">Documents & Knowledge</CardTitle>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={loadDocuments}
-            disabled={isLoading}
-            className="h-6 px-2 text-xs"
-          >
-            {isLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Refresh"}
-          </Button>
+          <div className="flex items-center gap-1">
+            {failedCount > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleBulkDeleteFailed}
+                disabled={isLoading || deletingJobIds.size > 0}
+                className="h-6 px-2 text-xs text-destructive hover:text-destructive"
+                title={`Delete ${failedCount} failed job(s)`}
+              >
+                <Trash2 className="h-3 w-3 mr-1" />
+                Clear Failed
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={loadDocuments}
+              disabled={isLoading}
+              className="h-6 px-2 text-xs"
+            >
+              {isLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Refresh"}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="p-2">
@@ -168,36 +258,58 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
         ) : (
           <div className="space-y-2 max-h-[calc(100vh-200px)] overflow-y-auto">
             {documents.map((doc) => (
-              <button
+              <div
                 key={doc.jobId}
-                onClick={() => onDocumentClick?.(doc.jobId)}
                 className={cn(
-                  "w-full text-left p-2 rounded-md border transition-colors",
+                  "w-full p-2 rounded-md border transition-colors group",
                   "hover:bg-muted/50 hover:border-primary/50",
-                  "focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2",
                 )}
               >
-                <div className="flex items-start gap-2">
-                  <div className="mt-0.5 flex-shrink-0">
-                    {getFileIcon(doc.fileType, doc.fileName)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate" title={doc.fileName}>
-                      {doc.fileName}
-                    </p>
-                    <div className="flex items-center gap-2 mt-1">
-                      {getStatusIcon(doc.status)}
-                      <span className="text-[10px] text-muted-foreground">
-                        {doc.status}
-                        {doc.stage !== "unknown" && ` • ${doc.stage}`}
-                      </span>
+                <button
+                  onClick={() => onDocumentClick?.(doc.jobId)}
+                  className="w-full text-left focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 rounded"
+                >
+                  <div className="flex items-start gap-2">
+                    <div className="mt-0.5 flex-shrink-0">
+                      {getFileIcon(doc.fileType, doc.fileName)}
                     </div>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">
-                      {formatFileSize(doc.fileSize)}
-                    </p>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate" title={doc.fileName}>
+                        {doc.fileName}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        {getStatusIcon(doc.status)}
+                        <span className="text-[10px] text-muted-foreground">
+                          {doc.status}
+                          {doc.stage !== "unknown" && ` • ${doc.stage}`}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {formatFileSize(doc.fileSize)}
+                      </p>
+                    </div>
                   </div>
+                </button>
+                <div className="flex justify-end mt-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => handleDelete(doc.jobId, doc.fileName, e)}
+                    disabled={deletingJobIds.has(doc.jobId)}
+                    className={cn(
+                      "h-5 px-1.5 text-[10px] opacity-0 group-hover:opacity-100 transition-opacity",
+                      "text-destructive hover:text-destructive hover:bg-destructive/10"
+                    )}
+                    title="Delete document"
+                  >
+                    {deletingJobIds.has(doc.jobId) ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3 w-3" />
+                    )}
+                  </Button>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         )}
