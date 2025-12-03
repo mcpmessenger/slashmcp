@@ -604,11 +604,24 @@ export const DocumentsSidebar: React.FC<{
 
   const failedCount = documents.filter(doc => doc.status === "failed").length;
 
+  // DIAGNOSTIC: Log render with current state
+  console.log("[DocumentsSidebar] RENDER - Current state:", {
+    isLoading,
+    documentCount: documents.length,
+    hasError,
+    propUserId,
+    hasCheckedSession,
+  });
+
   return (
     <Card className="h-full">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold">Documents & Knowledge</CardTitle>
+          <CardTitle className="text-sm font-semibold">
+            Documents & Knowledge
+            {/* DIAGNOSTIC: Show propUserId in title if available */}
+            {propUserId && <span className="text-xs text-muted-foreground ml-2">(User: {propUserId.substring(0, 8)}...)</span>}
+          </CardTitle>
           <div className="flex items-center gap-1">
             {failedCount > 0 && (
               <Button
