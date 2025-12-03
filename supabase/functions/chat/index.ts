@@ -722,9 +722,12 @@ serve(async (req) => {
           let classification: Awaited<ReturnType<typeof classifyQuery>> | null = null;
           let enhancedInstructions = "";
           
-          if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && userId) {
+          // Get user ID from the user object retrieved earlier
+          const currentUserId = user?.id;
+          
+          if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && currentUserId) {
             try {
-              documentContext = await getDocumentContext(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, userId);
+              documentContext = await getDocumentContext(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, currentUserId);
               console.log(`Document context: ${documentContext.availableDocuments.length} docs, ${documentContext.readyDocuments} ready, ${documentContext.processingDocuments} processing`);
               
               // Get the last user message for classification
