@@ -108,12 +108,6 @@ export const DocumentsSidebar: React.FC<{
   refreshTrigger?: number; // External trigger to force refresh
   userId?: string; // Optional userId from parent (bypasses session retrieval)
 }> = ({ onDocumentClick, refreshTrigger, userId: propUserId }) => {
-  // CRITICAL: Log immediately when component renders (before any hooks)
-  console.log("[DocumentsSidebar] ===== COMPONENT RENDERED =====");
-  console.log("[DocumentsSidebar] Render props:", { 
-    hasOnDocumentClick: !!onDocumentClick, 
-    refreshTrigger 
-  });
   
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -122,23 +116,15 @@ export const DocumentsSidebar: React.FC<{
   const [isLoadingRef, setIsLoadingRef] = useState(false); // Prevent concurrent loads
   const [hasError, setHasError] = useState(false); // Track if there's a persistent error
   const [deletingJobIds, setDeletingJobIds] = useState<Set<string>>(new Set()); // Track jobs being deleted
-  
-  console.log("[DocumentsSidebar] Initial state:", { isLoading, documentCount: documents.length });
 
   const loadDocuments = async () => {
     // Prevent concurrent loads
     if (isLoadingRef) {
-      console.log("[DocumentsSidebar] Load already in progress, skipping...");
       return;
     }
     
-    console.log("[DocumentsSidebar] ===== loadDocuments START =====");
-    console.log("[DocumentsSidebar] Current state:", { isLoading, documentCount: documents.length, propUserId });
-    console.log("[DocumentsSidebar] Step 1: Checking propUserId...", { propUserId, type: typeof propUserId });
-    
     try {
       setIsLoadingRef(true);
-      console.log("[DocumentsSidebar] Step 2: Setting loading states...");
       setIsLoading(true);
       setHasError(false); // Clear error state on new attempt
       
@@ -147,37 +133,16 @@ export const DocumentsSidebar: React.FC<{
       
       // If userId prop provided, use it directly (from useChat hook - bypasses session retrieval)
       if (propUserId) {
-        console.log("[DocumentsSidebar] Step 3a: Using userId from props:", propUserId);
         userId = propUserId;
-        
         // Still try to get session token for RLS (non-blocking)
-        console.log("[DocumentsSidebar] Step 3b: Getting session token for RLS...");
         session = getSessionFromStorage();
-        if (session?.access_token) {
-          console.log("[DocumentsSidebar] Step 3c: ✅ Found session token for RLS");
-        } else {
-          console.warn("[DocumentsSidebar] Step 3c: ⚠️ No session token found - query may fail RLS");
-        }
       } else {
         // Fallback: Try localStorage session retrieval
-        console.log("[DocumentsSidebar] Step 3a (fallback): Getting session from localStorage...");
         session = getSessionFromStorage();
-        console.log("[DocumentsSidebar] Step 3b (fallback): localStorage check result:", {
-          hasSession: !!session,
-          hasAccessToken: !!session?.access_token,
-          hasUser: !!session?.user,
-          userId: session?.user?.id,
-        });
         
         if (session?.access_token && session?.user?.id) {
           userId = session.user.id;
-          console.log("[DocumentsSidebar] Step 3c (fallback): ✅ Session retrieved from localStorage:", {
-            hasSession: true,
-            hasUser: true,
-            userId: session.user.id,
-          });
         } else {
-          console.warn("[DocumentsSidebar] Step 3c (fallback): ⚠️ No session in localStorage - EXITING");
           setIsLoading(false);
           setDocuments([]);
           setHasCheckedSession(true);
@@ -185,9 +150,7 @@ export const DocumentsSidebar: React.FC<{
         }
       }
       
-      console.log("[DocumentsSidebar] Step 4: Validating userId...", { userId, hasUserId: !!userId });
       if (!userId) {
-        console.error("[DocumentsSidebar] Step 4: ❌ No userId available - EXITING");
         setIsLoading(false);
         setDocuments([]);
         setHasCheckedSession(true);
@@ -197,101 +160,33 @@ export const DocumentsSidebar: React.FC<{
       // CRITICAL FIX: Call getSession() to ensure the client is fully initialized and has the session.
       // This is the key difference from the working ragService.ts.
       // Without this, the Supabase client doesn't "wake up" and the query promise never executes.
-      console.log("[DocumentsSidebar] Step 5.0: Calling getSession() to initialize client...");
       const { data: { session: clientSession } } = await supabaseClient.auth.getSession();
-      console.log("[DocumentsSidebar] Step 5.0: getSession() completed. Client session status:", {
-        hasSession: !!clientSession,
-        userId: clientSession?.user?.id,
-        matches: clientSession?.user?.id === userId,
-      });
       
-      console.log("[DocumentsSidebar] Step 5: Client initialized, proceeding to query with userId:", userId);
-      
-      console.log("[DocumentsSidebar] Step 5.5: Setting hasCheckedSession to true");
       setHasCheckedSession(true);
-      console.log("[DocumentsSidebar] Step 6: About to query documents...");
-
-      console.log("[DocumentsSidebar] Querying documents for user:", userId);
-      console.log("[DocumentsSidebar] Session details:", {
-        hasAccessToken: !!session?.access_token,
-        userId: session?.user?.id || userId,
-        tokenPreview: session?.access_token?.substring(0, 20) + "..." || "none",
-      });
       
-      console.log("[DocumentsSidebar] Step 6.5: Checking supabaseClient:", {
-        hasClient: !!supabaseClient,
-        hasFrom: typeof supabaseClient?.from === 'function',
-        supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
-      });
-      
-      const queryStartTime = Date.now();
-      
-      // Build query with explicit filters
-      console.log("[DocumentsSidebar] Building query with filters:", {
-        userId,
-        analysisTarget: "document-analysis",
-      });
-      
-      // Build query exactly like ragService.ts does (which works)
-      console.log("[DocumentsSidebar] Step 7: Building query (matching ragService.ts pattern)...");
-      console.log("[DocumentsSidebar] Step 7: userId:", userId);
-      
-      // Execute query directly with timeout - match ragService.ts pattern exactly
-      console.log("[DocumentsSidebar] Step 8: Executing query with timeout...");
+      // Execute query directly - matching ragService.ts pattern exactly
       let data, error;
       try {
-        // CRITICAL: Build and execute query in one chain, exactly like ragService.ts
-        console.log("[DocumentsSidebar] Step 8a: Starting query chain...");
-        const queryPromise = supabaseClient
+        const { data: queryData, error: queryError } = await supabaseClient
           .from("processing_jobs")
           .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
           .eq("user_id", userId)
           .order("created_at", { ascending: false })
           .limit(50);
         
-        console.log("[DocumentsSidebar] Step 8b: Query chain built, checking if it's a promise...");
-        console.log("[DocumentsSidebar] Step 8b: Query type:", typeof queryPromise);
-        console.log("[DocumentsSidebar] Step 8b: Has then:", typeof (queryPromise as any)?.then === 'function');
+        data = queryData;
+        error = queryError;
         
-        // Create timeout promise
-        console.log("[DocumentsSidebar] Step 8c: Creating timeout promise (10 seconds)...");
-        const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
-          setTimeout(() => {
-            console.error("[DocumentsSidebar] Step 8d: ⚠️ Query timeout after 10 seconds");
-            console.error("[DocumentsSidebar] Step 8d: Query promise never resolved - Supabase client not executing HTTP request");
-            resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
-          }, 10_000);
-        });
-        
-        // Race the query and timeout
-        console.log("[DocumentsSidebar] Step 8e: Racing query and timeout...");
-        const result = await Promise.race([queryPromise, queryTimeout]);
-        
-        console.log("[DocumentsSidebar] Step 8f: Promise.race completed");
-        
-        // Check if result is from timeout or query
-        if (result && 'data' in result && result.data === null && result.error?.message === "Query timeout after 10 seconds") {
-          // Timeout won
-          console.error("[DocumentsSidebar] Step 8f: Timeout won - query never executed");
-          data = null;
-          error = { message: "Query timeout after 10 seconds" };
+        if (error) {
+          console.error("[DocumentsSidebar] Query error:", error);
         } else {
-          // Query completed (or timeout returned something else)
-          console.log("[DocumentsSidebar] Step 8f: Query completed (or unexpected result)");
-          data = (result as any)?.data || null;
-          error = (result as any)?.error || null;
+          console.log(`[DocumentsSidebar] Loaded ${data?.length || 0} documents`);
         }
       } catch (queryError) {
-        console.error("[DocumentsSidebar] Step 9: ❌ Query exception:", queryError);
+        console.error("[DocumentsSidebar] Query exception:", queryError);
         error = { message: queryError instanceof Error ? queryError.message : String(queryError) };
         data = null;
       }
-
-      const queryDuration = Date.now() - queryStartTime;
-      console.log(`[DocumentsSidebar] Step 10: Query completed in ${queryDuration}ms`, {
-        hasError: !!error,
-        documentCount: data?.length || 0,
-      });
 
       if (error) {
         console.error("[DocumentsSidebar] Database query error:", error);
@@ -322,7 +217,7 @@ export const DocumentsSidebar: React.FC<{
           ]);
           
           if (fallbackResult.data) {
-            console.log("[DocumentsSidebar] Fallback query succeeded:", {
+            // Fallback query succeeded
               totalJobs: fallbackResult.data.length,
               documentAnalysisJobs: fallbackResult.data.filter(j => j.analysis_target === "document-analysis").length,
               allAnalysisTargets: [...new Set(fallbackResult.data.map(j => j.analysis_target))],
@@ -331,7 +226,6 @@ export const DocumentsSidebar: React.FC<{
             // Use the fallback data if it has document-analysis jobs
             const docJobs = fallbackResult.data.filter(j => j.analysis_target === "document-analysis");
             if (docJobs.length > 0) {
-              console.log("[DocumentsSidebar] Using fallback query results");
               data = docJobs;
               error = null;
             }
@@ -354,7 +248,6 @@ export const DocumentsSidebar: React.FC<{
         }
       }
 
-      console.log("[DocumentsSidebar] Raw data from query:", {
         dataLength: data?.length || 0,
         firstItem: data?.[0] ? {
           id: data[0].id,
@@ -380,7 +273,6 @@ export const DocumentsSidebar: React.FC<{
         };
       });
 
-      console.log("[DocumentsSidebar] Setting documents:", docs.length, {
         documents: docs.map(d => ({ fileName: d.fileName, status: d.status, stage: d.stage })),
       });
       
