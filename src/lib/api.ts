@@ -392,6 +392,13 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
         throw new Error(`Textract job trigger timed out after ${TRIGGER_TEXTRACT_TIMEOUT_MS}ms`);
       }
       // Network error, CORS, or other fetch failures
+      if (fetchError instanceof TypeError) {
+        throw new Error(
+          `Failed to trigger Textract job: Network error - ${fetchError.message}. ` +
+          "This may indicate a CORS problem, network connectivity issue, or the textract-worker function is unavailable. " +
+          "Check Supabase Edge Function logs and browser console for more details."
+        );
+      }
       throw new Error(
         `Failed to trigger Textract job: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
         "This may indicate a network issue, CORS problem, or the textract-worker function is unavailable. " +

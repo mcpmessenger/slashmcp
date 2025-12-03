@@ -161,13 +161,22 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       console.log("[DocumentsSidebar] Querying documents for user:", session.user.id);
       const queryStartTime = Date.now();
       
-      const { data, error } = await supabaseClient
+      // Add timeout to prevent hanging
+      const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
+        setTimeout(() => {
+          resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
+        }, 10_000); // 10 second timeout
+      });
+      
+      const queryPromise = supabaseClient
         .from("processing_jobs")
         .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at")
         .eq("user_id", session.user.id)
         .eq("analysis_target", "document-analysis")
         .order("created_at", { ascending: false })
         .limit(50);
+      
+      const { data, error } = await Promise.race([queryPromise, queryTimeout]);
 
       const queryDuration = Date.now() - queryStartTime;
       console.log(`[DocumentsSidebar] Query completed in ${queryDuration}ms`, {
