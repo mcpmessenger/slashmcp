@@ -109,18 +109,50 @@ All logs show:
 [DocumentsSidebar] Step 8d: Query promise never resolved - Supabase client not executing HTTP request
 ```
 
+## Critical Finding: Minimal Test Also Fails
+
+**UPDATE**: Created `DocumentsSidebarMinimalTest.tsx` - a minimal React component that bypasses all complexity:
+- ✅ Component renders correctly
+- ✅ Query promise is created (`typeof query === 'object'`, has `then` method)
+- ❌ Query promise **never resolves** - same timeout issue
+- ❌ No HTTP request is made
+
+**This proves:**
+- ❌ It's **NOT** a React-specific issue
+- ❌ It's **NOT** a component lifecycle issue  
+- ❌ It's **NOT** a state management issue
+- ✅ It **IS** a fundamental Supabase client issue - the query promise is created but never executes
+
+## Key Difference: ragService.ts vs Components
+
+**Working code (`ragService.ts`):**
+```typescript
+export async function getQueryableDocumentJobs(userId?: string): Promise<string[]> {
+  if (!userId) {
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    userId = session?.user?.id;
+  }
+  // ... then queries
+}
+```
+
+**Failing code (components):**
+- Components receive `userId` as prop
+- Skip `getSession()` call
+- Query immediately times out
+
+**Hypothesis**: Maybe calling `getSession()` first "wakes up" the Supabase client? Testing this now.
+
 ## Next Steps
 
-1. **Create minimal test component** (`DocumentsSidebarMinimalTest.tsx`) that:
-   - Bypasses all React complexity
-   - Queries `processing_jobs` directly
-   - Logs every step
-   - This will determine if it's a React-specific issue
-
-2. **Compare with working code**:
-   - `ragService.ts` works - what's different?
-   - Check if `ragService.ts` is called from a different context
-   - Check if there's a timing issue
+1. **Test if `getSession()` call is required** - Add `getSession()` call before query in minimal test
+2. **Compare execution context**:
+   - When is `ragService.ts` called? (user-initiated action vs component mount)
+   - Is there a timing difference?
+3. **Check Supabase client internals**:
+   - Is there a connection pool or queue?
+   - Does the client need to be "initialized" before queries?
+4. **External help** - If `getSession()` doesn't fix it, we need Supabase community help
 
 3. **Check Supabase client internals**:
    - Is there a queue or batching mechanism?
