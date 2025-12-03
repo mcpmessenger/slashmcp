@@ -3,6 +3,7 @@ import { ChatInput } from "@/components/ui/chat-input";
 import { FileUploadStatus } from "@/components/FileUploadStatus";
 import { DocumentsSidebar } from "@/components/DocumentsSidebar";
 import { DocumentsSidebarTest } from "@/components/DocumentsSidebar.test";
+import { DocumentsSidebarMinimalTest } from "@/components/DocumentsSidebarMinimalTest";
 import { useChat } from "@/hooks/useChat";
 import { fetchJobStatus } from "@/lib/api";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -524,6 +525,10 @@ const Index = () => {
                     userId: session?.user?.id,
                     userIdType: typeof session?.user?.id
                   })}
+                  {/* TEMPORARY: Test minimal component to isolate the issue */}
+                  {session?.user?.id && (
+                    <DocumentsSidebarMinimalTest userId={session.user.id} />
+                  )}
                   <DocumentsSidebar
                     refreshTrigger={documentsSidebarRefreshTrigger}
                     userId={session?.user?.id}
