@@ -258,9 +258,6 @@ export const DocumentsSidebar: React.FC<{
           updatedAt: job.updated_at,
         };
       });
-
-        documents: docs.map(d => ({ fileName: d.fileName, status: d.status, stage: d.stage })),
-      });
       
       // CRITICAL: Always set documents and clear loading, even if empty
       setDocuments(docs);
