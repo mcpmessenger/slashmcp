@@ -31,7 +31,8 @@ $functions = @(
     "chat",
     "doc-context", 
     "textract-worker",
-    "uploads"
+    "uploads",
+    "agent-orchestrator-v1"
 )
 
 foreach ($function in $functions) {

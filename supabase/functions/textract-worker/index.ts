@@ -4,8 +4,9 @@ import type { Database } from "../_shared/database.types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Max-Age": "86400", // 24 hours
 };
 
 interface WorkerPayload {
@@ -501,11 +502,11 @@ async function markJobFailed(jobId: string, reason: string, metadata?: Record<st
 }
 
 serve(async (req) => {
-  // Handle OPTIONS immediately - no async operations needed
+  // Handle OPTIONS preflight request FIRST
   if (req.method === "OPTIONS") {
     console.log("OPTIONS request - returning CORS headers");
     return new Response(null, { 
-      status: 200,
+      status: 204, // No Content (as per plan)
       headers: corsHeaders 
     });
   }

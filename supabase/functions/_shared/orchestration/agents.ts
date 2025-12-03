@@ -343,19 +343,30 @@ export function createOrchestratorAgent(
       "- The Command_Discovery_Agent is the default agent and should handle most user interactions.\n" +
       "\n" +
       "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation) - HIGHEST PRIORITY:\n" +
-      "- If the user mentions ANY of: 'document', 'uploaded', 'file', 'PDF', 'what I uploaded', 'my document', 'the document', 'that document', " +
-      "  'tell me about', 'what does it say', 'what can you tell me', 'analyze', 'search my documents', 'find in my documents', " +
-      "  or asks questions that could be answered by uploaded content, you MUST use the `search_documents` tool immediately.\n" +
-      "- Examples that REQUIRE `search_documents`: 'What can you tell me about the document I just uploaded?', " +
-      "  'What does my document say about X?', 'Tell me about the PDF', 'Search my documents for Y', " +
-      "  'What information is in my uploaded file?', 'Analyze my document', 'What's in the document?'\n" +
-      "- DO NOT say 'I can't analyze documents' - you CAN and MUST use `search_documents` when users ask about documents.\n" +
+      "- CRITICAL: If the user mentions ANY of the following, you MUST use `search_documents` tool:\n" +
+      "  * 'document', 'documents', 'file', 'files', 'PDF', 'uploaded', 'my document', 'my file'\n" +
+      "  * 'what I uploaded', 'the document', 'that file', 'my PDF'\n" +
+      "  * 'tell me about', 'what does it say', 'what can you tell me', 'analyze'\n" +
+      "  * 'search my documents', 'find in my documents', 'in my document'\n" +
+      "  * 'from my document', 'document says', 'document contains', 'document mentions'\n" +
+      "  * 'what's in', 'what is in', 'content of', 'information in'\n" +
+      "- Examples that REQUIRE `search_documents`:\n" +
+      "  * 'What can you tell me about the document I just uploaded?'\n" +
+      "  * 'What does my document say about X?'\n" +
+      "  * 'Tell me about the PDF'\n" +
+      "  * 'Search my documents for Y'\n" +
+      "  * 'What information is in my uploaded file?'\n" +
+      "  * 'Analyze my document'\n" +
+      "  * 'What's in the document?'\n" +
+      "- DO NOT say 'I can't analyze documents' - you CAN and MUST use `search_documents`\n" +
+      "- DO NOT use web search for document queries - ALWAYS use `search_documents` first\n" +
+      "- If documents are still processing, inform user and check status with `get_document_status`\n" +
+      "- The orchestrator MUST proactively search documents when users ask questions that might be answered by uploaded content\n" +
       "- If the user asks to list their documents (e.g., 'What documents do I have?', 'Show my documents'), " +
       "  use the `list_documents` tool directly.\n" +
       "- If the user asks about document status, use the `get_document_status` tool.\n" +
       "- CRITICAL: When ANY query relates to document content or uploaded files, ALWAYS try `search_documents` first. " +
       "  Even if the document is still processing, the search will return helpful information about status.\n" +
-      "- The orchestrator MUST proactively search documents when users ask questions that might be answered by uploaded content.\n" +
       "\n" +
       "FOR MEMORY REQUESTS:\n" +
       "- If the user asks you to remember something (like a password, preference, or fact), use the `store_memory` tool to save it.\n" +
