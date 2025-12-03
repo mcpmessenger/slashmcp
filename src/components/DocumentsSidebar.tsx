@@ -7,6 +7,46 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { deleteProcessingJob } from "@/lib/api";
 
+/**
+ * Get session from localStorage directly (fast, no network call)
+ * Similar to getSessionFromStorage in api.ts
+ */
+function getSessionFromStorage(): { access_token?: string; user?: { id: string } } | null {
+  if (typeof window === "undefined") return null;
+  
+  try {
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+    if (!SUPABASE_URL) return null;
+    
+    const projectRef = SUPABASE_URL.replace("https://", "").split(".supabase.co")[0]?.split(".")[0];
+    if (!projectRef) return null;
+    
+    const storageKey = `sb-${projectRef}-auth-token`;
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return null;
+    
+    const parsed = JSON.parse(raw);
+    const session = parsed?.currentSession ?? parsed?.session ?? parsed;
+    
+    // Validate session has access_token and user
+    if (session?.access_token && session?.user?.id) {
+      const expiresAt = session.expires_at;
+      if (expiresAt && typeof expiresAt === 'number') {
+        const now = Math.floor(Date.now() / 1000);
+        if (expiresAt < now) {
+          console.log("[DocumentsSidebar] Session in localStorage is expired");
+          return null;
+        }
+      }
+      return session;
+    }
+  } catch (error) {
+    console.warn("[DocumentsSidebar] Unable to parse stored Supabase session", error);
+  }
+  
+  return null;
+}
+
 interface Document {
   jobId: string;
   fileName: string;
@@ -36,39 +76,53 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       
       console.log("[DocumentsSidebar] Getting session...");
       let session;
-      try {
-        // Add timeout to prevent hanging (same pattern as useChat.ts)
-        const sessionPromise = supabaseClient.auth.getSession();
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            reject(new Error("getSession timeout after 5 seconds"));
-          }, 5_000);
+      
+      // Try localStorage first (fast, no network call) - same pattern as getAuthHeaders
+      session = getSessionFromStorage();
+      
+      if (session?.access_token && session?.user?.id) {
+        console.log("[DocumentsSidebar] Session retrieved from localStorage:", {
+          hasSession: true,
+          hasUser: true,
+          userId: session.user.id,
         });
-        
-        const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
-        session = (sessionResult as any).data?.session;
-        console.log("[DocumentsSidebar] Session retrieved:", {
-          hasSession: !!session,
-          hasUser: !!session?.user,
-          userId: session?.user?.id,
-        });
-      } catch (sessionError) {
-        console.error("[DocumentsSidebar] CRITICAL: Failed to get session:", sessionError);
-        console.error("[DocumentsSidebar] Session error details:", JSON.stringify(sessionError, null, 2));
-        setIsLoading(false);
-        setDocuments([]);
-        
-        if (sessionError instanceof Error && sessionError.message.includes("timeout")) {
-          console.warn("[DocumentsSidebar] Session timeout - showing empty state");
-          // Don't show toast for timeout - just show empty state
-        } else {
-          toast({
-            title: "Session Error",
-            description: "Failed to get user session. Please refresh the page.",
-            variant: "destructive",
+      } else {
+        // Fallback to getSession() if localStorage doesn't have it
+        console.log("[DocumentsSidebar] No session in localStorage, trying getSession()...");
+        try {
+          // Add timeout to prevent hanging (same pattern as useChat.ts)
+          const sessionPromise = supabaseClient.auth.getSession();
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => {
+              reject(new Error("getSession timeout after 5 seconds"));
+            }, 5_000);
           });
+          
+          const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
+          session = (sessionResult as any).data?.session;
+          console.log("[DocumentsSidebar] Session retrieved from getSession():", {
+            hasSession: !!session,
+            hasUser: !!session?.user,
+            userId: session?.user?.id,
+          });
+        } catch (sessionError) {
+          console.error("[DocumentsSidebar] CRITICAL: Failed to get session:", sessionError);
+          console.error("[DocumentsSidebar] Session error details:", JSON.stringify(sessionError, null, 2));
+          setIsLoading(false);
+          setDocuments([]);
+          
+          if (sessionError instanceof Error && sessionError.message.includes("timeout")) {
+            console.warn("[DocumentsSidebar] Session timeout - showing empty state");
+            // Don't show toast for timeout - just show empty state
+          } else {
+            toast({
+              title: "Session Error",
+              description: "Failed to get user session. Please refresh the page.",
+              variant: "destructive",
+            });
+          }
+          return;
         }
-        return;
       }
 
       if (!session?.user) {
