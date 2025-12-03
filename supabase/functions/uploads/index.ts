@@ -5,7 +5,7 @@ import type { Database } from "../_shared/database.types.ts";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, PATCH, OPTIONS",
+  "Access-Control-Allow-Methods": "POST, PATCH, DELETE, OPTIONS",
 };
 
 type AnalysisTarget = "document-analysis" | "image-ocr" | "image-generation" | "audio-transcription";
@@ -229,7 +229,7 @@ serve(async (req) => {
       return new Response(null, { headers: corsHeaders });
     }
 
-    if (req.method !== "POST" && req.method !== "PATCH") {
+    if (req.method !== "POST" && req.method !== "PATCH" && req.method !== "DELETE") {
       console.error("Method not allowed:", req.method);
       return new Response(JSON.stringify({ error: "Method not allowed" }), {
         status: 405,
@@ -370,19 +370,158 @@ serve(async (req) => {
     const totalDuration = Date.now() - requestStartTime;
     console.log(`=== Uploads Edge Function Request Complete in ${totalDuration}ms ===`);
 
-    return new Response(
-      JSON.stringify({
-        jobId: data.id,
-        storagePath,
-        uploadUrl,
-        message: "Upload registered. Upload file using provided URL.",
-      }),
-      {
-        status: 201,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      },
-    );
-  } catch (error) {
+      return new Response(
+        JSON.stringify({
+          jobId: data.id,
+          storagePath,
+          uploadUrl,
+          message: "Upload registered. Upload file using provided URL.",
+        }),
+        {
+          status: 201,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    if (req.method === "DELETE") {
+      console.log("Processing DELETE request - parsing body...");
+      const body = await req.json();
+      const jobId = body?.jobId;
+      const deleteS3File = body?.deleteS3File === true;
+
+      if (typeof jobId !== "string" || !jobId) {
+        return new Response(JSON.stringify({ error: "jobId is required" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      console.log("Deleting job:", jobId, "deleteS3File:", deleteS3File);
+
+      // Get the job to find storage_path and user_id
+      const { data: job, error: jobError } = await supabase
+        .from("processing_jobs")
+        .select("storage_path, user_id")
+        .eq("id", jobId)
+        .single();
+
+      if (jobError || !job) {
+        console.error("Job not found or error:", jobError);
+        return new Response(JSON.stringify({ error: "Job not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Delete S3 file if requested and storage_path exists
+      if (deleteS3File && job.storage_path) {
+        try {
+          console.log("Deleting S3 file:", job.storage_path);
+          // Create DELETE request to S3
+          const host = AWS_REGION === "us-east-1"
+            ? `${AWS_S3_BUCKET}.s3.amazonaws.com`
+            : `${AWS_S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com`;
+          
+          const encodedKey = job.storage_path.split("/").map((segment) => encodeRfc3986(segment)).join("/");
+          const now = new Date();
+          const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, "");
+          const dateStamp = amzDate.slice(0, 8);
+          const credentialScope = `${dateStamp}/${AWS_REGION}/s3/aws4_request`;
+
+          const signedHeaders = "host";
+          const queryEntries: [string, string][] = [
+            ["X-Amz-Algorithm", "AWS4-HMAC-SHA256"],
+            ["X-Amz-Credential", `${AWS_ACCESS_KEY_ID}/${credentialScope}`],
+            ["X-Amz-Date", amzDate],
+            ["X-Amz-SignedHeaders", signedHeaders],
+          ];
+
+          if (AWS_SESSION_TOKEN) {
+            queryEntries.push(["X-Amz-Security-Token", AWS_SESSION_TOKEN]);
+          }
+
+          const canonicalQuery = queryEntries
+            .map(([key, value]) => `${encodeRfc3986(key)}=${encodeRfc3986(value)}`)
+            .sort()
+            .join("&");
+
+          const canonicalHeaders = `host:${host}\n`;
+          const canonicalRequest = [
+            "DELETE",
+            `/${encodedKey}`,
+            canonicalQuery,
+            canonicalHeaders,
+            signedHeaders,
+            "UNSIGNED-PAYLOAD",
+          ].join("\n");
+
+          const stringToSign = [
+            "AWS4-HMAC-SHA256",
+            amzDate,
+            credentialScope,
+            await sha256Hex(canonicalRequest),
+          ].join("\n");
+
+          const kDate = await hmacSha256(`AWS4${AWS_SECRET_ACCESS_KEY}`, dateStamp);
+          const kRegion = await hmacSha256(kDate, AWS_REGION);
+          const kService = await hmacSha256(kRegion, "s3");
+          const kSigning = await hmacSha256(kService, "aws4_request");
+          const signature = toHex(await hmacSha256(kSigning, stringToSign));
+
+          const finalQuery = `${canonicalQuery}&X-Amz-Signature=${signature}`;
+          const s3Url = `https://${host}/${encodedKey}?${finalQuery}`;
+
+          const deleteResponse = await fetch(s3Url, {
+            method: "DELETE",
+            headers: {
+              "Host": host,
+            },
+          });
+
+          if (!deleteResponse.ok && deleteResponse.status !== 404) {
+            console.warn("Failed to delete S3 file:", deleteResponse.status, deleteResponse.statusText);
+            // Continue with database deletion even if S3 deletion fails
+          } else {
+            console.log("S3 file deleted successfully");
+          }
+        } catch (s3Error) {
+          console.warn("Error deleting S3 file:", s3Error);
+          // Continue with database deletion even if S3 deletion fails
+        }
+      }
+
+      // Delete the job from database (cascade will delete related records)
+      const { error: deleteError } = await supabase
+        .from("processing_jobs")
+        .delete()
+        .eq("id", jobId);
+
+      if (deleteError) {
+        console.error("Failed to delete job:", deleteError);
+        return new Response(JSON.stringify({ error: "Failed to delete job", details: deleteError.message }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      console.log("Job deleted successfully:", jobId);
+      const totalDuration = Date.now() - requestStartTime;
+      console.log(`=== Delete Request Complete in ${totalDuration}ms ===`);
+
+      return new Response(
+        JSON.stringify({
+          message: "Job deleted successfully",
+          jobId,
+          deletedS3File: deleteS3File && !!job.storage_path,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+    } catch (error) {
     const errorDuration = Date.now() - requestStartTime;
     console.error("=== Uploads Edge Function Error ===");
     console.error("Error after", errorDuration, "ms");
