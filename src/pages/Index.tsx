@@ -518,6 +518,12 @@ const Index = () => {
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
                   {/* Using original component with userId prop (fixes timeout issue) */}
+                  {console.log("[Index] Rendering DocumentsSidebar with:", { 
+                    hasSession: !!session, 
+                    hasGuestMode: !!guestMode,
+                    userId: session?.user?.id,
+                    userIdType: typeof session?.user?.id
+                  })}
                   <DocumentsSidebar
                     refreshTrigger={documentsSidebarRefreshTrigger}
                     userId={session?.user?.id}
