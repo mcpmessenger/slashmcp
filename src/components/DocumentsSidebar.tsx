@@ -19,9 +19,12 @@ interface Document {
 }
 
 export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => void }> = ({ onDocumentClick }) => {
+  console.log("[DocumentsSidebar] ===== COMPONENT RENDERED =====");
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  
+  console.log("[DocumentsSidebar] Initial state:", { isLoading, documentCount: documents.length });
 
   const loadDocuments = async () => {
     console.log("[DocumentsSidebar] ===== loadDocuments START =====");
