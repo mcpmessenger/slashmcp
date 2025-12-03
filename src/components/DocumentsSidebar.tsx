@@ -654,6 +654,13 @@ export const DocumentsSidebar: React.FC<{
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             <span className="text-xs text-muted-foreground mt-2">Loading documents...</span>
             <span className="text-[10px] text-muted-foreground/50 mt-1">Check console (F12) for details</span>
+            {/* DIAGNOSTIC: Show diagnostic info */}
+            <div className="mt-4 p-2 bg-muted/50 rounded text-[10px] text-left max-w-full overflow-auto">
+              <div>propUserId: {propUserId ? `${propUserId.substring(0, 20)}...` : 'undefined'}</div>
+              <div>hasError: {String(hasError)}</div>
+              <div>hasCheckedSession: {String(hasCheckedSession)}</div>
+              <div>isLoadingRef: {String(isLoadingRef)}</div>
+            </div>
           </div>
         ) : documents.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
