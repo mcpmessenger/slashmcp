@@ -723,13 +723,15 @@ const Index = () => {
               const contextDocs = nextJobs
                 .filter(job =>
                   job.status === "completed" &&
-                  (job.stage === "extracted" || job.stage === "injected"),
+                  (job.stage === "extracted" || job.stage === "injected" || job.stage === "indexed"),
                 )
                 .map(job => ({
                   jobId: job.id,
                   fileName: job.fileName,
                   textLength: job.resultText?.length ?? job.contentLength ?? undefined,
                 }));
+              
+              console.log(`[Index] Found ${contextDocs.length} queryable documents:`, contextDocs.map(d => ({ fileName: d.fileName, jobId: d.jobId })));
 
               if (contextDocs.length > 0) {
                 toast({
