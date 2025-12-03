@@ -125,11 +125,23 @@ export const DocumentsSidebarTest: React.FC = () => {
         
         if (!session || !session.access_token || !session.user?.id) {
           console.warn("[DocumentsSidebarTest] No session found in localStorage");
-          setError("No session found - user may not be logged in");
+          console.warn("[DocumentsSidebarTest] This might mean:");
+          console.warn("  1. User is not logged in");
+          console.warn("  2. Session expired");
+          console.warn("  3. Session stored in different format");
+          
+          setError("No session found - user may not be logged in. Please sign in.");
           setIsLoading(false);
-          setDebugInfo({ step: "no_session", message: "User not authenticated" });
+          setDebugInfo({ 
+            step: "no_session", 
+            message: "User not authenticated",
+            suggestion: "Try logging in again or check if you're signed in"
+          });
           return;
         }
+        
+        console.log("[DocumentsSidebarTest] ✅ Session found, proceeding to set on client...");
+        setDebugInfo(prev => ({ ...prev, step: "session_found_in_storage", userId: session.user.id }));
         
         // Set session on supabaseClient for RLS
         console.log("[DocumentsSidebarTest] Step 1.5: Setting session on supabaseClient...");
