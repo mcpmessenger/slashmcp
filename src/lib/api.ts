@@ -72,9 +72,23 @@ export async function registerUploadJob(params: {
     analysisTarget: params.analysisTarget,
   });
 
+  // Robust error handling: Explicit check with detailed error message
   if (!FUNCTIONS_URL) {
-    console.error("[registerUploadJob] FUNCTIONS_URL not configured");
-    throw new Error("Functions URL is not configured");
+    const errorDetails = {
+      VITE_SUPABASE_FUNCTIONS_URL: import.meta.env.VITE_SUPABASE_FUNCTIONS_URL,
+      VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+      computed: import.meta.env.VITE_SUPABASE_URL 
+        ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1` 
+        : undefined,
+    };
+    console.error("[registerUploadJob] CRITICAL: FUNCTIONS_URL not configured", errorDetails);
+    const error = new Error(
+      "Functions URL is not configured. " +
+      "Please check Vercel environment variables: VITE_SUPABASE_FUNCTIONS_URL or VITE_SUPABASE_URL. " +
+      `Current values: ${JSON.stringify(errorDetails)}`
+    );
+    error.name = "ConfigurationError";
+    throw error;
   }
 
   const body = {
@@ -98,8 +112,26 @@ export async function registerUploadJob(params: {
     controller.abort();
   }, 30_000); // 30 seconds timeout (allows for slow AWS presigned URL generation)
   
+  // Validate URL before attempting fetch
+  let fetchUrl: string;
   try {
-    const fetchUrl = `${FUNCTIONS_URL}/uploads`;
+    fetchUrl = `${FUNCTIONS_URL}/uploads`;
+    // Validate URL format (will throw if invalid)
+    new URL(fetchUrl);
+    console.log("[registerUploadJob] URL validated:", fetchUrl);
+  } catch (urlError) {
+    console.error("[registerUploadJob] CRITICAL: Invalid FUNCTIONS_URL", {
+      FUNCTIONS_URL,
+      computedUrl: fetchUrl,
+      error: urlError instanceof Error ? urlError.message : String(urlError),
+    });
+    throw new Error(
+      `Invalid Functions URL: ${FUNCTIONS_URL}. ` +
+      "Please check Vercel environment variables."
+    );
+  }
+
+  try {
     console.log("[registerUploadJob] Sending fetch request to:", fetchUrl);
     console.log("[registerUploadJob] Request details:", {
       method: "POST",
@@ -111,13 +143,30 @@ export async function registerUploadJob(params: {
     const fetchStartTime = Date.now();
     
     console.log("[registerUploadJob] About to call fetch()...");
-    const response = await fetch(fetchUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    console.log("[registerUploadJob] fetch() returned, processing response...");
+    
+    // Wrap fetch in try-catch to catch synchronous errors
+    let response: Response;
+    try {
+      response = await fetch(fetchUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      console.log("[registerUploadJob] fetch() returned, processing response...");
+    } catch (fetchError) {
+      // Catch synchronous errors (like network errors, invalid URL, etc.)
+      console.error("[registerUploadJob] CRITICAL: fetch() threw synchronous error", {
+        error: fetchError instanceof Error ? fetchError.message : String(fetchError),
+        name: fetchError instanceof Error ? fetchError.name : "Unknown",
+        stack: fetchError instanceof Error ? fetchError.stack : undefined,
+        url: fetchUrl,
+      });
+      throw new Error(
+        `Failed to send upload request: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
+        "This may indicate a network issue, CORS problem, or invalid URL."
+      );
+    }
     
     const fetchDuration = Date.now() - fetchStartTime;
     console.log(`[registerUploadJob] Fetch completed in ${fetchDuration}ms`, {
@@ -154,14 +203,42 @@ export async function registerUploadJob(params: {
     return responseData;
   } catch (error) {
     clearTimeout(timeoutId);
-    console.error("[registerUploadJob] Error caught", {
+    
+    // Enhanced error logging with more context
+    const errorInfo = {
       error: error instanceof Error ? error.message : String(error),
       name: error instanceof Error ? error.name : "Unknown",
       stack: error instanceof Error ? error.stack : undefined,
-    });
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw new Error("Upload registration timed out after 12 seconds. The uploads Edge Function may be slow or unavailable. Please check your network connection and try again.");
+      FUNCTIONS_URL,
+      fetchUrl: `${FUNCTIONS_URL}/uploads`,
+      timestamp: new Date().toISOString(),
+    };
+    console.error("[registerUploadJob] Error caught", errorInfo);
+    
+    // Handle specific error types
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        throw new Error(
+          "Upload registration timed out after 30 seconds. " +
+          "The uploads Edge Function may be slow or unavailable. " +
+          "Please check your network connection and Supabase logs. " +
+          `URL: ${FUNCTIONS_URL}/uploads`
+        );
+      }
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        throw new Error(
+          `Network error: ${error.message}. ` +
+          "This may indicate the request was blocked by browser, extension, or network. " +
+          "Try testing in incognito mode or check browser console for CORS errors."
+        );
+      }
+      // Re-throw configuration errors as-is (they already have good messages)
+      if (error.name === 'ConfigurationError') {
+        throw error;
+      }
     }
+    
+    // Re-throw with enhanced context
     throw error;
   }
 }
