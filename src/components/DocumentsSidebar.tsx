@@ -167,42 +167,44 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       
       const queryStartTime = Date.now();
       
-      // Try a simpler query first to test connectivity
-      console.log("[DocumentsSidebar] Testing Supabase connection...");
-      let testResult;
-      try {
-        testResult = await Promise.race([
-          supabaseClient.from("processing_jobs").select("id").limit(1),
-          new Promise<{ data: null; error: { message: string } }>((resolve) => {
-            setTimeout(() => resolve({ data: null, error: { message: "Connection test timeout" } }), 5_000);
-          }),
-        ]);
-        console.log("[DocumentsSidebar] Connection test result:", {
-          hasData: !!testResult.data,
-          hasError: !!testResult.error,
-          errorMessage: testResult.error?.message,
-        });
-      } catch (testError) {
-        console.error("[DocumentsSidebar] Connection test failed:", testError);
-      }
-      
-      // Add timeout to prevent hanging - increased to 15s for slow connections
-      const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
-        setTimeout(() => {
-          resolve({ data: null, error: { message: "Query timeout after 15 seconds" } });
-        }, 15_000); // 15 second timeout
+      // Build query with explicit filters
+      const userId = session.user.id;
+      console.log("[DocumentsSidebar] Building query with filters:", {
+        userId,
+        analysisTarget: "document-analysis",
       });
       
-      console.log("[DocumentsSidebar] Executing main query...");
-      const queryPromise = supabaseClient
+      // Create query builder
+      let query = supabaseClient
         .from("processing_jobs")
-        .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at")
-        .eq("user_id", session.user.id)
-        .eq("analysis_target", "document-analysis")
-        .order("created_at", { ascending: false })
-        .limit(50);
+        .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at");
       
-      const { data, error } = await Promise.race([queryPromise, queryTimeout]);
+      // Apply filters explicitly
+      query = query.eq("user_id", userId);
+      query = query.eq("analysis_target", "document-analysis");
+      query = query.order("created_at", { ascending: false });
+      query = query.limit(50);
+      
+      console.log("[DocumentsSidebar] Query built, executing...");
+      
+      // Execute query with timeout
+      let data, error;
+      try {
+        const queryPromise = query;
+        const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
+          setTimeout(() => {
+            resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
+          }, 10_000); // 10 second timeout
+        });
+        
+        const result = await Promise.race([queryPromise, queryTimeout]);
+        data = result.data;
+        error = result.error;
+      } catch (queryError) {
+        console.error("[DocumentsSidebar] Query exception:", queryError);
+        error = { message: queryError instanceof Error ? queryError.message : String(queryError) };
+        data = null;
+      }
 
       const queryDuration = Date.now() - queryStartTime;
       console.log(`[DocumentsSidebar] Query completed in ${queryDuration}ms`, {
