@@ -359,21 +359,24 @@ export const DocumentsSidebar: React.FC<{
     };
   }, []); // DIAGNOSTIC: Changed back to [] to match working version
 
-  // Refresh when external trigger changes (e.g., when files are uploaded)
+  // Load documents when client is ready or when refreshTrigger changes
   useEffect(() => {
-    if (refreshTrigger && refreshTrigger > 0) {
-      console.log("[DocumentsSidebar] External refresh triggered:", refreshTrigger);
-      setHasError(false); // Reset error state on manual refresh
-      setIsLoading(true); // Show loading state
-      // Small delay to ensure database transaction is committed
-      setTimeout(() => {
-        loadDocuments().catch((error) => {
-          console.error("[DocumentsSidebar] Error on external refresh:", error);
-          setIsLoading(false);
-        });
-      }, 500); // 500ms delay to allow DB insert to complete
+    console.log("[DocumentsSidebar] ===== useEffect for document loading =====");
+    console.log("[DocumentsSidebar] Dependencies:", { propUserId, refreshTrigger, isClientReady });
+    
+    // CRITICAL: Only load documents when client is ready OR when refreshTrigger changes
+    // This eliminates the race condition where query executes before client is initialized
+    if (propUserId && (isClientReady || refreshTrigger)) {
+      console.log("[DocumentsSidebar] ✅ Conditions met - calling loadDocuments");
+      loadDocuments();
+    } else if (!propUserId) {
+      console.log("[DocumentsSidebar] ⏭️ No propUserId, skipping loadDocuments");
+      setIsLoading(false);
+      setDocuments([]);
+    } else {
+      console.log("[DocumentsSidebar] ⏳ Waiting for client to be ready...");
     }
-  }, [refreshTrigger]);
+  }, [propUserId, refreshTrigger, isClientReady]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
