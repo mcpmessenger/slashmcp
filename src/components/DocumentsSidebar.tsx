@@ -134,10 +134,11 @@ export const DocumentsSidebar: React.FC<{
     
     console.log("[DocumentsSidebar] ===== loadDocuments START =====");
     console.log("[DocumentsSidebar] Current state:", { isLoading, documentCount: documents.length, propUserId });
+    console.log("[DocumentsSidebar] Step 1: Checking propUserId...", { propUserId, type: typeof propUserId });
     
     try {
       setIsLoadingRef(true);
-      console.log("[DocumentsSidebar] Setting isLoading to true");
+      console.log("[DocumentsSidebar] Step 2: Setting loading states...");
       setIsLoading(true);
       setHasError(false); // Clear error state on new attempt
       
@@ -146,21 +147,22 @@ export const DocumentsSidebar: React.FC<{
       
       // If userId prop provided, use it directly (from useChat hook - bypasses session retrieval)
       if (propUserId) {
-        console.log("[DocumentsSidebar] Using userId from props:", propUserId);
+        console.log("[DocumentsSidebar] Step 3a: Using userId from props:", propUserId);
         userId = propUserId;
         
         // Still try to get session token for RLS (non-blocking)
+        console.log("[DocumentsSidebar] Step 3b: Getting session token for RLS...");
         session = getSessionFromStorage();
         if (session?.access_token) {
-          console.log("[DocumentsSidebar] Found session token for RLS");
+          console.log("[DocumentsSidebar] Step 3c: ✅ Found session token for RLS");
         } else {
-          console.warn("[DocumentsSidebar] No session token found - query may fail RLS");
+          console.warn("[DocumentsSidebar] Step 3c: ⚠️ No session token found - query may fail RLS");
         }
       } else {
         // Fallback: Try localStorage session retrieval
-        console.log("[DocumentsSidebar] Getting session from localStorage...");
+        console.log("[DocumentsSidebar] Step 3a (fallback): Getting session from localStorage...");
         session = getSessionFromStorage();
-        console.log("[DocumentsSidebar] localStorage check result:", {
+        console.log("[DocumentsSidebar] Step 3b (fallback): localStorage check result:", {
           hasSession: !!session,
           hasAccessToken: !!session?.access_token,
           hasUser: !!session?.user,
@@ -169,13 +171,13 @@ export const DocumentsSidebar: React.FC<{
         
         if (session?.access_token && session?.user?.id) {
           userId = session.user.id;
-          console.log("[DocumentsSidebar] ✅ Session retrieved from localStorage:", {
+          console.log("[DocumentsSidebar] Step 3c (fallback): ✅ Session retrieved from localStorage:", {
             hasSession: true,
             hasUser: true,
             userId: session.user.id,
           });
         } else {
-          console.warn("[DocumentsSidebar] ⚠️ No session in localStorage");
+          console.warn("[DocumentsSidebar] Step 3c (fallback): ⚠️ No session in localStorage - EXITING");
           setIsLoading(false);
           setDocuments([]);
           setHasCheckedSession(true);
@@ -183,8 +185,9 @@ export const DocumentsSidebar: React.FC<{
         }
       }
       
+      console.log("[DocumentsSidebar] Step 4: Validating userId...", { userId, hasUserId: !!userId });
       if (!userId) {
-        console.error("[DocumentsSidebar] No userId available");
+        console.error("[DocumentsSidebar] Step 4: ❌ No userId available - EXITING");
         setIsLoading(false);
         setDocuments([]);
         setHasCheckedSession(true);
@@ -193,7 +196,7 @@ export const DocumentsSidebar: React.FC<{
       
       // Set session on supabaseClient for RLS (if we have session token)
       if (session?.access_token) {
-        console.log("[DocumentsSidebar] Setting session on supabaseClient for RLS...");
+        console.log("[DocumentsSidebar] Step 5: Setting session on supabaseClient for RLS...");
         try {
           const { error: setSessionError } = await supabaseClient.auth.setSession({
             access_token: session.access_token,
@@ -201,18 +204,21 @@ export const DocumentsSidebar: React.FC<{
           });
           
           if (setSessionError) {
-            console.warn("[DocumentsSidebar] Failed to set session (non-fatal):", setSessionError);
+            console.warn("[DocumentsSidebar] Step 5: ⚠️ Failed to set session (non-fatal):", setSessionError);
             // Continue anyway - query might still work
           } else {
-            console.log("[DocumentsSidebar] ✅ Session set successfully on supabaseClient");
+            console.log("[DocumentsSidebar] Step 5: ✅ Session set successfully on supabaseClient");
           }
         } catch (setSessionErr) {
-          console.warn("[DocumentsSidebar] Exception setting session (non-fatal):", setSessionErr);
+          console.warn("[DocumentsSidebar] Step 5: ⚠️ Exception setting session (non-fatal):", setSessionErr);
           // Continue anyway
         }
+      } else {
+        console.log("[DocumentsSidebar] Step 5: Skipping setSession (no session token)");
       }
       
       setHasCheckedSession(true);
+      console.log("[DocumentsSidebar] Step 6: About to query documents...");
 
       console.log("[DocumentsSidebar] Querying documents for user:", userId);
       console.log("[DocumentsSidebar] Session details:", {
@@ -244,11 +250,13 @@ export const DocumentsSidebar: React.FC<{
       console.log("[DocumentsSidebar] Query built, executing...");
       
       // Execute query with timeout
+      console.log("[DocumentsSidebar] Step 9: Executing query with timeout...");
       let data, error;
       try {
         // Use .then() to properly handle Supabase query promise
+        console.log("[DocumentsSidebar] Step 9a: Creating query promise...");
         const queryPromise = query.then((result) => {
-          console.log("[DocumentsSidebar] Query promise resolved:", {
+          console.log("[DocumentsSidebar] Step 9b: Query promise resolved:", {
             hasData: !!result.data,
             dataLength: result.data?.length || 0,
             hasError: !!result.error,
@@ -260,24 +268,27 @@ export const DocumentsSidebar: React.FC<{
           };
         });
         
+        console.log("[DocumentsSidebar] Step 9c: Creating timeout promise...");
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
           setTimeout(() => {
-            console.error("[DocumentsSidebar] Query timeout triggered after 10 seconds");
+            console.error("[DocumentsSidebar] Step 9d: Query timeout triggered after 10 seconds");
             resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
           }, 10_000); // 10 second timeout
         });
         
+        console.log("[DocumentsSidebar] Step 9e: Racing query and timeout promises...");
         const result = await Promise.race([queryPromise, queryTimeout]);
+        console.log("[DocumentsSidebar] Step 9f: Promise.race completed");
         data = result.data;
         error = result.error;
       } catch (queryError) {
-        console.error("[DocumentsSidebar] Query exception:", queryError);
+        console.error("[DocumentsSidebar] Step 9: ❌ Query exception:", queryError);
         error = { message: queryError instanceof Error ? queryError.message : String(queryError) };
         data = null;
       }
 
       const queryDuration = Date.now() - queryStartTime;
-      console.log(`[DocumentsSidebar] Query completed in ${queryDuration}ms`, {
+      console.log(`[DocumentsSidebar] Step 10: Query completed in ${queryDuration}ms`, {
         hasError: !!error,
         documentCount: data?.length || 0,
       });
@@ -419,6 +430,9 @@ export const DocumentsSidebar: React.FC<{
   useEffect(() => {
     console.log("[DocumentsSidebar] ===== useEffect MOUNTED =====");
     console.log("[DocumentsSidebar] Component mounted, starting initial load");
+    console.log("[DocumentsSidebar] propUserId value:", propUserId);
+    console.log("[DocumentsSidebar] propUserId type:", typeof propUserId);
+    console.log("[DocumentsSidebar] propUserId truthy?", !!propUserId);
     console.log("[DocumentsSidebar] Environment check:", {
       hasSupabaseUrl: !!import.meta.env.VITE_SUPABASE_URL,
       supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
@@ -426,7 +440,11 @@ export const DocumentsSidebar: React.FC<{
     });
     
     // Immediate load
-    loadDocuments().catch((error) => {
+    console.log("[DocumentsSidebar] About to call loadDocuments()...");
+    const loadPromise = loadDocuments();
+    console.log("[DocumentsSidebar] loadDocuments() called, promise:", loadPromise);
+    
+    loadPromise.catch((error) => {
       console.error("[DocumentsSidebar] CRITICAL: Initial load failed:", error);
       console.error("[DocumentsSidebar] Error stack:", error instanceof Error ? error.stack : "No stack");
       console.error("[DocumentsSidebar] Error details:", {
@@ -467,7 +485,7 @@ export const DocumentsSidebar: React.FC<{
       setIsLoading(false);
       setIsLoadingRef(false);
     };
-  }, [propUserId]); // Include propUserId so it reloads if userId changes
+  }, []); // DIAGNOSTIC: Changed back to [] to match working version
 
   // Refresh when external trigger changes (e.g., when files are uploaded)
   useEffect(() => {
