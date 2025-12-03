@@ -382,7 +382,7 @@ export const DocumentsSidebar: React.FC<{
       
       if (docs.length === 0) {
         console.warn("[DocumentsSidebar] No documents found. Query filters:", {
-          userId: session.user.id,
+          userId: userId,
           analysisTarget: "document-analysis",
         });
         console.warn("[DocumentsSidebar] This might indicate:");
