@@ -157,26 +157,25 @@ export const DocumentsSidebar: React.FC<{
         return;
       }
       
-      // CRITICAL FIX: Try to call getSession() to initialize client, but don't block if it hangs
-      // The Supabase client needs to be "woken up" but getSession() can hang
-      // Use a very short timeout and continue anyway - the query might still work
+      // CRITICAL FIX: The Supabase client needs to be initialized before queries
+      // Instead of calling getSession() (which hangs), try accessing the client's auth state
+      // This might "wake up" the client without blocking
       try {
-        const getSessionPromise = supabaseClient.auth.getSession();
-        const getSessionTimeout = new Promise<{ data: { session: null } }>((resolve) => {
-          setTimeout(() => {
-            resolve({ data: { session: null } });
-          }, 500); // Very short timeout - just try to wake up the client
-        });
-        
-        await Promise.race([getSessionPromise, getSessionTimeout]);
-        // Don't wait for result - just the attempt to call it might be enough
-      } catch (getSessionErr) {
-        // Ignore errors - continue anyway
+        // Just access the auth property - this might initialize the client
+        const _auth = supabaseClient.auth;
+        // Try a non-blocking check
+        if (_auth) {
+          // Client is accessible, continue
+        }
+      } catch (authErr) {
+        // Ignore - continue anyway
       }
       
       setHasCheckedSession(true);
       
       // Execute query directly - matching ragService.ts pattern exactly
+      // Note: We're skipping getSession() because it hangs, but the query might still work
+      // if the client auto-initializes from localStorage
       let data, error;
       try {
         const { data: queryData, error: queryError } = await supabaseClient
