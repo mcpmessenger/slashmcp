@@ -501,7 +501,9 @@ async function markJobFailed(jobId: string, reason: string, metadata?: Record<st
 }
 
 serve(async (req) => {
+  // Handle OPTIONS immediately - no async operations needed
   if (req.method === "OPTIONS") {
+    console.log("OPTIONS request - returning CORS headers");
     return new Response(null, { 
       status: 200,
       headers: corsHeaders 

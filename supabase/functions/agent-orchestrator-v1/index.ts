@@ -201,16 +201,22 @@ async function executeOrchestration(
     ];
     
     // Inject context into conversation if available
+    // IMPORTANT: Add context BEFORE user message so orchestrator sees it first
     if (enhancedInstructions && documentContext) {
-      // Add context as system information before user message
+      // Add context as assistant message with clear instructions
       conversation.push({
         role: "assistant",
-        content: enhancedInstructions,
+        content: enhancedInstructions + "\n\nBased on this context, route the user's query appropriately.",
       });
     }
     
     // Add user message
     conversation.push({ role: "user", content: input.message });
+    
+    // Log for debugging
+    if (classification.intent === "document") {
+      console.log(`Document query detected - injecting context and routing to search_documents`);
+    }
 
     // Convert to AgentInputItem format
     const agentInput = conversation.map((msg) => ({
