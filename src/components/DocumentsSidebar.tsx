@@ -246,121 +246,55 @@ export const DocumentsSidebar: React.FC<{
         analysisTarget: "document-analysis",
       });
       
-      // Create query builder - REMOVED analysis_target filter temporarily to debug
-      // We'll filter client-side to see what's actually in the database
-      console.log("[DocumentsSidebar] Step 7: Building query...");
-      console.log("[DocumentsSidebar] Step 7a: Calling supabaseClient.from('processing_jobs')...");
-      let query = supabaseClient
-        .from("processing_jobs")
-        .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target");
+      // Build query exactly like ragService.ts does (which works)
+      console.log("[DocumentsSidebar] Step 7: Building query (matching ragService.ts pattern)...");
+      console.log("[DocumentsSidebar] Step 7: userId:", userId);
       
-      console.log("[DocumentsSidebar] Step 7a: Query builder created:", { 
-        hasQuery: !!query,
-        queryType: typeof query 
-      });
-      
-      // Apply filters explicitly (removed analysis_target filter for now)
-      console.log("[DocumentsSidebar] Step 7b: Applying filters...");
-      query = query.eq("user_id", userId);
-      console.log("[DocumentsSidebar] Step 7b: Applied user_id filter");
-      // query = query.eq("analysis_target", "document-analysis"); // TEMPORARILY REMOVED FOR DEBUGGING
-      query = query.order("created_at", { ascending: false });
-      console.log("[DocumentsSidebar] Step 7b: Applied order");
-      query = query.limit(50);
-      console.log("[DocumentsSidebar] Step 7b: Applied limit");
-      console.log("[DocumentsSidebar] Step 7c: Query fully built");
-      
-      console.log("[DocumentsSidebar] Step 8: Query built, about to execute...");
-      
-      // Execute query with timeout
-      console.log("[DocumentsSidebar] Step 9: Executing query with timeout...");
-      console.log("[DocumentsSidebar] Step 9: Query object:", { 
-        hasQuery: !!query,
-        queryType: typeof query,
-        queryConstructor: query?.constructor?.name 
-      });
-      
-      // CRITICAL: Check if query has a 'then' method (it should be a promise)
-      console.log("[DocumentsSidebar] Step 9.1: Checking if query is thenable:", {
-        hasThen: typeof (query as any)?.then === 'function',
-        hasCatch: typeof (query as any)?.catch === 'function',
-        hasFinally: typeof (query as any)?.finally === 'function',
-      });
-      
+      // Execute query directly with timeout - match ragService.ts pattern exactly
+      console.log("[DocumentsSidebar] Step 8: Executing query with timeout...");
       let data, error;
       try {
-        // CRITICAL: Try direct await first to see if query executes
-        console.log("[DocumentsSidebar] Step 9a: Attempting direct query execution...");
-        console.log("[DocumentsSidebar] Step 9a: About to await query directly...");
+        // CRITICAL: Build and execute query in one chain, exactly like ragService.ts
+        console.log("[DocumentsSidebar] Step 8a: Starting query chain...");
+        const queryPromise = supabaseClient
+          .from("processing_jobs")
+          .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(50);
         
-        // CRITICAL: The query should be a promise, but if it's not executing,
-        // it might be waiting for something. Let's try calling it directly.
-        console.log("[DocumentsSidebar] Step 9a.1: Checking query internals...");
-        const queryAny = query as any;
-        console.log("[DocumentsSidebar] Step 9a.1: Query internals:", {
-          hasUrl: !!queryAny?.url,
-          hasHeaders: !!queryAny?.headers,
-          hasBody: !!queryAny?.body,
-          hasMethod: queryAny?.method,
-          hasTable: queryAny?.table,
-        });
+        console.log("[DocumentsSidebar] Step 8b: Query chain built, checking if it's a promise...");
+        console.log("[DocumentsSidebar] Step 8b: Query type:", typeof queryPromise);
+        console.log("[DocumentsSidebar] Step 8b: Has then:", typeof (queryPromise as any)?.then === 'function');
         
-        // Create a promise that will timeout if query hangs
-        const directQueryPromise = (async () => {
-          try {
-            console.log("[DocumentsSidebar] Step 9a.2: Inside query promise, about to await...");
-            console.log("[DocumentsSidebar] Step 9a.2: Query type check:", typeof query);
-            
-            // Try to see if we can inspect the promise state
-            if (queryAny && typeof queryAny.then === 'function') {
-              console.log("[DocumentsSidebar] Step 9a.2: Query is a promise, awaiting...");
-            } else {
-              console.error("[DocumentsSidebar] Step 9a.2: Query is NOT a promise!");
-            }
-            
-            const result = await query;
-            console.log("[DocumentsSidebar] Step 9b: Direct query completed:", {
-              hasData: !!result.data,
-              dataLength: result.data?.length || 0,
-              hasError: !!result.error,
-              errorMessage: result.error?.message,
-              errorCode: result.error?.code,
-            });
-            return {
-              data: result.data,
-              error: result.error,
-            };
-          } catch (queryErr) {
-            console.error("[DocumentsSidebar] Step 9b: Direct query exception:", queryErr);
-            return {
-              data: null,
-              error: { message: queryErr instanceof Error ? queryErr.message : String(queryErr) },
-            };
-          }
-        })();
-        
-        console.log("[DocumentsSidebar] Step 9a.3: Query promise created, type:", typeof directQueryPromise);
-        
-        console.log("[DocumentsSidebar] Step 9c: Creating timeout promise...");
+        // Create timeout promise
+        console.log("[DocumentsSidebar] Step 8c: Creating timeout promise (10 seconds)...");
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
           setTimeout(() => {
-            console.error("[DocumentsSidebar] Step 9d: Query timeout triggered after 10 seconds");
-            console.error("[DocumentsSidebar] Step 9d: This means the query promise never resolved");
-            console.error("[DocumentsSidebar] Step 9d: The Supabase client is not executing the HTTP request");
+            console.error("[DocumentsSidebar] Step 8d: ⚠️ Query timeout after 10 seconds");
+            console.error("[DocumentsSidebar] Step 8d: Query promise never resolved - Supabase client not executing HTTP request");
             resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
-          }, 10_000); // 10 second timeout
+          }, 10_000);
         });
         
-        console.log("[DocumentsSidebar] Step 9e: Racing query and timeout promises...");
-        console.log("[DocumentsSidebar] Step 9e: About to await Promise.race...");
-        const result = await Promise.race([directQueryPromise, queryTimeout]);
-        console.log("[DocumentsSidebar] Step 9f: Promise.race completed, result:", {
-          hasData: !!result.data,
-          dataLength: result.data?.length || 0,
-          hasError: !!result.error,
-        });
-        data = result.data;
-        error = result.error;
+        // Race the query and timeout
+        console.log("[DocumentsSidebar] Step 8e: Racing query and timeout...");
+        const result = await Promise.race([queryPromise, queryTimeout]);
+        
+        console.log("[DocumentsSidebar] Step 8f: Promise.race completed");
+        
+        // Check if result is from timeout or query
+        if (result && 'data' in result && result.data === null && result.error?.message === "Query timeout after 10 seconds") {
+          // Timeout won
+          console.error("[DocumentsSidebar] Step 8f: Timeout won - query never executed");
+          data = null;
+          error = { message: "Query timeout after 10 seconds" };
+        } else {
+          // Query completed (or timeout returned something else)
+          console.log("[DocumentsSidebar] Step 8f: Query completed (or unexpected result)");
+          data = (result as any)?.data || null;
+          error = (result as any)?.error || null;
+        }
       } catch (queryError) {
         console.error("[DocumentsSidebar] Step 9: ❌ Query exception:", queryError);
         error = { message: queryError instanceof Error ? queryError.message : String(queryError) };
