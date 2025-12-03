@@ -848,6 +848,12 @@ export function ChatInput({
 
   const handleFileUpload = useCallback(
     async (file: File) => {
+      // Safety timeout: Reset isRegisteringUpload if it gets stuck
+      const registrationTimeoutId = setTimeout(() => {
+        console.warn("[Upload] Registration timeout, resetting isRegisteringUpload");
+        setIsRegisteringUpload(false);
+      }, 30_000); // 30 seconds max for registration
+
       try {
         setIsRegisteringUpload(true);
         
@@ -1064,6 +1070,7 @@ export function ChatInput({
           variant: "destructive",
         });
       } finally {
+        clearTimeout(registrationTimeoutId);
         setIsRegisteringUpload(false);
       }
     },

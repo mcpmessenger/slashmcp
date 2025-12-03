@@ -83,38 +83,49 @@ const Index = () => {
     [uploadJobs, isRegisteringUpload],
   );
 
-  // Poll for jobs stuck in "processing" status
+  // Poll for jobs stuck in "processing" or "queued" status
   useEffect(() => {
-    const processingJobs = uploadJobs.filter(job => job.status === "processing");
-    if (processingJobs.length === 0) return;
+    const stuckJobs = uploadJobs.filter(job => 
+      job.status === "processing" || 
+      job.status === "queued" ||
+      (job.status === "uploading" && job.updatedAt && Date.now() - new Date(job.updatedAt).getTime() > 30000)
+    );
+    if (stuckJobs.length === 0) return;
 
-    const POLL_INTERVAL_MS = 5000; // Poll every 5 seconds
+    const POLL_INTERVAL_MS = 3000; // Poll every 3 seconds (more aggressive)
     const POLL_TIMEOUT_MS = 300_000; // 5 minutes max per job
     const jobStartTimes = new Map<string, number>();
 
     // Initialize start times for jobs that don't have one
-    processingJobs.forEach(job => {
+    stuckJobs.forEach(job => {
       if (!jobStartTimes.has(job.id)) {
         jobStartTimes.set(job.id, job.updatedAt ? new Date(job.updatedAt).getTime() : Date.now());
       }
     });
 
+    console.log(`[Index] Starting polling for ${stuckJobs.length} stuck job(s)`, stuckJobs.map(j => ({ id: j.id, status: j.status, fileName: j.fileName })));
+
     const pollInterval = setInterval(async () => {
       const now = Date.now();
-      const jobsToCheck = processingJobs.filter(job => {
+      const jobsToCheck = stuckJobs.filter(job => {
         const startTime = jobStartTimes.get(job.id) ?? now;
         return (now - startTime) < POLL_TIMEOUT_MS;
       });
 
       if (jobsToCheck.length === 0) {
+        console.log("[Index] All jobs completed or timed out, stopping polling");
         clearInterval(pollInterval);
         return;
       }
 
+      console.log(`[Index] Polling ${jobsToCheck.length} job(s)`, jobsToCheck.map(j => ({ id: j.id, status: j.status })));
+
       const refreshResults = await Promise.all(
         jobsToCheck.map(async (job) => {
           try {
-            return await fetchJobStatus(job.id);
+            const result = await fetchJobStatus(job.id);
+            console.log(`[Index] Job ${job.id} status:`, result.job.status);
+            return result;
           } catch (error) {
             console.warn(`[Index] Failed to poll job ${job.id}:`, error);
             return null;
@@ -147,6 +158,18 @@ const Index = () => {
           // If job completed or failed, remove from tracking
           if (newStatus === "completed" || newStatus === "failed") {
             jobStartTimes.delete(result.job.id);
+          }
+        } else if (newStatus === "queued" && result.job.storage_path) {
+          // Job is queued but has storage path - try to trigger it
+          const jobAge = now - (jobStartTimes.get(result.job.id) ?? now);
+          if (jobAge > 10000 && jobAge < 60000) { // Between 10s and 60s old
+            console.log(`[Index] Job ${result.job.id} stuck in queued, attempting to trigger`);
+            // Import triggerTextractJob dynamically to avoid circular dependency
+            import("@/lib/api").then(({ triggerTextractJob }) => {
+              triggerTextractJob(result.job.id).catch(err => {
+                console.warn(`[Index] Failed to trigger stuck job ${result.job.id}:`, err);
+              });
+            });
           }
         }
       });
