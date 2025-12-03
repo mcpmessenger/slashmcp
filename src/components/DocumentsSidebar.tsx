@@ -11,7 +11,7 @@ import { deleteProcessingJob } from "@/lib/api";
  * Get session from localStorage directly (fast, no network call)
  * Similar to getSessionFromStorage in api.ts
  */
-function getSessionFromStorage(): { access_token?: string; user?: { id: string } } | null {
+function getSessionFromStorage(): { access_token?: string; refresh_token?: string; user?: { id: string } } | null {
   if (typeof window === "undefined") return null;
   
   try {
