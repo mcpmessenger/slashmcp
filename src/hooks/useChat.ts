@@ -2777,5 +2777,8 @@ export function useChat() {
     signOut,
     appendAssistantText,
     mcpEvents,
+    addEvent: useCallback((event: McpEvent) => {
+      setMcpEvents(prev => [...prev, event]);
+    }, []),
   };
 }

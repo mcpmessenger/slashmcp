@@ -15,6 +15,7 @@ import type { McpRegistryEntry } from "@/lib/mcp/types";
 import { MCP_PROVIDER_PRESETS } from "@/lib/mcp/presets";
 import type { UploadJob, JobStatus, StageHistoryEntry } from "@/types/uploads";
 import { parseStageMetadata } from "@/types/uploads";
+import type { McpEvent } from "@/components/McpEventLog";
 
 type MenuOption =
   | "Upload Files"
@@ -208,6 +209,7 @@ interface ChatInputProps {
   onToggleVoicePlayback?: () => void;
   isSpeaking?: boolean;
   onJobsChange?: (jobs: UploadJob[], isRegistering: boolean) => void;
+  onEvent?: (event: McpEvent) => void;
 }
 
 interface OptionTagProps {
@@ -276,6 +278,7 @@ export function ChatInput({
   onToggleVoicePlayback,
   isSpeaking = false,
   onJobsChange,
+  onEvent,
 }: ChatInputProps) {
   const { toast } = useToast();
   const [value, setValue] = useState("");
@@ -848,13 +851,30 @@ export function ChatInput({
 
   const handleFileUpload = useCallback(
     async (file: File) => {
-      // Safety timeout: Reset isRegisteringUpload if it gets stuck
-      const registrationTimeoutId = setTimeout(() => {
-        console.warn("[Upload] Registration timeout, resetting isRegisteringUpload");
-        setIsRegisteringUpload(false);
-      }, 30_000); // 30 seconds max for registration
-
+      let registrationTimeoutId: NodeJS.Timeout | null = null;
+      
+      console.log("[ChatInput] handleFileUpload called", {
+        fileName: file.name,
+        fileSize: file.size,
+        fileType: file.type,
+      });
+      
+      // Log upload start event
+      onEvent?.({
+        type: "system",
+        timestamp: Date.now(),
+        tool: "file_upload",
+        command: `Uploading ${file.name}`,
+        metadata: {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          action: "upload_start",
+        },
+      });
+      
       try {
+        console.log("[ChatInput] Setting isRegisteringUpload to true");
         setIsRegisteringUpload(true);
         
         // Auto-detect CSV files and set analysis target
@@ -864,10 +884,50 @@ export function ChatInput({
                      file.type === "application/vnd.ms-excel";
         const targetAnalysis = isCsv ? "document-analysis" : analysisTarget;
         
-        const response = await registerUploadJob({
+        console.log("[ChatInput] Calling registerUploadJob", { targetAnalysis });
+        const uploadStartTime = Date.now();
+        
+        // Add timeout to registerUploadJob call
+        const registrationPromise = registerUploadJob({
           file,
           analysisTarget: targetAnalysis,
           metadata: { source: "chat-input" },
+        });
+        
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          registrationTimeoutId = setTimeout(() => {
+            const elapsed = Date.now() - uploadStartTime;
+            console.warn(`[ChatInput] Registration timeout after ${elapsed}ms (15s limit)`);
+            setIsRegisteringUpload(false);
+            reject(new Error("Upload registration timed out after 15 seconds. The uploads Edge Function may be slow or unavailable. Please check your network connection and try again."));
+          }, 15_000); // 15 seconds max for registration
+        });
+        
+        // Race between registration and timeout
+        console.log("[ChatInput] Starting Promise.race for registration");
+        const response = await Promise.race([
+          registrationPromise,
+          timeoutPromise,
+        ]);
+        
+        const uploadDuration = Date.now() - uploadStartTime;
+        console.log(`[ChatInput] Registration completed in ${uploadDuration}ms`, {
+          jobId: response.jobId,
+          hasUploadUrl: !!response.uploadUrl,
+        });
+        
+        // Log successful registration
+        onEvent?.({
+          type: "toolResult",
+          timestamp: Date.now(),
+          tool: "file_upload",
+          command: `Uploading ${file.name}`,
+          result: `Job registered: ${response.jobId}`,
+          metadata: {
+            jobId: response.jobId,
+            duration: uploadDuration,
+            hasUploadUrl: !!response.uploadUrl,
+          },
         });
 
         const registeredAt = new Date().toISOString();
@@ -883,10 +943,17 @@ export function ChatInput({
         setJobs((prev) => {
           const updated = [...prev, newJob];
           if (onJobsChange) {
-            onJobsChange(updated, true);
+            onJobsChange(updated, false); // Set to false since registration is complete
           }
           return updated;
         });
+        
+        // Clear timeout and registering state after job is added
+        if (registrationTimeoutId) {
+          clearTimeout(registrationTimeoutId);
+          registrationTimeoutId = null;
+        }
+        setIsRegisteringUpload(false);
 
         if (!response.uploadUrl) {
           toast({
@@ -1063,14 +1130,44 @@ export function ChatInput({
           }
         }
       } catch (error) {
-        console.error("registerUploadJob failed", error);
+        console.error("[ChatInput] Registration failed:", error);
+        const errorMessage = error instanceof Error ? error.message : "Unknown error";
+        console.error("[ChatInput] Error details:", {
+          message: errorMessage,
+          name: error instanceof Error ? error.name : "Unknown",
+          stack: error instanceof Error ? error.stack?.slice(0, 500) : undefined,
+        });
+        
+        // Log error event
+        onEvent?.({
+          type: "error",
+          timestamp: Date.now(),
+          tool: "file_upload",
+          command: `Uploading ${file.name}`,
+          error: errorMessage,
+          metadata: {
+            fileName: file.name,
+            errorName: error instanceof Error ? error.name : "Unknown",
+          },
+        });
+        
         toast({
           title: "Upload registration failed",
-          description: error instanceof Error ? error.message : "Unknown error",
+          description: errorMessage,
           variant: "destructive",
         });
+        // Make sure to clear the registering state
+        console.log("[ChatInput] Clearing isRegisteringUpload state due to error");
+        setIsRegisteringUpload(false);
+        if (onJobsChange) {
+          onJobsChange(jobs, false);
+        }
       } finally {
-        clearTimeout(registrationTimeoutId);
+        // Always clear timeout and reset state
+        console.log("[ChatInput] Finally block - clearing timeout and state");
+        if (registrationTimeoutId) {
+          clearTimeout(registrationTimeoutId);
+        }
         setIsRegisteringUpload(false);
       }
     },
@@ -1079,15 +1176,26 @@ export function ChatInput({
 
   const handleFileChange = useCallback(
     async (event: React.ChangeEvent<HTMLInputElement>) => {
+      console.log("[ChatInput] handleFileChange called", {
+        filesCount: event.target.files?.length || 0,
+      });
+      
       const files = event.target.files;
-      if (!files || files.length === 0) return;
+      if (!files || files.length === 0) {
+        console.log("[ChatInput] No files selected, returning");
+        return;
+      }
 
       const fileList = Array.from(files);
+      console.log("[ChatInput] Processing files:", fileList.map(f => ({ name: f.name, size: f.size, type: f.type })));
+      
       for (const file of fileList) {
+        console.log("[ChatInput] Calling handleFileUpload for:", file.name);
         await handleFileUpload(file);
       }
 
       event.target.value = "";
+      console.log("[ChatInput] handleFileChange completed");
     },
     [handleFileUpload],
   );

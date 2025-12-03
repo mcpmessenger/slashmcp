@@ -24,16 +24,23 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
 
   const loadDocuments = async () => {
     try {
+      console.log("[DocumentsSidebar] loadDocuments called");
+      setIsLoading(true);
+      
       const {
         data: { session },
       } = await supabaseClient.auth.getSession();
 
       if (!session?.user) {
+        console.log("[DocumentsSidebar] No session, clearing documents");
         setDocuments([]);
         setIsLoading(false);
         return;
       }
 
+      console.log("[DocumentsSidebar] Querying documents for user:", session.user.id);
+      const queryStartTime = Date.now();
+      
       const { data, error } = await supabaseClient
         .from("processing_jobs")
         .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at")
@@ -42,13 +49,20 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
         .order("created_at", { ascending: false })
         .limit(50);
 
+      const queryDuration = Date.now() - queryStartTime;
+      console.log(`[DocumentsSidebar] Query completed in ${queryDuration}ms`, {
+        hasError: !!error,
+        documentCount: data?.length || 0,
+      });
+
       if (error) {
-        console.error("Error loading documents:", error);
+        console.error("[DocumentsSidebar] Error loading documents:", error);
         toast({
           title: "Error loading documents",
           description: error.message,
           variant: "destructive",
         });
+        setIsLoading(false);
         return;
       }
 
@@ -67,19 +81,34 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
         };
       });
 
+      console.log("[DocumentsSidebar] Setting documents:", docs.length);
       setDocuments(docs);
     } catch (error) {
-      console.error("Error loading documents:", error);
+      console.error("[DocumentsSidebar] Error loading documents:", error);
     } finally {
+      console.log("[DocumentsSidebar] Setting isLoading to false");
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    loadDocuments();
+    console.log("[DocumentsSidebar] useEffect - initial load");
+    loadDocuments().catch((error) => {
+      console.error("[DocumentsSidebar] Initial load failed:", error);
+    });
+    
     // Refresh every 5 seconds to show status updates
-    const interval = setInterval(loadDocuments, 5000);
-    return () => clearInterval(interval);
+    const interval = setInterval(() => {
+      loadDocuments().catch((error) => {
+        console.error("[DocumentsSidebar] Error refreshing documents:", error);
+        // Don't show toast on every refresh error to avoid spam
+      });
+    }, 5000);
+    
+    return () => {
+      console.log("[DocumentsSidebar] Cleanup - clearing interval");
+      clearInterval(interval);
+    };
   }, []);
 
   const getStatusIcon = (status: string) => {

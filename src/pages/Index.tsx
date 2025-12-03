@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { McpEventLog } from "@/components/McpEventLog";
 import { Footer } from "@/components/Footer";
 import { PageHeader } from "@/components/PageHeader";
@@ -62,6 +63,7 @@ const Index = () => {
     registry,
     mcpEvents,
     resetChat,
+    addEvent,
   } = useChat();
   const { toast } = useToast();
   const hasChatHistory = (!!session || guestMode) && (messages.length > 0 || mcpEvents.length > 0);
@@ -78,6 +80,16 @@ const Index = () => {
   const lastSpokenRef = useRef<string>("");
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
+  
+  // Manual reset function for stuck uploads
+  const resetStuckUpload = useCallback(() => {
+    console.log("[Index] Manually resetting stuck upload state");
+    setIsRegisteringUpload(false);
+    toast({
+      title: "Upload state reset",
+      description: "You can try uploading again.",
+    });
+  }, [toast]);
   const { enabled: voicePlaybackEnabled, toggle: toggleVoicePlayback, speak, stop, isSpeaking } = useVoicePlayback();
   const hasPendingUploads = useMemo(
     () => isRegisteringUpload || uploadJobs.some(job => ["uploading", "queued", "processing"].includes(job.status)),
@@ -683,9 +695,21 @@ const Index = () => {
         )}
 
         {hasPendingUploads && (
-          <div className="px-4 pb-2 flex items-center gap-2 text-xs text-amber-500">
-            <AlertCircle className="h-4 w-4" />
-            <span>Uploads are still in progress. Document context will attach once processing completes.</span>
+          <div className="px-4 pb-2 flex items-center justify-between gap-2 text-xs text-amber-500">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4" />
+              <span>Uploads are still in progress. Document context will attach once processing completes.</span>
+            </div>
+            {isRegisteringUpload && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={resetStuckUpload}
+                className="h-6 px-2 text-xs"
+              >
+                Reset
+              </Button>
+            )}
           </div>
         )}
 
@@ -784,6 +808,11 @@ const Index = () => {
             onJobsChange={(jobs, isRegistering) => {
               setUploadJobs(jobs);
               setIsRegisteringUpload(isRegistering);
+            }}
+            onEvent={(event) => {
+              // Add upload events to MCP Event Log
+              console.log("[Index] Upload event received:", event);
+              addEvent(event);
             }}
           />
         )}

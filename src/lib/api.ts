@@ -61,7 +61,15 @@ export async function registerUploadJob(params: {
   metadata?: Record<string, unknown>;
   userId?: string;
 }): Promise<UploadJobResponse> {
+  console.log("[registerUploadJob] Starting upload registration", {
+    fileName: params.file.name,
+    fileSize: params.file.size,
+    fileType: params.file.type,
+    analysisTarget: params.analysisTarget,
+  });
+
   if (!FUNCTIONS_URL) {
+    console.error("[registerUploadJob] FUNCTIONS_URL not configured");
     throw new Error("Functions URL is not configured");
   }
 
@@ -74,19 +82,74 @@ export async function registerUploadJob(params: {
     userId: params.userId,
   };
 
+  console.log("[registerUploadJob] Request body prepared", { body: { ...body, metadata: "..." } });
+  
   const headers = await getAuthHeaders();
-  const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
-  });
+  console.log("[registerUploadJob] Auth headers prepared", { hasAuth: !!headers.Authorization });
+  
+  // Add timeout to fetch request
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.warn("[registerUploadJob] Timeout reached (12s), aborting request");
+    controller.abort();
+  }, 12_000); // 12 seconds timeout (slightly less than the 15s in chat-input)
+  
+  try {
+    console.log("[registerUploadJob] Sending fetch request to:", `${FUNCTIONS_URL}/uploads`);
+    const fetchStartTime = Date.now();
+    
+    const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    
+    const fetchDuration = Date.now() - fetchStartTime;
+    console.log(`[registerUploadJob] Fetch completed in ${fetchDuration}ms`, {
+      status: response.status,
+      statusText: response.statusText,
+      ok: response.ok,
+    });
+    
+    clearTimeout(timeoutId);
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error?.error || "Failed to register upload job");
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "Unable to read error response");
+      console.error("[registerUploadJob] Response not OK", {
+        status: response.status,
+        statusText: response.statusText,
+        errorText: errorText.slice(0, 200),
+      });
+      let error;
+      try {
+        error = JSON.parse(errorText);
+      } catch {
+        error = { error: errorText };
+      }
+      throw new Error(error?.error || `Failed to register upload job: ${response.status} ${response.statusText}`);
+    }
+
+    const responseData = await response.json();
+    console.log("[registerUploadJob] Success", {
+      jobId: responseData.jobId,
+      hasUploadUrl: !!responseData.uploadUrl,
+      storagePath: responseData.storagePath,
+    });
+    
+    return responseData;
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.error("[registerUploadJob] Error caught", {
+      error: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : "Unknown",
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error("Upload registration timed out after 12 seconds. The uploads Edge Function may be slow or unavailable. Please check your network connection and try again.");
+    }
+    throw error;
   }
-
-  return response.json();
 }
 
 export async function updateJobStage(jobId: string, stage: "registered" | "uploaded" | "processing" | "extracted" | "injected" | "failed"): Promise<void> {
