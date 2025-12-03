@@ -195,7 +195,7 @@ export const DocumentsSidebar: React.FC<{
       }
       
       // Set session on supabaseClient for RLS (if we have session token)
-      // CRITICAL: Add timeout to prevent hanging
+      // CRITICAL: Add timeout to prevent hanging, but also verify session is actually set
       if (session?.access_token) {
         console.log("[DocumentsSidebar] Step 5: Setting session on supabaseClient for RLS...");
         try {
@@ -219,12 +219,35 @@ export const DocumentsSidebar: React.FC<{
           } else if (!('error' in setSessionResult)) {
             console.log("[DocumentsSidebar] Step 5: ✅ Session set successfully on supabaseClient");
           }
+          
+          // Verify session is actually set (non-blocking check)
+          console.log("[DocumentsSidebar] Step 5.1: Verifying session on client...");
+          try {
+            const { data: { session: verifiedSession } } = await supabaseClient.auth.getSession();
+            console.log("[DocumentsSidebar] Step 5.1: Verified session:", {
+              hasSession: !!verifiedSession,
+              userId: verifiedSession?.user?.id,
+              matches: verifiedSession?.user?.id === userId,
+            });
+          } catch (verifyErr) {
+            console.warn("[DocumentsSidebar] Step 5.1: Could not verify session (non-fatal):", verifyErr);
+          }
         } catch (setSessionErr) {
           console.warn("[DocumentsSidebar] Step 5: ⚠️ Exception setting session (non-fatal):", setSessionErr);
           // Continue anyway
         }
       } else {
         console.log("[DocumentsSidebar] Step 5: Skipping setSession (no session token)");
+        console.log("[DocumentsSidebar] Step 5.1: Checking if session exists on client anyway...");
+        try {
+          const { data: { session: existingSession } } = await supabaseClient.auth.getSession();
+          console.log("[DocumentsSidebar] Step 5.1: Existing session on client:", {
+            hasSession: !!existingSession,
+            userId: existingSession?.user?.id,
+          });
+        } catch (checkErr) {
+          console.warn("[DocumentsSidebar] Step 5.1: Could not check existing session:", checkErr);
+        }
       }
       
       console.log("[DocumentsSidebar] Step 5.5: Setting hasCheckedSession to true");
