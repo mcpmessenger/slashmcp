@@ -262,21 +262,45 @@ export const DocumentsSidebar: React.FC<{
       
       // Execute query with timeout
       console.log("[DocumentsSidebar] Step 9: Executing query with timeout...");
+      console.log("[DocumentsSidebar] Step 9: Query object:", { 
+        hasQuery: !!query,
+        queryType: typeof query,
+        queryConstructor: query?.constructor?.name 
+      });
+      
       let data, error;
       try {
         // Use .then() to properly handle Supabase query promise
         console.log("[DocumentsSidebar] Step 9a: Creating query promise...");
-        const queryPromise = query.then((result) => {
-          console.log("[DocumentsSidebar] Step 9b: Query promise resolved:", {
-            hasData: !!result.data,
-            dataLength: result.data?.length || 0,
-            hasError: !!result.error,
-            errorMessage: result.error?.message,
-          });
-          return {
-            data: result.data,
-            error: result.error,
-          };
+        console.log("[DocumentsSidebar] Step 9a: About to call query.then()...");
+        
+        // CRITICAL: Add error handler to catch any immediate errors
+        const queryPromise = query.then(
+          (result) => {
+            console.log("[DocumentsSidebar] Step 9b: Query promise resolved:", {
+              hasData: !!result.data,
+              dataLength: result.data?.length || 0,
+              hasError: !!result.error,
+              errorMessage: result.error?.message,
+              errorCode: result.error?.code,
+            });
+            return {
+              data: result.data,
+              error: result.error,
+            };
+          },
+          (rejectionError) => {
+            console.error("[DocumentsSidebar] Step 9b: Query promise REJECTED:", rejectionError);
+            return {
+              data: null,
+              error: { message: rejectionError instanceof Error ? rejectionError.message : String(rejectionError) },
+            };
+          }
+        );
+        
+        console.log("[DocumentsSidebar] Step 9a: Query promise created:", { 
+          hasPromise: !!queryPromise,
+          promiseType: typeof queryPromise 
         });
         
         console.log("[DocumentsSidebar] Step 9c: Creating timeout promise...");
@@ -288,8 +312,13 @@ export const DocumentsSidebar: React.FC<{
         });
         
         console.log("[DocumentsSidebar] Step 9e: Racing query and timeout promises...");
+        console.log("[DocumentsSidebar] Step 9e: About to await Promise.race...");
         const result = await Promise.race([queryPromise, queryTimeout]);
-        console.log("[DocumentsSidebar] Step 9f: Promise.race completed");
+        console.log("[DocumentsSidebar] Step 9f: Promise.race completed, result:", {
+          hasData: !!result.data,
+          dataLength: result.data?.length || 0,
+          hasError: !!result.error,
+        });
         data = result.data;
         error = result.error;
       } catch (queryError) {
