@@ -318,6 +318,7 @@ export const DocumentsSidebar: React.FC<{
         // Create a promise that will timeout if query hangs
         const directQueryPromise = (async () => {
           try {
+            console.log("[DocumentsSidebar] Step 9a.1: Inside query promise, about to await...");
             const result = await query;
             console.log("[DocumentsSidebar] Step 9b: Direct query completed:", {
               hasData: !!result.data,
@@ -339,10 +340,13 @@ export const DocumentsSidebar: React.FC<{
           }
         })();
         
+        console.log("[DocumentsSidebar] Step 9a.2: Query promise created, type:", typeof directQueryPromise);
+        
         console.log("[DocumentsSidebar] Step 9c: Creating timeout promise...");
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
           setTimeout(() => {
             console.error("[DocumentsSidebar] Step 9d: Query timeout triggered after 10 seconds");
+            console.error("[DocumentsSidebar] Step 9d: This means the query promise never resolved");
             resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
           }, 10_000); // 10 second timeout
         });
