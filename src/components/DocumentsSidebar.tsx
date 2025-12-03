@@ -78,51 +78,29 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       let session;
       
       // Try localStorage first (fast, no network call) - same pattern as getAuthHeaders
+      console.log("[DocumentsSidebar] Checking localStorage for session...");
       session = getSessionFromStorage();
+      console.log("[DocumentsSidebar] localStorage check result:", {
+        hasSession: !!session,
+        hasAccessToken: !!session?.access_token,
+        hasUser: !!session?.user,
+        userId: session?.user?.id,
+      });
       
       if (session?.access_token && session?.user?.id) {
-        console.log("[DocumentsSidebar] Session retrieved from localStorage:", {
+        console.log("[DocumentsSidebar] ✅ Session retrieved from localStorage:", {
           hasSession: true,
           hasUser: true,
           userId: session.user.id,
         });
       } else {
-        // Fallback to getSession() if localStorage doesn't have it
-        console.log("[DocumentsSidebar] No session in localStorage, trying getSession()...");
-        try {
-          // Add timeout to prevent hanging (same pattern as useChat.ts)
-          const sessionPromise = supabaseClient.auth.getSession();
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            setTimeout(() => {
-              reject(new Error("getSession timeout after 5 seconds"));
-            }, 5_000);
-          });
-          
-          const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
-          session = (sessionResult as any).data?.session;
-          console.log("[DocumentsSidebar] Session retrieved from getSession():", {
-            hasSession: !!session,
-            hasUser: !!session?.user,
-            userId: session?.user?.id,
-          });
-        } catch (sessionError) {
-          console.error("[DocumentsSidebar] CRITICAL: Failed to get session:", sessionError);
-          console.error("[DocumentsSidebar] Session error details:", JSON.stringify(sessionError, null, 2));
-          setIsLoading(false);
-          setDocuments([]);
-          
-          if (sessionError instanceof Error && sessionError.message.includes("timeout")) {
-            console.warn("[DocumentsSidebar] Session timeout - showing empty state");
-            // Don't show toast for timeout - just show empty state
-          } else {
-            toast({
-              title: "Session Error",
-              description: "Failed to get user session. Please refresh the page.",
-              variant: "destructive",
-            });
-          }
-          return;
-        }
+        // Skip getSession() fallback - it's timing out
+        // Just show empty state if no localStorage session
+        console.warn("[DocumentsSidebar] ⚠️ No session in localStorage - skipping getSession() fallback to avoid timeout");
+        console.warn("[DocumentsSidebar] This is normal if user is not logged in or session expired");
+        setIsLoading(false);
+        setDocuments([]);
+        return;
       }
 
       if (!session?.user) {
