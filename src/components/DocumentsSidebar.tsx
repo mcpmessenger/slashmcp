@@ -238,6 +238,12 @@ export const DocumentsSidebar: React.FC<{
         tokenPreview: session?.access_token?.substring(0, 20) + "..." || "none",
       });
       
+      console.log("[DocumentsSidebar] Step 6.5: Checking supabaseClient:", {
+        hasClient: !!supabaseClient,
+        hasFrom: typeof supabaseClient?.from === 'function',
+        supabaseUrl: import.meta.env.VITE_SUPABASE_URL,
+      });
+      
       const queryStartTime = Date.now();
       
       // Build query with explicit filters
@@ -248,17 +254,29 @@ export const DocumentsSidebar: React.FC<{
       
       // Create query builder - REMOVED analysis_target filter temporarily to debug
       // We'll filter client-side to see what's actually in the database
+      console.log("[DocumentsSidebar] Step 7: Building query...");
+      console.log("[DocumentsSidebar] Step 7a: Calling supabaseClient.from('processing_jobs')...");
       let query = supabaseClient
         .from("processing_jobs")
         .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target");
       
+      console.log("[DocumentsSidebar] Step 7a: Query builder created:", { 
+        hasQuery: !!query,
+        queryType: typeof query 
+      });
+      
       // Apply filters explicitly (removed analysis_target filter for now)
+      console.log("[DocumentsSidebar] Step 7b: Applying filters...");
       query = query.eq("user_id", userId);
+      console.log("[DocumentsSidebar] Step 7b: Applied user_id filter");
       // query = query.eq("analysis_target", "document-analysis"); // TEMPORARILY REMOVED FOR DEBUGGING
       query = query.order("created_at", { ascending: false });
+      console.log("[DocumentsSidebar] Step 7b: Applied order");
       query = query.limit(50);
+      console.log("[DocumentsSidebar] Step 7b: Applied limit");
+      console.log("[DocumentsSidebar] Step 7c: Query fully built");
       
-      console.log("[DocumentsSidebar] Query built, executing...");
+      console.log("[DocumentsSidebar] Step 8: Query built, about to execute...");
       
       // Execute query with timeout
       console.log("[DocumentsSidebar] Step 9: Executing query with timeout...");
