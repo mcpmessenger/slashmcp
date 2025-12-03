@@ -517,18 +517,15 @@ const Index = () => {
             <>
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
-                  {/* TEMPORARY: Using test version to debug - pass session from useChat */}
-                  {false ? (
-                    <DocumentsSidebar
-                      refreshTrigger={documentsSidebarRefreshTrigger}
-                      onDocumentClick={(jobId) => {
-                        // When document is clicked, could trigger a search or show details
-                        console.log("Document clicked:", jobId);
-                      }}
-                    />
-                  ) : (
-                    <DocumentsSidebarTest userId={session?.user?.id} />
-                  )}
+                  {/* Using original component with userId prop (fixes timeout issue) */}
+                  <DocumentsSidebar
+                    refreshTrigger={documentsSidebarRefreshTrigger}
+                    userId={session?.user?.id}
+                    onDocumentClick={(jobId) => {
+                      // When document is clicked, could trigger a search or show details
+                      console.log("Document clicked:", jobId);
+                    }}
+                  />
                 </div>
               </ResizablePanel>
               <ResizableHandle withHandle className="hidden lg:flex" />

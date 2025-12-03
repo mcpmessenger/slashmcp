@@ -106,7 +106,8 @@ interface Document {
 export const DocumentsSidebar: React.FC<{ 
   onDocumentClick?: (jobId: string) => void;
   refreshTrigger?: number; // External trigger to force refresh
-}> = ({ onDocumentClick, refreshTrigger }) => {
+  userId?: string; // Optional userId from parent (bypasses session retrieval)
+}> = ({ onDocumentClick, refreshTrigger, userId: propUserId }) => {
   // CRITICAL: Log immediately when component renders (before any hooks)
   console.log("[DocumentsSidebar] ===== COMPONENT RENDERED =====");
   console.log("[DocumentsSidebar] Render props:", { 
@@ -131,7 +132,7 @@ export const DocumentsSidebar: React.FC<{
     }
     
     console.log("[DocumentsSidebar] ===== loadDocuments START =====");
-    console.log("[DocumentsSidebar] Current state:", { isLoading, documentCount: documents.length });
+    console.log("[DocumentsSidebar] Current state:", { isLoading, documentCount: documents.length, propUserId });
     
     try {
       setIsLoadingRef(true);
@@ -139,27 +140,58 @@ export const DocumentsSidebar: React.FC<{
       setIsLoading(true);
       setHasError(false); // Clear error state on new attempt
       
-      console.log("[DocumentsSidebar] Getting session...");
-      let session;
+      let userId: string | undefined = propUserId;
+      let session: { access_token?: string; refresh_token?: string; user?: { id: string } } | null = null;
       
-      // Try localStorage first (fast, no network call) - same pattern as getAuthHeaders
-      console.log("[DocumentsSidebar] Checking localStorage for session...");
-      session = getSessionFromStorage();
-      console.log("[DocumentsSidebar] localStorage check result:", {
-        hasSession: !!session,
-        hasAccessToken: !!session?.access_token,
-        hasUser: !!session?.user,
-        userId: session?.user?.id,
-      });
-      
-      if (session?.access_token && session?.user?.id) {
-        console.log("[DocumentsSidebar] ✅ Session retrieved from localStorage:", {
-          hasSession: true,
-          hasUser: true,
-          userId: session.user.id,
+      // If userId prop provided, use it directly (from useChat hook - bypasses session retrieval)
+      if (propUserId) {
+        console.log("[DocumentsSidebar] Using userId from props:", propUserId);
+        userId = propUserId;
+        
+        // Still try to get session token for RLS (non-blocking)
+        session = getSessionFromStorage();
+        if (session?.access_token) {
+          console.log("[DocumentsSidebar] Found session token for RLS");
+        } else {
+          console.warn("[DocumentsSidebar] No session token found - query may fail RLS");
+        }
+      } else {
+        // Fallback: Try localStorage session retrieval
+        console.log("[DocumentsSidebar] Getting session from localStorage...");
+        session = getSessionFromStorage();
+        console.log("[DocumentsSidebar] localStorage check result:", {
+          hasSession: !!session,
+          hasAccessToken: !!session?.access_token,
+          hasUser: !!session?.user,
+          userId: session?.user?.id,
         });
         
-        // CRITICAL: Set session on supabaseClient so RLS policies can evaluate auth.uid()
+        if (session?.access_token && session?.user?.id) {
+          userId = session.user.id;
+          console.log("[DocumentsSidebar] ✅ Session retrieved from localStorage:", {
+            hasSession: true,
+            hasUser: true,
+            userId: session.user.id,
+          });
+        } else {
+          console.warn("[DocumentsSidebar] ⚠️ No session in localStorage");
+          setIsLoading(false);
+          setDocuments([]);
+          setHasCheckedSession(true);
+          return;
+        }
+      }
+      
+      if (!userId) {
+        console.error("[DocumentsSidebar] No userId available");
+        setIsLoading(false);
+        setDocuments([]);
+        setHasCheckedSession(true);
+        return;
+      }
+      
+      // Set session on supabaseClient for RLS (if we have session token)
+      if (session?.access_token) {
         console.log("[DocumentsSidebar] Setting session on supabaseClient for RLS...");
         try {
           const { error: setSessionError } = await supabaseClient.auth.setSession({
@@ -168,78 +200,29 @@ export const DocumentsSidebar: React.FC<{
           });
           
           if (setSessionError) {
-            console.error("[DocumentsSidebar] Failed to set session:", setSessionError);
-            setIsLoading(false);
-            setDocuments([]);
-            setHasError(true);
-            toast({
-              title: "Authentication Error",
-              description: "Failed to authenticate session. Please try logging in again.",
-              variant: "destructive",
-            });
-            return;
+            console.warn("[DocumentsSidebar] Failed to set session (non-fatal):", setSessionError);
+            // Continue anyway - query might still work
+          } else {
+            console.log("[DocumentsSidebar] ✅ Session set successfully on supabaseClient");
           }
-          
-          console.log("[DocumentsSidebar] ✅ Session set successfully on supabaseClient");
         } catch (setSessionErr) {
-          console.error("[DocumentsSidebar] Exception setting session:", setSessionErr);
-          setIsLoading(false);
-          setDocuments([]);
-          setHasError(true);
-          return;
+          console.warn("[DocumentsSidebar] Exception setting session (non-fatal):", setSessionErr);
+          // Continue anyway
         }
-        
-        setHasCheckedSession(true);
-      } else {
-        // Skip getSession() fallback - it's timing out
-        // Just show empty state if no localStorage session
-        console.warn("[DocumentsSidebar] ⚠️ No session in localStorage - skipping getSession() fallback to avoid timeout");
-        console.warn("[DocumentsSidebar] This is normal if user is not logged in or session expired");
-        setIsLoading(false);
-        setDocuments([]);
-        setHasCheckedSession(true);
-        return;
       }
+      
+      setHasCheckedSession(true);
 
-      if (!session?.user) {
-        console.log("[DocumentsSidebar] No session/user found, clearing documents");
-        setDocuments([]);
-        setIsLoading(false);
-        return;
-      }
-
-      console.log("[DocumentsSidebar] Querying documents for user:", session.user.id);
+      console.log("[DocumentsSidebar] Querying documents for user:", userId);
       console.log("[DocumentsSidebar] Session details:", {
         hasAccessToken: !!session.access_token,
         userId: session.user.id,
         tokenPreview: session.access_token?.substring(0, 20) + "...",
       });
       
-      // Verify session is actually set on the client
-      const { data: { session: verifiedSession } } = await supabaseClient.auth.getSession();
-      console.log("[DocumentsSidebar] Verified session on client:", {
-        hasSession: !!verifiedSession,
-        userId: verifiedSession?.user?.id,
-        matches: verifiedSession?.user?.id === session.user.id,
-      });
-      
-      if (!verifiedSession || verifiedSession.user.id !== session.user.id) {
-        console.error("[DocumentsSidebar] Session verification failed - session not properly set on client");
-        setIsLoading(false);
-        setDocuments([]);
-        setHasError(true);
-        toast({
-          title: "Session Error",
-          description: "Session not properly authenticated. Please refresh the page.",
-          variant: "destructive",
-        });
-        return;
-      }
-      
       const queryStartTime = Date.now();
       
       // Build query with explicit filters
-      const userId = session.user.id;
       console.log("[DocumentsSidebar] Building query with filters:", {
         userId,
         analysisTarget: "document-analysis",
