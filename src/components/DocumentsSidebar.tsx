@@ -24,8 +24,11 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
   const [isLoading, setIsLoading] = useState(true);
 
   const loadDocuments = async () => {
+    console.log("[DocumentsSidebar] ===== loadDocuments START =====");
+    console.log("[DocumentsSidebar] Current state:", { isLoading, documentCount: documents.length });
+    
     try {
-      console.log("[DocumentsSidebar] loadDocuments called");
+      console.log("[DocumentsSidebar] Setting isLoading to true");
       setIsLoading(true);
       
       const {
@@ -141,24 +144,34 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
   };
 
   useEffect(() => {
-    console.log("[DocumentsSidebar] useEffect - initial load");
+    console.log("[DocumentsSidebar] ===== useEffect MOUNTED =====");
+    console.log("[DocumentsSidebar] Component mounted, starting initial load");
+    
+    // Immediate load
     loadDocuments().catch((error) => {
-      console.error("[DocumentsSidebar] Initial load failed:", error);
+      console.error("[DocumentsSidebar] CRITICAL: Initial load failed:", error);
+      console.error("[DocumentsSidebar] Error stack:", error instanceof Error ? error.stack : "No stack");
+      // Ensure loading state is cleared even if loadDocuments throws
+      setIsLoading(false);
+      setDocuments([]);
     });
     
     // Refresh every 5 seconds to show status updates
     const interval = setInterval(() => {
+      console.log("[DocumentsSidebar] Interval refresh triggered");
       loadDocuments().catch((error) => {
         console.error("[DocumentsSidebar] Error refreshing documents:", error);
         // Don't show toast on every refresh error to avoid spam
+        setIsLoading(false);
       });
     }, 5000);
     
     return () => {
-      console.log("[DocumentsSidebar] Cleanup - clearing interval");
+      console.log("[DocumentsSidebar] Cleanup - clearing interval and resetting state");
       clearInterval(interval);
+      setIsLoading(false);
     };
-  }, []);
+  }, []); // Empty deps - only run on mount
 
   const getStatusIcon = (status: string) => {
     switch (status) {
