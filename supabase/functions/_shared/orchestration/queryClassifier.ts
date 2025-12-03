@@ -31,6 +31,8 @@ const DOCUMENT_KEYWORDS = [
   "search my documents", "find in my documents", "in my document",
   "from my document", "document says", "document contains", "document mentions",
   "what's in", "what is in", "content of", "information in",
+  "about the document", "about the file", "about my document", "about my file",
+  "what can you tell me about", "tell me about the", "what does the document",
 ];
 
 /**
