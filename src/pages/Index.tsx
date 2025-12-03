@@ -834,9 +834,13 @@ const Index = () => {
               setUploadJobs(jobs);
               setIsRegisteringUpload(isRegistering);
               // Trigger DocumentsSidebar refresh when new jobs are added or status changes
+              // Add a small delay to allow database insert to complete
               if (jobs.length > 0) {
                 console.log("[Index] Triggering DocumentsSidebar refresh due to job changes");
-                setDocumentsSidebarRefreshTrigger(prev => prev + 1);
+                // Delay refresh slightly to ensure database insert is complete
+                setTimeout(() => {
+                  setDocumentsSidebarRefreshTrigger(prev => prev + 1);
+                }, 1000); // 1 second delay
               }
             }}
             onEvent={(event) => {

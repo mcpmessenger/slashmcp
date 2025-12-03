@@ -234,7 +234,12 @@ export const DocumentsSidebar: React.FC<{
       // Execute query with timeout
       let data, error;
       try {
-        const queryPromise = query;
+        // Use .then() to properly handle Supabase query promise
+        const queryPromise = query.then((result) => ({
+          data: result.data,
+          error: result.error,
+        }));
+        
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
           setTimeout(() => {
             resolve({ data: null, error: { message: "Query timeout after 10 seconds" } });
@@ -401,9 +406,14 @@ export const DocumentsSidebar: React.FC<{
     if (refreshTrigger && refreshTrigger > 0) {
       console.log("[DocumentsSidebar] External refresh triggered:", refreshTrigger);
       setHasError(false); // Reset error state on manual refresh
-      loadDocuments().catch((error) => {
-        console.error("[DocumentsSidebar] Error on external refresh:", error);
-      });
+      setIsLoading(true); // Show loading state
+      // Small delay to ensure database transaction is committed
+      setTimeout(() => {
+        loadDocuments().catch((error) => {
+          console.error("[DocumentsSidebar] Error on external refresh:", error);
+          setIsLoading(false);
+        });
+      }, 500); // 500ms delay to allow DB insert to complete
     }
   }, [refreshTrigger]);
 
