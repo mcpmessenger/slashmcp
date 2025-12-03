@@ -299,6 +299,53 @@ export const DocumentsSidebar: React.FC<{
     }
   };
 
+  // CRITICAL FIX: Wait for Supabase client to be ready before attempting queries
+  // Use onAuthStateChange to detect when client has completed initial session check
+  useEffect(() => {
+    console.log("[DocumentsSidebar] Setting up auth state listener...");
+    
+    let isReady = false;
+    
+    const {
+      data: { subscription },
+    } = supabaseClient.auth.onAuthStateChange((event, session) => {
+      console.log("[DocumentsSidebar] Auth state change:", event, { hasSession: !!session });
+      
+      // 'INITIAL_SESSION' event fires when client has checked localStorage for session
+      // This is the reliable signal that the client is ready for database operations
+      if (event === 'INITIAL_SESSION' && !isReady) {
+        console.log("[DocumentsSidebar] ✅ Client is ready (INITIAL_SESSION received)");
+        isReady = true;
+        setIsClientReady(true);
+      }
+      
+      // Fallback: If we get any auth event and client isn't ready yet, mark it ready
+      // This handles cases where INITIAL_SESSION might not fire
+      if (!isReady && (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED')) {
+        console.log("[DocumentsSidebar] ✅ Client is ready (fallback - auth event received):", event);
+        isReady = true;
+        setIsClientReady(true);
+      }
+    });
+    
+    // Fallback timeout: If INITIAL_SESSION doesn't fire within 1 second, assume client is ready
+    // This handles edge cases where the event might not fire
+    const fallbackTimeout = setTimeout(() => {
+      if (!isReady) {
+        console.log("[DocumentsSidebar] ✅ Client ready (fallback timeout - assuming ready)");
+        isReady = true;
+        setIsClientReady(true);
+      }
+    }, 1_000);
+
+    // Cleanup subscription and timeout on unmount
+    return () => {
+      console.log("[DocumentsSidebar] Cleaning up auth state listener");
+      clearTimeout(fallbackTimeout);
+      subscription.unsubscribe();
+    };
+  }, []);
+
   // Set up polling interval for status updates (only when client is ready)
   useEffect(() => {
     if (!isClientReady || !propUserId) {
