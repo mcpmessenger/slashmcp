@@ -217,11 +217,7 @@ export const DocumentsSidebar: React.FC<{
           ]);
           
           if (fallbackResult.data) {
-            // Fallback query succeeded
-              totalJobs: fallbackResult.data.length,
-              documentAnalysisJobs: fallbackResult.data.filter(j => j.analysis_target === "document-analysis").length,
-              allAnalysisTargets: [...new Set(fallbackResult.data.map(j => j.analysis_target))],
-            });
+            // Fallback query succeeded - use the data
             
             // Use the fallback data if it has document-analysis jobs
             const docJobs = fallbackResult.data.filter(j => j.analysis_target === "document-analysis");
