@@ -1,6 +1,8 @@
 import { ChatMessage } from "@/components/ChatMessage";
 import { ChatInput } from "@/components/ui/chat-input";
 import { FileUploadStatus } from "@/components/FileUploadStatus";
+import { DocumentUpload } from "@/components/DocumentUpload";
+import { SemanticSearchChat } from "@/components/SemanticSearchChat";
 import { useChat } from "@/hooks/useChat";
 import { fetchJobStatus } from "@/lib/api";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -501,6 +503,14 @@ const Index = () => {
           <ResizablePanel defaultSize={70} minSize={40} className="min-w-0">
             <div className="h-full overflow-y-auto px-4 py-8">
               <div className="max-w-4xl mx-auto space-y-6">
+                {/* RAG Components - Document Upload and Semantic Search */}
+                {(session || guestMode) && (
+                  <>
+                    <DocumentUpload />
+                    <SemanticSearchChat />
+                  </>
+                )}
+                {/* End RAG Components */}
                 {!authReady || (!session && !guestMode) ? (
                   <div className="text-center mt-20 space-y-4">
                     <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
