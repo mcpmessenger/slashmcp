@@ -160,7 +160,27 @@ export const DocumentsSidebar: React.FC<{
       // CRITICAL FIX: Call getSession() to ensure the client is fully initialized and has the session.
       // This is the key difference from the working ragService.ts.
       // Without this, the Supabase client doesn't "wake up" and the query promise never executes.
-      const { data: { session: clientSession } } = await supabaseClient.auth.getSession();
+      // Add timeout to prevent hanging
+      try {
+        const getSessionPromise = supabaseClient.auth.getSession();
+        const getSessionTimeout = new Promise<{ data: { session: null } }>((resolve) => {
+          setTimeout(() => {
+            console.warn("[DocumentsSidebar] getSession() timed out after 2 seconds - continuing anyway");
+            resolve({ data: { session: null } });
+          }, 2_000);
+        });
+        
+        const sessionResult = await Promise.race([getSessionPromise, getSessionTimeout]);
+        const clientSession = 'data' in sessionResult ? sessionResult.data?.session : null;
+        
+        if (clientSession) {
+          console.log("[DocumentsSidebar] getSession() completed successfully");
+        } else {
+          console.warn("[DocumentsSidebar] getSession() timed out or returned no session - continuing anyway");
+        }
+      } catch (getSessionErr) {
+        console.warn("[DocumentsSidebar] getSession() error (non-fatal):", getSessionErr);
+      }
       
       setHasCheckedSession(true);
       
