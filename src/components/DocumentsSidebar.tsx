@@ -230,6 +230,7 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       // CRITICAL: Always set documents and clear loading, even if empty
       setDocuments(docs);
       setIsLoading(false);
+      setHasCheckedSession(true);
       
       if (docs.length === 0) {
         console.warn("[DocumentsSidebar] No documents found. Query filters:", {
@@ -241,6 +242,8 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
         console.warn("  2. Documents have different user_id");
         console.warn("  3. Documents have different analysis_target");
         console.warn("  4. RLS policies blocking the query");
+      } else {
+        console.log(`[DocumentsSidebar] ✅ Successfully loaded ${docs.length} document(s)`);
       }
     } catch (error) {
       console.error("[DocumentsSidebar] Error loading documents:", error);
