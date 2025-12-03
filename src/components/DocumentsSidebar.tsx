@@ -195,18 +195,28 @@ export const DocumentsSidebar: React.FC<{
       }
       
       // Set session on supabaseClient for RLS (if we have session token)
+      // CRITICAL: Add timeout to prevent hanging
       if (session?.access_token) {
         console.log("[DocumentsSidebar] Step 5: Setting session on supabaseClient for RLS...");
         try {
-          const { error: setSessionError } = await supabaseClient.auth.setSession({
+          const setSessionPromise = supabaseClient.auth.setSession({
             access_token: session.access_token,
             refresh_token: session.refresh_token || "",
           });
           
-          if (setSessionError) {
-            console.warn("[DocumentsSidebar] Step 5: ⚠️ Failed to set session (non-fatal):", setSessionError);
+          const setSessionTimeout = new Promise<{ error: { message: string } }>((resolve) => {
+            setTimeout(() => {
+              console.warn("[DocumentsSidebar] Step 5: ⚠️ setSession() timed out after 3 seconds - continuing anyway");
+              resolve({ error: { message: "setSession timeout" } });
+            }, 3_000); // 3 second timeout
+          });
+          
+          const setSessionResult = await Promise.race([setSessionPromise, setSessionTimeout]);
+          
+          if ('error' in setSessionResult && setSessionResult.error) {
+            console.warn("[DocumentsSidebar] Step 5: ⚠️ Failed to set session (non-fatal):", setSessionResult.error);
             // Continue anyway - query might still work
-          } else {
+          } else if (!('error' in setSessionResult)) {
             console.log("[DocumentsSidebar] Step 5: ✅ Session set successfully on supabaseClient");
           }
         } catch (setSessionErr) {
@@ -217,6 +227,7 @@ export const DocumentsSidebar: React.FC<{
         console.log("[DocumentsSidebar] Step 5: Skipping setSession (no session token)");
       }
       
+      console.log("[DocumentsSidebar] Step 5.5: Setting hasCheckedSession to true");
       setHasCheckedSession(true);
       console.log("[DocumentsSidebar] Step 6: About to query documents...");
 
