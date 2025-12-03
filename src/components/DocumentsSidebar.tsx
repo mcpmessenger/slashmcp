@@ -16,35 +16,80 @@ function getSessionFromStorage(): { access_token?: string; user?: { id: string }
   
   try {
     const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-    if (!SUPABASE_URL) return null;
+    if (!SUPABASE_URL) {
+      console.warn("[DocumentsSidebar] No SUPABASE_URL in env");
+      return null;
+    }
     
     const projectRef = SUPABASE_URL.replace("https://", "").split(".supabase.co")[0]?.split(".")[0];
-    if (!projectRef) return null;
+    if (!projectRef) {
+      console.warn("[DocumentsSidebar] Could not extract project ref from URL:", SUPABASE_URL);
+      return null;
+    }
     
-    const storageKey = `sb-${projectRef}-auth-token`;
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return null;
+    // Try multiple possible storage keys (Supabase might use different formats)
+    const possibleKeys = [
+      `sb-${projectRef}-auth-token`,
+      `sb-${projectRef}-auth-token-code-verifier`,
+      `supabase.auth.token`,
+    ];
     
-    const parsed = JSON.parse(raw);
-    const session = parsed?.currentSession ?? parsed?.session ?? parsed;
-    
-    // Validate session has access_token and user
-    if (session?.access_token && session?.user?.id) {
-      const expiresAt = session.expires_at;
-      if (expiresAt && typeof expiresAt === 'number') {
-        const now = Math.floor(Date.now() / 1000);
-        if (expiresAt < now) {
-          console.log("[DocumentsSidebar] Session in localStorage is expired");
-          return null;
+    let session = null;
+    for (const storageKey of possibleKeys) {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          // Try different possible structures
+          session = parsed?.currentSession ?? parsed?.session ?? parsed?.access_token ? parsed : null;
+          
+          if (session?.access_token && session?.user?.id) {
+            const expiresAt = session.expires_at;
+            if (expiresAt && typeof expiresAt === 'number') {
+              const now = Math.floor(Date.now() / 1000);
+              if (expiresAt < now) {
+                console.log("[DocumentsSidebar] Session in localStorage is expired");
+                continue; // Try next key
+              }
+            }
+            console.log("[DocumentsSidebar] Found session in localStorage key:", storageKey);
+            return session;
+          }
+        } catch (parseError) {
+          console.warn("[DocumentsSidebar] Failed to parse localStorage key:", storageKey, parseError);
+          continue;
         }
       }
-      return session;
     }
+    
+    // Also try to find any Supabase-related keys
+    console.log("[DocumentsSidebar] Checking all localStorage keys for Supabase session...");
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (key && (key.includes('supabase') || key.includes('auth') || key.includes(projectRef))) {
+        console.log("[DocumentsSidebar] Found potential session key:", key);
+        try {
+          const raw = window.localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const potentialSession = parsed?.currentSession ?? parsed?.session ?? parsed;
+            if (potentialSession?.access_token && potentialSession?.user?.id) {
+              console.log("[DocumentsSidebar] ✅ Found valid session in key:", key);
+              return potentialSession;
+            }
+          }
+        } catch (e) {
+          // Skip invalid JSON
+        }
+      }
+    }
+    
+    console.warn("[DocumentsSidebar] No valid session found in localStorage");
+    return null;
   } catch (error) {
-    console.warn("[DocumentsSidebar] Unable to parse stored Supabase session", error);
+    console.error("[DocumentsSidebar] Error reading localStorage:", error);
+    return null;
   }
-  
-  return null;
 }
 
 interface Document {
@@ -93,6 +138,7 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
           hasUser: true,
           userId: session.user.id,
         });
+        setHasCheckedSession(true);
       } else {
         // Skip getSession() fallback - it's timing out
         // Just show empty state if no localStorage session
@@ -100,6 +146,7 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
         console.warn("[DocumentsSidebar] This is normal if user is not logged in or session expired");
         setIsLoading(false);
         setDocuments([]);
+        setHasCheckedSession(true);
         return;
       }
 

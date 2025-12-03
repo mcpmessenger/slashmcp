@@ -510,7 +510,7 @@ const Index = () => {
         {/* Chat Messages with Documents Sidebar and Chat Layout */}
         <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Left Pane: Documents Sidebar */}
+          {/* Left Pane: Documents Sidebar - Only show if user has documents or is logged in */}
           {(session || guestMode) && (
             <>
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
