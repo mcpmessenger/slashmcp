@@ -342,14 +342,20 @@ export function createOrchestratorAgent(
       "- For greetings, initial questions, or general 'what can you do?' queries, use `handoff_to_command_discovery` so the Command_Discovery_Agent can greet and help the user.\n" +
       "- The Command_Discovery_Agent is the default agent and should handle most user interactions.\n" +
       "\n" +
-      "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation):\n" +
-      "- If the user asks questions about their uploaded documents (e.g., 'What does my document say about X?', 'Search my documents for Y'), " +
-      "  use the `search_documents` tool directly - DO NOT route to Command Discovery Agent.\n" +
+      "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation) - HIGHEST PRIORITY:\n" +
+      "- If the user mentions ANY of: 'document', 'uploaded', 'file', 'PDF', 'what I uploaded', 'my document', 'the document', 'that document', " +
+      "  'tell me about', 'what does it say', 'what can you tell me', 'analyze', 'search my documents', 'find in my documents', " +
+      "  or asks questions that could be answered by uploaded content, you MUST use the `search_documents` tool immediately.\n" +
+      "- Examples that REQUIRE `search_documents`: 'What can you tell me about the document I just uploaded?', " +
+      "  'What does my document say about X?', 'Tell me about the PDF', 'Search my documents for Y', " +
+      "  'What information is in my uploaded file?', 'Analyze my document', 'What's in the document?'\n" +
+      "- DO NOT say 'I can't analyze documents' - you CAN and MUST use `search_documents` when users ask about documents.\n" +
       "- If the user asks to list their documents (e.g., 'What documents do I have?', 'Show my documents'), " +
       "  use the `list_documents` tool directly.\n" +
       "- If the user asks about document status, use the `get_document_status` tool.\n" +
-      "- IMPORTANT: When the user's query relates to document content, automatically use `search_documents` to find relevant information.\n" +
-      "- The orchestrator should proactively search documents when the user asks questions that might be answered by uploaded content.\n" +
+      "- CRITICAL: When ANY query relates to document content or uploaded files, ALWAYS try `search_documents` first. " +
+      "  Even if the document is still processing, the search will return helpful information about status.\n" +
+      "- The orchestrator MUST proactively search documents when users ask questions that might be answered by uploaded content.\n" +
       "\n" +
       "FOR MEMORY REQUESTS:\n" +
       "- If the user asks you to remember something (like a password, preference, or fact), use the `store_memory` tool to save it.\n" +

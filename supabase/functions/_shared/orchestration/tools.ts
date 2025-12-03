@@ -240,7 +240,11 @@ export function createRagTools(
     {
       name: "search_documents",
       description:
-        "Search uploaded documents using semantic search (RAG). Use this when the user asks questions about their uploaded documents, wants to find information in documents, or needs to search document content. The orchestrator should automatically use this when the user's query relates to document content.",
+        "Search uploaded documents using semantic search (RAG). ALWAYS use this when the user mentions documents, uploaded files, PDFs, or asks questions that could be answered by document content. " +
+        "Examples: 'What can you tell me about the document?', 'What does my document say?', 'Tell me about the PDF I uploaded', 'Search my documents', " +
+        "'What information is in my file?', 'Analyze my document', 'What's in the document?'. " +
+        "This tool searches all user's uploaded and processed documents. If documents are still processing, it will indicate that. " +
+        "DO NOT say 'I can't analyze documents' - use this tool instead.",
       parameters: {
         type: "object",
         properties: {
