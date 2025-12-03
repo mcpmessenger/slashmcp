@@ -217,25 +217,33 @@ function isValidStage(stage: unknown): stage is JobStage {
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  if (req.method !== "POST" && req.method !== "PATCH") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  if (!supabase || !AWS_S3_BUCKET || !AWS_REGION || !AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) {
-    return new Response(JSON.stringify({ error: "Server not configured" }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
+  const requestStartTime = Date.now();
+  console.log("=== Uploads Edge Function Request Start ===");
+  console.log("Method:", req.method);
+  console.log("URL:", req.url);
+  console.log("Timestamp:", new Date().toISOString());
+  
   try {
+    if (req.method === "OPTIONS") {
+      console.log("OPTIONS request - returning CORS headers");
+      return new Response(null, { headers: corsHeaders });
+    }
+
+    if (req.method !== "POST" && req.method !== "PATCH") {
+      console.error("Method not allowed:", req.method);
+      return new Response(JSON.stringify({ error: "Method not allowed" }), {
+        status: 405,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!supabase || !AWS_S3_BUCKET || !AWS_REGION || !AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) {
+      console.error("Server not configured - missing environment variables");
+      return new Response(JSON.stringify({ error: "Server not configured" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     if (req.method === "PATCH") {
       const body = await req.json();
       const jobId = body?.jobId;
@@ -300,10 +308,23 @@ serve(async (req) => {
       );
     }
 
+    console.log("Processing POST request - parsing body...");
     const body: UploadRequestBody = await req.json();
+    console.log("Request body parsed:", {
+      fileName: body.fileName,
+      fileType: body.fileType,
+      fileSize: body.fileSize,
+      analysisTarget: body.analysisTarget,
+      hasUserId: !!body.userId,
+    });
+    
     validateRequestBody(body);
+    console.log("Request body validated");
 
     const storagePath = `incoming/${crypto.randomUUID()}-${body.fileName}`;
+    console.log("Creating presigned URL for storage path:", storagePath);
+    const presignedUrlStartTime = Date.now();
+    
     const uploadUrl = await createPresignedPutUrl({
       bucket: AWS_S3_BUCKET,
       key: storagePath,
@@ -313,7 +334,12 @@ serve(async (req) => {
       sessionToken: AWS_SESSION_TOKEN ?? undefined,
       contentType: body.fileType,
     });
+    
+    const presignedUrlDuration = Date.now() - presignedUrlStartTime;
+    console.log(`Presigned URL created in ${presignedUrlDuration}ms`);
 
+    console.log("Inserting job into database...");
+    const dbInsertStartTime = Date.now();
     const { data, error } = await supabase
       .from("processing_jobs")
       .insert({
@@ -329,13 +355,20 @@ serve(async (req) => {
       .select("id")
       .single();
 
+    const dbInsertDuration = Date.now() - dbInsertStartTime;
+    
     if (error) {
       console.error("Failed to insert processing job", error);
-      return new Response(JSON.stringify({ error: "Failed to register job" }), {
+      console.error("Error details:", JSON.stringify(error, null, 2));
+      return new Response(JSON.stringify({ error: "Failed to register job", details: error.message }), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    console.log(`Job inserted in ${dbInsertDuration}ms, jobId: ${data.id}`);
+    const totalDuration = Date.now() - requestStartTime;
+    console.log(`=== Uploads Edge Function Request Complete in ${totalDuration}ms ===`);
 
     return new Response(
       JSON.stringify({
@@ -350,9 +383,19 @@ serve(async (req) => {
       },
     );
   } catch (error) {
-    console.error("uploads function error", error);
+    const errorDuration = Date.now() - requestStartTime;
+    console.error("=== Uploads Edge Function Error ===");
+    console.error("Error after", errorDuration, "ms");
+    console.error("Error type:", error instanceof Error ? error.constructor.name : typeof error);
+    console.error("Error message:", error instanceof Error ? error.message : String(error));
+    console.error("Error stack:", error instanceof Error ? error.stack : "No stack trace");
+    console.error("Full error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
+      JSON.stringify({ 
+        error: error instanceof Error ? error.message : "Unknown error",
+        details: error instanceof Error ? error.stack : undefined,
+      }),
       {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -17,10 +17,14 @@ import {
   createHandoffs,
   createMemoryTools,
   createMcpProxyTool,
+  createRagTools,
+  helpTool,
+  listCommandsTool,
 } from "../_shared/orchestration/index.ts";
 
 const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY") ?? "";
 
 const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
@@ -109,10 +113,27 @@ async function executeOrchestration(
     });
 
     // Build tools array
-    const tools = [createMcpProxyTool(MCP_GATEWAY_URL, authHeader)];
+    const tools = [
+      createMcpProxyTool(MCP_GATEWAY_URL, authHeader),
+      listCommandsTool,
+      helpTool,
+    ];
+    
     if (memoryService) {
       const memoryTools = createMemoryTools(memoryService);
       tools.push(...memoryTools);
+    }
+    
+    // Add RAG tools if we have Supabase access
+    if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && input.userId) {
+      try {
+        const ragTools = createRagTools(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, input.userId);
+        tools.push(...ragTools);
+        console.log(`Added ${ragTools.length} RAG tools to orchestrator`);
+      } catch (error) {
+        console.error("Failed to create RAG tools:", error);
+        // Continue without RAG tools if there's an error
+      }
     }
 
     // Create agents

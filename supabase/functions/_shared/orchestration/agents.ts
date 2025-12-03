@@ -336,15 +336,28 @@ export function createOrchestratorAgent(
   return new Agent({
     name: "Orchestrator_Agent",
     instructions:
-      "Your primary goal is to route requests to the appropriate specialized agent. " +
+      "Your primary goal is to route requests to the appropriate specialized agent or tool. " +
       "\n" +
       "DEFAULT BEHAVIOR - Route to Command Discovery Agent:\n" +
       "- For greetings, initial questions, or general 'what can you do?' queries, use `handoff_to_command_discovery` so the Command_Discovery_Agent can greet and help the user.\n" +
       "- The Command_Discovery_Agent is the default agent and should handle most user interactions.\n" +
       "\n" +
+      "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation):\n" +
+      "- If the user asks questions about their uploaded documents (e.g., 'What does my document say about X?', 'Search my documents for Y'), " +
+      "  use the `search_documents` tool directly - DO NOT route to Command Discovery Agent.\n" +
+      "- If the user asks to list their documents (e.g., 'What documents do I have?', 'Show my documents'), " +
+      "  use the `list_documents` tool directly.\n" +
+      "- If the user asks about document status, use the `get_document_status` tool.\n" +
+      "- IMPORTANT: When the user's query relates to document content, automatically use `search_documents` to find relevant information.\n" +
+      "- The orchestrator should proactively search documents when the user asks questions that might be answered by uploaded content.\n" +
+      "\n" +
       "FOR MEMORY REQUESTS:\n" +
       "- If the user asks you to remember something (like a password, preference, or fact), use the `store_memory` tool to save it.\n" +
       "- If the user asks about something they've told you before (like passwords, preferences, or facts), use the `query_memory` tool to retrieve that information.\n" +
+      "\n" +
+      "FOR HELP REQUESTS:\n" +
+      "- If the user asks for help, types '/help', or wants to see available commands, use the `help` tool.\n" +
+      "- The help tool provides comprehensive information about all capabilities.\n" +
       "\n" +
       "FOR COMMAND-RELATED REQUESTS:\n" +
       "- If the user asks HOW to use commands or WHAT commands are available (e.g., 'what commands can I use?', 'how do I get stock prices?'), " +

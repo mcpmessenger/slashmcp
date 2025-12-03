@@ -228,7 +228,207 @@ export function createMcpProxyTool(mcpGatewayUrl: string, authHeader?: string | 
 }
 
 /**
- * Tool to list available MCP commands
+ * Create RAG/document tools for agent use
+ * These tools allow the orchestrator to handle document uploads, searches, and management
+ */
+export function createRagTools(
+  supabaseUrl: string,
+  supabaseServiceKey: string,
+  userId: string,
+): Tool[] {
+  return [
+    {
+      name: "search_documents",
+      description:
+        "Search uploaded documents using semantic search (RAG). Use this when the user asks questions about their uploaded documents, wants to find information in documents, or needs to search document content. The orchestrator should automatically use this when the user's query relates to document content.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "The search query - what the user is looking for in the documents",
+          },
+          jobIds: {
+            type: "array",
+            items: { type: "string" },
+            description: "Optional: Specific document job IDs to search. If not provided, searches all user documents.",
+          },
+          limit: {
+            type: "number",
+            description: "Maximum number of results (default: 10)",
+          },
+        },
+        required: ["query"],
+      },
+      async run({ query, jobIds, limit = 10 }: { query: string; jobIds?: string[]; limit?: number }) {
+        try {
+          const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+          const supabase = createClient(supabaseUrl, supabaseServiceKey);
+          
+          // Call doc-context Edge Function
+          const functionsUrl = supabaseUrl.replace(/\/$/, "") + "/functions/v1";
+          const response = await fetch(`${functionsUrl}/doc-context`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${supabaseServiceKey}`,
+            },
+            body: JSON.stringify({
+              query,
+              jobIds: jobIds || [],
+              limit,
+              similarity_threshold: 0.7,
+            }),
+          });
+
+          if (!response.ok) {
+            const error = await response.text();
+            return `Error searching documents: ${error}`;
+          }
+
+          const data = await response.json();
+          if (!data.contexts || data.contexts.length === 0) {
+            return "No relevant documents found for your query.";
+          }
+
+          // Format results
+          const results = data.contexts.map((ctx: any) => ({
+            fileName: ctx.fileName,
+            chunks: ctx.chunks.map((chunk: any) => ({
+              content: chunk.content,
+              similarity: chunk.similarity,
+            })),
+          }));
+
+          return JSON.stringify({
+            searchMode: data.searchMode,
+            totalDocuments: data.contexts.length,
+            totalChunks: data.contexts.reduce((sum: number, ctx: any) => sum + ctx.chunks.length, 0),
+            results,
+          }, null, 2);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return `Error searching documents: ${message}`;
+        }
+      },
+    },
+    {
+      name: "list_documents",
+      description:
+        "List all uploaded documents with their status. Use this when the user asks 'what documents do I have', 'show my documents', or wants to see their document library.",
+      parameters: {
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            description: "Optional: Filter by status (queued, processing, completed, failed)",
+          },
+        },
+        required: [],
+      },
+      async run({ status }: { status?: string }) {
+        try {
+          const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+          const supabase = createClient(supabaseUrl, supabaseServiceKey);
+          
+          let query = supabase
+            .from("processing_jobs")
+            .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at")
+            .eq("user_id", userId)
+            .eq("analysis_target", "document-analysis")
+            .order("created_at", { ascending: false });
+
+          if (status) {
+            query = query.eq("status", status);
+          }
+
+          const { data, error } = await query;
+
+          if (error) {
+            return `Error listing documents: ${error.message}`;
+          }
+
+          if (!data || data.length === 0) {
+            return "No documents found. Upload documents to get started.";
+          }
+
+          const documents = data.map((job: any) => {
+            const metadata = job.metadata as Record<string, unknown> | null;
+            const stage = metadata?.job_stage as string | undefined;
+            return {
+              jobId: job.id,
+              fileName: job.file_name,
+              fileType: job.file_type,
+              fileSize: job.file_size,
+              status: job.status,
+              stage: stage || "unknown",
+              createdAt: job.created_at,
+              updatedAt: job.updated_at,
+            };
+          });
+
+          return JSON.stringify({
+            total: documents.length,
+            documents,
+          }, null, 2);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return `Error listing documents: ${message}`;
+        }
+      },
+    },
+    {
+      name: "get_document_status",
+      description:
+        "Get the processing status of a specific document. Use this when the user asks about a specific document's status or wants to check if processing is complete.",
+      parameters: {
+        type: "object",
+        properties: {
+          jobId: {
+            type: "string",
+            description: "The document job ID",
+          },
+        },
+        required: ["jobId"],
+      },
+      async run({ jobId }: { jobId: string }) {
+        try {
+          const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+          const supabase = createClient(supabaseUrl, supabaseServiceKey);
+          
+          const { data, error } = await supabase
+            .from("processing_jobs")
+            .select("id, file_name, status, metadata, created_at, updated_at")
+            .eq("id", jobId)
+            .eq("user_id", userId)
+            .single();
+
+          if (error || !data) {
+            return `Document not found or access denied: ${error?.message || "Not found"}`;
+          }
+
+          const metadata = data.metadata as Record<string, unknown> | null;
+          const stage = metadata?.job_stage as string | undefined;
+
+          return JSON.stringify({
+            jobId: data.id,
+            fileName: data.file_name,
+            status: data.status,
+            stage: stage || "unknown",
+            createdAt: data.created_at,
+            updatedAt: data.updated_at,
+          }, null, 2);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          return `Error getting document status: ${message}`;
+        }
+      },
+    },
+  ];
+}
+
+/**
+ * Tool to list available MCP commands and RAG operations
  */
 export const listCommandsTool: Tool = {
   name: "list_mcp_commands",
@@ -299,8 +499,100 @@ AVAILABLE MCP COMMANDS:
      Example: /email-mcp send_test_email
      Example: /email-mcp send_test_email subject="Test" body="test"
      When user says "send a test email" or "send me a test email", use this command
+
+10. DOCUMENT MANAGEMENT (RAG - Retrieval Augmented Generation)
+    The orchestrator automatically handles document operations when you:
+    - Upload files via chat (drag & drop or file picker)
+    - Ask questions about uploaded documents
+    - Request to search document content
+    
+    Available operations (handled automatically):
+    - Upload: Drag & drop files or use file picker in chat
+    - Search: Ask questions like "What does my document say about X?"
+    - List: Ask "What documents do I have?" or "Show my documents"
+    - Status: Ask "What's the status of document X?"
+    
+    The orchestrator will automatically:
+    - Use semantic search when you ask questions about document content
+    - Process uploaded documents in the background
+    - Include relevant document context in responses
 `;
     return commands;
+  },
+};
+
+/**
+ * Help tool that lists all available capabilities including RAG
+ */
+export const helpTool: Tool = {
+  name: "help",
+  description: "Shows comprehensive help with all available commands and capabilities. Use this when users ask for help, want to see what's available, or type /help.",
+  parameters: {
+    type: "object",
+    properties: {
+      category: {
+        type: "string",
+        description: "Optional: Filter by category (mcp, documents, memory, all)",
+      },
+    },
+    required: [],
+  },
+  async run({ category }: { category?: string }) {
+    const helpText = `
+# SlashMCP Help - All Available Commands
+
+## 📚 DOCUMENT MANAGEMENT (RAG)
+Upload, search, and manage your documents:
+
+**Upload Documents:**
+- Drag & drop files into the chat
+- Or use the file picker button
+- Supported: PDF, images, text files, CSV
+- Documents are automatically processed and indexed for semantic search
+
+**Search Documents:**
+- Ask questions: "What does my document say about X?"
+- "Search my documents for information about Y"
+- The orchestrator automatically uses semantic search when you ask about document content
+
+**List Documents:**
+- "What documents do I have?"
+- "Show my documents"
+- "List all my uploaded files"
+
+**Document Status:**
+- "What's the status of document X?"
+- "Is my document ready?"
+
+## 🔧 MCP COMMANDS
+Use MCP commands for external services:
+
+${category === "documents" || category === "all" ? "" : "Type '/help category=mcp' for full MCP command list"}
+
+## 💾 MEMORY
+Store and recall information:
+- "Remember that my password is X"
+- "What did I tell you about Y?"
+- "Store my preference for Z"
+
+## 🎯 NATURAL LANGUAGE
+Just ask in plain language! The orchestrator will:
+- Route to the right tool automatically
+- Use document search when relevant
+- Execute MCP commands when needed
+- Remember important information
+
+## Examples:
+- "Get stock price for AAPL" → Uses alphavantage-mcp
+- "What does my uploaded PDF say about taxes?" → Uses document search
+- "Remember my API key is abc123" → Stores in memory
+- "Send me a test email" → Uses email-mcp
+- "Search the web for Model Context Protocol" → Uses search-mcp
+
+Type '/help category=mcp' for full MCP command reference.
+Type '/help category=documents' for document management details.
+`;
+    return helpText;
   },
 };
 
