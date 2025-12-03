@@ -14,6 +14,10 @@ import {
   createHandoffs,
   createMemoryTools,
   createMcpProxyTool,
+  createRagTools,
+  classifyQuery,
+  getDocumentContext,
+  formatDocumentContext,
   listCommandsTool,
   executeMcpCommand,
 } from "../_shared/orchestration/index.ts";
@@ -712,6 +716,76 @@ serve(async (req) => {
           
           // Create handoffs including command discovery (returns 3 handoffs)
           const [commandDiscoveryHandoff, mcpHandoff, finalHandoff] = createHandoffs(currentMcpToolAgent, commandDiscoveryAgent);
+          
+          // Get document context and classify query for intelligent routing
+          let documentContext: Awaited<ReturnType<typeof getDocumentContext>> | null = null;
+          let classification: Awaited<ReturnType<typeof classifyQuery>> | null = null;
+          let enhancedInstructions = "";
+          
+          if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && userId) {
+            try {
+              documentContext = await getDocumentContext(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, userId);
+              console.log(`Document context: ${documentContext.availableDocuments.length} docs, ${documentContext.readyDocuments} ready, ${documentContext.processingDocuments} processing`);
+              
+              // Get the last user message for classification
+              const lastUserMessage = messages.length > 0 && messages[messages.length - 1]?.role === "user"
+                ? (typeof messages[messages.length - 1].content === "string" 
+                    ? messages[messages.length - 1].content 
+                    : String(messages[messages.length - 1].content ?? ""))
+                : "";
+              
+              if (lastUserMessage) {
+                classification = classifyQuery(
+                  lastUserMessage,
+                  documentContext.availableDocuments.map(d => ({
+                    id: d.id,
+                    fileName: d.fileName,
+                    status: d.status,
+                  }))
+                );
+                console.log(`Query classification: intent=${classification.intent}, confidence=${classification.confidence}, tool=${classification.suggestedTool}`);
+                
+                // Build enhanced instructions
+                if (documentContext.availableDocuments.length > 0) {
+                  enhancedInstructions = `\n\n=== CURRENT USER CONTEXT ===\n${formatDocumentContext(documentContext)}\n\n`;
+                  
+                  if (classification.intent === "document" || classification.intent === "hybrid" || classification.confidence >= 0.3) {
+                    enhancedInstructions += `=== QUERY ANALYSIS ===\n`;
+                    enhancedInstructions += `- User query intent: ${classification.intent} (confidence: ${classification.confidence.toFixed(2)})\n`;
+                    enhancedInstructions += `- Suggested tool: ${classification.suggestedTool}\n`;
+                    
+                    if (classification.context.documentName) {
+                      enhancedInstructions += `- User mentioned document: ${classification.context.documentName}\n`;
+                    }
+                    if (classification.context.mentionsDocument || classification.context.mentionsFile) {
+                      enhancedInstructions += `- Query mentions documents/files - this is a DOCUMENT QUERY\n`;
+                    }
+                    
+                    if (documentContext.readyDocuments > 0) {
+                      enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
+                      enhancedInstructions += `- ${documentContext.readyDocuments} document(s) are ready for search\n`;
+                      enhancedInstructions += `- YOU MUST use the search_documents tool immediately\n`;
+                      enhancedInstructions += `- DO NOT ask for clarification - use search_documents with the user's query\n`;
+                      enhancedInstructions += `- DO NOT use web search - use search_documents instead\n\n`;
+                    } else if (documentContext.processingDocuments > 0) {
+                      enhancedInstructions += `\n=== DOCUMENT STATUS ===\n`;
+                      enhancedInstructions += `- ${documentContext.processingDocuments} document(s) are still processing\n`;
+                      enhancedInstructions += `- Inform user that documents are processing and will be available soon\n`;
+                      enhancedInstructions += `- You can still try search_documents - it will return status information\n\n`;
+                    } else {
+                      enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
+                      enhancedInstructions += `- User has documents but they may not be ready\n`;
+                      enhancedInstructions += `- Try search_documents tool first - it will handle the status appropriately\n`;
+                      enhancedInstructions += `- DO NOT ask for clarification about which document - search all available documents\n\n`;
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              console.error("Failed to get document context or classify query:", error);
+              // Continue without context
+            }
+          }
           
           // Create orchestrator agent using shared module function
           const currentOrchestratorAgent = createOrchestratorAgent(
