@@ -2294,9 +2294,10 @@ export function useChat() {
       console.error("[useChat] About to call supabaseClient.auth.getSession()");
       let sessionToken: string | null = null;
       try {
+        const GET_SESSION_TIMEOUT_MS = 15_000; // Increased to 15 seconds
         const getSessionPromise = supabaseClient.auth.getSession();
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('getSession timeout after 5 seconds')), 5000)
+          setTimeout(() => reject(new Error(`getSession timeout after ${GET_SESSION_TIMEOUT_MS}ms`)), GET_SESSION_TIMEOUT_MS)
         );
         const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
         console.error("[useChat] getSession() completed successfully");
