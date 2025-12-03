@@ -513,7 +513,7 @@ const Index = () => {
           {/* Left Pane: Documents Sidebar */}
           {(session || guestMode) && (
             <>
-              <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="hidden lg:block min-w-0 border-r">
+              <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
                   <DocumentsSidebar
                     onDocumentClick={(jobId) => {
