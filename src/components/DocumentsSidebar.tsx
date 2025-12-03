@@ -58,14 +58,26 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
 
       if (error) {
         console.error("[DocumentsSidebar] Error loading documents:", error);
+        console.error("[DocumentsSidebar] Error details:", JSON.stringify(error, null, 2));
         toast({
           title: "Error loading documents",
-          description: error.message,
+          description: error.message || "Failed to load documents. Check console for details.",
           variant: "destructive",
         });
         setIsLoading(false);
         return;
       }
+
+      console.log("[DocumentsSidebar] Raw data from query:", {
+        dataLength: data?.length || 0,
+        firstItem: data?.[0] ? {
+          id: data[0].id,
+          file_name: data[0].file_name,
+          status: data[0].status,
+          user_id: (data[0] as any).user_id, // Log user_id if available
+          analysis_target: (data[0] as any).analysis_target, // Log analysis_target if available
+        } : null,
+      });
 
       const docs = (data || []).map((job: any) => {
         const metadata = job.metadata as Record<string, unknown> | null;
@@ -82,7 +94,9 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
         };
       });
 
-      console.log("[DocumentsSidebar] Setting documents:", docs.length);
+      console.log("[DocumentsSidebar] Setting documents:", docs.length, {
+        documents: docs.map(d => ({ fileName: d.fileName, status: d.status, stage: d.stage })),
+      });
       setDocuments(docs);
     } catch (error) {
       console.error("[DocumentsSidebar] Error loading documents:", error);
