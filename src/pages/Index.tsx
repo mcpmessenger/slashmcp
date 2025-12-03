@@ -781,12 +781,34 @@ const Index = () => {
                   duration: 2000,
                 });
               } else if (uploadJobs.length > 0) {
-                toast({
-                  title: "No document context yet",
-                  description: "Your files are still being processed. Try again shortly.",
-                  variant: "destructive",
-                  duration: 2500,
-                });
+                // Check if documents are processing or just uploaded
+                const processingJobs = uploadJobs.filter(job => 
+                  job.status === "queued" || job.status === "processing" || job.status === "uploading"
+                );
+                const uploadedJobs = uploadJobs.filter(job => 
+                  job.status === "completed" && (job.stage === "uploaded" || !job.stage || job.stage === "unknown")
+                );
+                
+                if (processingJobs.length > 0) {
+                  toast({
+                    title: "Documents processing",
+                    description: `${processingJobs.length} document(s) are being processed. They'll be searchable once complete.`,
+                    duration: 3000,
+                  });
+                } else if (uploadedJobs.length > 0) {
+                  toast({
+                    title: "Documents uploaded",
+                    description: `${uploadedJobs.length} document(s) uploaded but processing hasn't started. This may take a moment.`,
+                    duration: 3000,
+                  });
+                } else {
+                  toast({
+                    title: "No document context yet",
+                    description: "Your files are still being processed. Try again shortly.",
+                    variant: "destructive",
+                    duration: 2500,
+                  });
+                }
               }
 
               console.log("[Index] About to call sendMessage with input:", input);
