@@ -149,6 +149,37 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
           hasUser: true,
           userId: session.user.id,
         });
+        
+        // CRITICAL: Set session on supabaseClient so RLS policies can evaluate auth.uid()
+        console.log("[DocumentsSidebar] Setting session on supabaseClient for RLS...");
+        try {
+          const { error: setSessionError } = await supabaseClient.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token || "",
+          });
+          
+          if (setSessionError) {
+            console.error("[DocumentsSidebar] Failed to set session:", setSessionError);
+            setIsLoading(false);
+            setDocuments([]);
+            setHasError(true);
+            toast({
+              title: "Authentication Error",
+              description: "Failed to authenticate session. Please try logging in again.",
+              variant: "destructive",
+            });
+            return;
+          }
+          
+          console.log("[DocumentsSidebar] ✅ Session set successfully on supabaseClient");
+        } catch (setSessionErr) {
+          console.error("[DocumentsSidebar] Exception setting session:", setSessionErr);
+          setIsLoading(false);
+          setDocuments([]);
+          setHasError(true);
+          return;
+        }
+        
         setHasCheckedSession(true);
       } else {
         // Skip getSession() fallback - it's timing out
