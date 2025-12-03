@@ -34,12 +34,45 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       console.log("[DocumentsSidebar] Setting isLoading to true");
       setIsLoading(true);
       
-      const {
-        data: { session },
-      } = await supabaseClient.auth.getSession();
+      console.log("[DocumentsSidebar] Getting session...");
+      let session;
+      try {
+        // Add timeout to prevent hanging (same pattern as useChat.ts)
+        const sessionPromise = supabaseClient.auth.getSession();
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error("getSession timeout after 5 seconds"));
+          }, 5_000);
+        });
+        
+        const sessionResult = await Promise.race([sessionPromise, timeoutPromise]);
+        session = (sessionResult as any).data?.session;
+        console.log("[DocumentsSidebar] Session retrieved:", {
+          hasSession: !!session,
+          hasUser: !!session?.user,
+          userId: session?.user?.id,
+        });
+      } catch (sessionError) {
+        console.error("[DocumentsSidebar] CRITICAL: Failed to get session:", sessionError);
+        console.error("[DocumentsSidebar] Session error details:", JSON.stringify(sessionError, null, 2));
+        setIsLoading(false);
+        setDocuments([]);
+        
+        if (sessionError instanceof Error && sessionError.message.includes("timeout")) {
+          console.warn("[DocumentsSidebar] Session timeout - showing empty state");
+          // Don't show toast for timeout - just show empty state
+        } else {
+          toast({
+            title: "Session Error",
+            description: "Failed to get user session. Please refresh the page.",
+            variant: "destructive",
+          });
+        }
+        return;
+      }
 
       if (!session?.user) {
-        console.log("[DocumentsSidebar] No session, clearing documents");
+        console.log("[DocumentsSidebar] No session/user found, clearing documents");
         setDocuments([]);
         setIsLoading(false);
         return;
@@ -310,8 +343,10 @@ export const DocumentsSidebar: React.FC<{ onDocumentClick?: (jobId: string) => v
       </CardHeader>
       <CardContent className="p-2">
         {isLoading && documents.length === 0 ? (
-          <div className="flex items-center justify-center py-8">
+          <div className="flex flex-col items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            <span className="text-xs text-muted-foreground mt-2">Loading documents...</span>
+            <span className="text-[10px] text-muted-foreground/50 mt-1">Check console (F12) for details</span>
           </div>
         ) : documents.length === 0 ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
