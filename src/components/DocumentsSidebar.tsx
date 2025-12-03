@@ -288,14 +288,15 @@ export const DocumentsSidebar: React.FC<{
       
       let data, error;
       try {
-        // Use .then() to properly handle Supabase query promise
-        console.log("[DocumentsSidebar] Step 9a: Creating query promise...");
-        console.log("[DocumentsSidebar] Step 9a: About to call query.then()...");
+        // CRITICAL: Try direct await first to see if query executes
+        console.log("[DocumentsSidebar] Step 9a: Attempting direct query execution...");
+        console.log("[DocumentsSidebar] Step 9a: About to await query directly...");
         
-        // CRITICAL: Add error handler to catch any immediate errors
-        const queryPromise = query.then(
-          (result) => {
-            console.log("[DocumentsSidebar] Step 9b: Query promise resolved:", {
+        // Create a promise that will timeout if query hangs
+        const directQueryPromise = (async () => {
+          try {
+            const result = await query;
+            console.log("[DocumentsSidebar] Step 9b: Direct query completed:", {
               hasData: !!result.data,
               dataLength: result.data?.length || 0,
               hasError: !!result.error,
@@ -306,20 +307,14 @@ export const DocumentsSidebar: React.FC<{
               data: result.data,
               error: result.error,
             };
-          },
-          (rejectionError) => {
-            console.error("[DocumentsSidebar] Step 9b: Query promise REJECTED:", rejectionError);
+          } catch (queryErr) {
+            console.error("[DocumentsSidebar] Step 9b: Direct query exception:", queryErr);
             return {
               data: null,
-              error: { message: rejectionError instanceof Error ? rejectionError.message : String(rejectionError) },
+              error: { message: queryErr instanceof Error ? queryErr.message : String(queryErr) },
             };
           }
-        );
-        
-        console.log("[DocumentsSidebar] Step 9a: Query promise created:", { 
-          hasPromise: !!queryPromise,
-          promiseType: typeof queryPromise 
-        });
+        })();
         
         console.log("[DocumentsSidebar] Step 9c: Creating timeout promise...");
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => {
@@ -331,7 +326,7 @@ export const DocumentsSidebar: React.FC<{
         
         console.log("[DocumentsSidebar] Step 9e: Racing query and timeout promises...");
         console.log("[DocumentsSidebar] Step 9e: About to await Promise.race...");
-        const result = await Promise.race([queryPromise, queryTimeout]);
+        const result = await Promise.race([directQueryPromise, queryTimeout]);
         console.log("[DocumentsSidebar] Step 9f: Promise.race completed, result:", {
           hasData: !!result.data,
           dataLength: result.data?.length || 0,
