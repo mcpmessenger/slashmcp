@@ -116,7 +116,6 @@ export const DocumentsSidebar: React.FC<{
   const [isLoadingRef, setIsLoadingRef] = useState(false); // Prevent concurrent loads
   const [hasError, setHasError] = useState(false); // Track if there's a persistent error
   const [deletingJobIds, setDeletingJobIds] = useState<Set<string>>(new Set()); // Track jobs being deleted
-  const [isClientReady, setIsClientReady] = useState(false); // Track if Supabase client is initialized
 
   const loadDocuments = async () => {
     // Prevent concurrent loads
@@ -299,60 +298,28 @@ export const DocumentsSidebar: React.FC<{
     }
   };
 
-  // CRITICAL FIX: Wait for Supabase client to be ready before attempting queries
-  // Use onAuthStateChange to detect when client has completed initial session check
+  // Initial load with delay to allow Supabase client to initialize
   useEffect(() => {
-    console.log("[DocumentsSidebar] Setting up auth state listener...");
-    
-    let isReady = false;
-    
-    const {
-      data: { subscription },
-    } = supabaseClient.auth.onAuthStateChange((event, session) => {
-      console.log("[DocumentsSidebar] Auth state change:", event, { hasSession: !!session });
-      
-      // 'INITIAL_SESSION' event fires when client has checked localStorage for session
-      // This is the reliable signal that the client is ready for database operations
-      if (event === 'INITIAL_SESSION' && !isReady) {
-        console.log("[DocumentsSidebar] ✅ Client is ready (INITIAL_SESSION received)");
-        isReady = true;
-        setIsClientReady(true);
-      }
-      
-      // Fallback: If we get any auth event and client isn't ready yet, mark it ready
-      // This handles cases where INITIAL_SESSION might not fire
-      if (!isReady && (event === 'SIGNED_IN' || event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED')) {
-        console.log("[DocumentsSidebar] ✅ Client is ready (fallback - auth event received):", event);
-        isReady = true;
-        setIsClientReady(true);
-      }
-    });
-    
-    // Fallback timeout: If INITIAL_SESSION doesn't fire within 1 second, assume client is ready
-    // This handles edge cases where the event might not fire
-    const fallbackTimeout = setTimeout(() => {
-      if (!isReady) {
-        console.log("[DocumentsSidebar] ✅ Client ready (fallback timeout - assuming ready)");
-        isReady = true;
-        setIsClientReady(true);
-      }
-    }, 1_000);
-
-    // Cleanup subscription and timeout on unmount
-    return () => {
-      console.log("[DocumentsSidebar] Cleaning up auth state listener");
-      clearTimeout(fallbackTimeout);
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  // Set up polling interval for status updates (only when client is ready)
-  useEffect(() => {
-    if (!isClientReady || !propUserId) {
-      return; // Don't start polling until client is ready
+    if (!propUserId) {
+      setIsLoading(false);
+      setDocuments([]);
+      return;
     }
     
-    // Refresh every 10 seconds to show status updates (only if no persistent error)
+    // CRITICAL FIX: Add 500ms delay before initial load to allow Supabase client to initialize
+    // This resolves the race condition where query executes before client is ready
+    console.log("[DocumentsSidebar] About to call loadDocuments() after 500ms delay...");
+    const initialLoadTimeout = setTimeout(() => {
+      loadDocuments().catch((error) => {
+        console.error("[DocumentsSidebar] Error loading documents:", error);
+        setIsLoading(false);
+        setIsLoadingRef(false);
+        setDocuments([]);
+        setHasError(true);
+      });
+    }, 500);
+    
+    // Set up polling interval for status updates (only if no persistent error)
     const interval = setInterval(() => {
       if (hasError) {
         return; // Skip refresh if there's a persistent error
@@ -370,28 +337,26 @@ export const DocumentsSidebar: React.FC<{
     }, 10_000);
     
     return () => {
+      clearTimeout(initialLoadTimeout);
       clearInterval(interval);
     };
-  }, [isClientReady, propUserId, hasError]);
+  }, [propUserId, hasError]);
 
-  // Load documents when client is ready or when refreshTrigger changes
+  // Refresh when external trigger changes (e.g., when files are uploaded)
   useEffect(() => {
-    console.log("[DocumentsSidebar] ===== useEffect for document loading =====");
-    console.log("[DocumentsSidebar] Dependencies:", { propUserId, refreshTrigger, isClientReady });
-    
-    // CRITICAL: Only load documents when client is ready OR when refreshTrigger changes
-    // This eliminates the race condition where query executes before client is initialized
-    if (propUserId && (isClientReady || refreshTrigger)) {
-      console.log("[DocumentsSidebar] ✅ Conditions met - calling loadDocuments");
-      loadDocuments();
-    } else if (!propUserId) {
-      console.log("[DocumentsSidebar] ⏭️ No propUserId, skipping loadDocuments");
-      setIsLoading(false);
-      setDocuments([]);
-    } else {
-      console.log("[DocumentsSidebar] ⏳ Waiting for client to be ready...");
+    if (refreshTrigger && refreshTrigger > 0 && propUserId) {
+      console.log("[DocumentsSidebar] External refresh triggered:", refreshTrigger);
+      setHasError(false); // Reset error state on manual refresh
+      setIsLoading(true); // Show loading state
+      // Small delay to ensure database insert is complete
+      setTimeout(() => {
+        loadDocuments().catch((error) => {
+          console.error("[DocumentsSidebar] Error on external refresh:", error);
+          setIsLoading(false);
+        });
+      }, 500); // 500ms delay to allow DB insert to complete
     }
-  }, [propUserId, refreshTrigger, isClientReady]);
+  }, [refreshTrigger, propUserId]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
