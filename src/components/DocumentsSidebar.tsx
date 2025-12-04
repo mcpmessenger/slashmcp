@@ -308,6 +308,7 @@ export const DocumentsSidebar: React.FC<{
     
     // CRITICAL FIX: Add 500ms delay before initial load to allow Supabase client to initialize
     // This resolves the race condition where query executes before client is ready
+    // Updated: 2025-12-03 - Final fix using setTimeout delay
     console.log("[DocumentsSidebar] About to call loadDocuments() after 500ms delay...");
     const initialLoadTimeout = setTimeout(() => {
       loadDocuments().catch((error) => {
