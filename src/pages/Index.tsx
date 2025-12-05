@@ -83,6 +83,7 @@ const Index = () => {
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const [documentsSidebarRefreshTrigger, setDocumentsSidebarRefreshTrigger] = useState(0);
+  const [documentCount, setDocumentCount] = useState(0); // Track document count for conditional rendering
   
   // Manual reset function for stuck uploads
   const resetStuckUpload = useCallback(() => {
@@ -513,33 +514,62 @@ const Index = () => {
         {/* Chat Messages with Documents Sidebar and Chat Layout */}
         <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Left Pane: Documents Sidebar - Only show if user has documents or is logged in */}
+          {/* Left Pane: Documents Sidebar - Only show when there are documents (like logs panel) */}
+          {/* Always render DocumentsSidebar when authenticated to allow it to load, but only show panel when documents exist */}
           {(session || guestMode) && (
             <>
-              <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
-                <div className="h-full p-4">
-                  {/* Using original component with userId prop (fixes timeout issue) */}
-                  {console.log("[Index] Rendering DocumentsSidebar with:", { 
-                    hasSession: !!session, 
-                    hasGuestMode: !!guestMode,
-                    userId: session?.user?.id,
-                    userIdType: typeof session?.user?.id
-                  })}
+              {documentCount > 0 && (
+                <>
+                  <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
+                    <div className="h-full p-4">
+                      {/* Using original component with userId prop (fixes timeout issue) */}
+                      {console.log("[Index] Rendering DocumentsSidebar with:", { 
+                        hasSession: !!session, 
+                        hasGuestMode: !!guestMode,
+                        userId: session?.user?.id,
+                        userIdType: typeof session?.user?.id,
+                        documentCount
+                      })}
+                      <DocumentsSidebar
+                        refreshTrigger={documentsSidebarRefreshTrigger}
+                        userId={session?.user?.id}
+                        onDocumentClick={(jobId) => {
+                          // When document is clicked, could trigger a search or show details
+                          console.log("Document clicked:", jobId);
+                        }}
+                        onDocumentsChange={(count) => {
+                          setDocumentCount(count);
+                        }}
+                      />
+                    </div>
+                  </ResizablePanel>
+                  <ResizableHandle withHandle className="hidden lg:flex" />
+                </>
+              )}
+              {/* Hidden DocumentsSidebar to allow loading when count is 0 */}
+              {documentCount === 0 && (
+                <div className="hidden">
                   <DocumentsSidebar
                     refreshTrigger={documentsSidebarRefreshTrigger}
                     userId={session?.user?.id}
-                    onDocumentClick={(jobId) => {
-                      // When document is clicked, could trigger a search or show details
-                      console.log("Document clicked:", jobId);
+                    onDocumentsChange={(count) => {
+                      setDocumentCount(count);
                     }}
                   />
                 </div>
-              </ResizablePanel>
-              <ResizableHandle withHandle className="hidden lg:flex" />
+              )}
             </>
           )}
           {/* Middle Pane: Chat */}
-          <ResizablePanel defaultSize={session || guestMode ? 50 : 100} minSize={40} className="min-w-0">
+          <ResizablePanel 
+            defaultSize={
+              !(session || guestMode) ? 100 : // No auth: full width
+              (documentCount > 0 || mcpEvents.length > 0) ? 50 : // Has panels: half width
+              100 // Auth but no panels: full width
+            } 
+            minSize={40} 
+            className="min-w-0"
+          >
             <div className="h-full overflow-y-auto px-4 py-8">
               <div className="max-w-4xl mx-auto space-y-6">
                 {!authReady || (!session && !guestMode) ? (

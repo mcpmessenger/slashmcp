@@ -107,7 +107,8 @@ export const DocumentsSidebar: React.FC<{
   onDocumentClick?: (jobId: string) => void;
   refreshTrigger?: number; // External trigger to force refresh
   userId?: string; // Optional userId from parent (bypasses session retrieval)
-}> = ({ onDocumentClick, refreshTrigger, userId: propUserId }) => {
+  onDocumentsChange?: (count: number) => void; // Callback to notify parent of document count changes
+}> = ({ onDocumentClick, refreshTrigger, userId: propUserId, onDocumentsChange }) => {
   
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -262,6 +263,9 @@ export const DocumentsSidebar: React.FC<{
       setIsLoadingRef(false);
       setHasError(false);
       
+      // Notify parent of document count change
+      onDocumentsChange?.(docs.length);
+      
       if (docs.length === 0) {
         console.warn("[DocumentsSidebar] No documents found. Query filters:", {
           userId: userId,
@@ -283,6 +287,9 @@ export const DocumentsSidebar: React.FC<{
       setIsLoadingRef(false);
       setDocuments([]); // Clear documents on error
       setHasError(true); // Mark that there's an error
+      
+      // Notify parent of document count change (0 on error)
+      onDocumentsChange?.(0);
       
       // Only show error toast if it's not a timeout (to avoid spam)
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -402,7 +409,11 @@ export const DocumentsSidebar: React.FC<{
         description: `"${fileName}" has been deleted.`,
       });
       // Remove from local state immediately
-      setDocuments(prev => prev.filter(doc => doc.jobId !== jobId));
+      setDocuments(prev => {
+        const updated = prev.filter(doc => doc.jobId !== jobId);
+        onDocumentsChange?.(updated.length);
+        return updated;
+      });
     } catch (error) {
       console.error("Failed to delete job:", error);
       toast({
@@ -445,7 +456,11 @@ export const DocumentsSidebar: React.FC<{
         description: `Deleted ${failedJobs.length} failed job(s).`,
       });
       // Remove from local state
-      setDocuments(prev => prev.filter(doc => doc.status !== "failed"));
+      setDocuments(prev => {
+        const updated = prev.filter(doc => doc.status !== "failed");
+        onDocumentsChange?.(updated.length);
+        return updated;
+      });
     } catch (error) {
       console.error("Failed to delete failed jobs:", error);
       toast({
