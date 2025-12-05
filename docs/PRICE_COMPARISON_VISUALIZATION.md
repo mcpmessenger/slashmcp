@@ -173,3 +173,4 @@ However, **Mermaid is better for this use case** because:
 3. **The Mermaid chart will render** automatically in the chat interface
 
 
+

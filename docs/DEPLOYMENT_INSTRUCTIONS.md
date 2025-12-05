@@ -145,3 +145,4 @@ The fix is successful when:
 - ✅ Clear error messages shown to users
 - ✅ RAG pipeline works for successfully indexed documents
 
+

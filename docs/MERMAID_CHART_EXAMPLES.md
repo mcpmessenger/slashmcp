@@ -120,3 +120,4 @@ To test if Mermaid works in your chat:
 3. If not, the markdown renderer may need Mermaid support enabled
 
 
+
