@@ -180,10 +180,10 @@ export const DocumentsSidebar: React.FC<{
           .order("created_at", { ascending: false })
           .limit(50);
         
-        // Add timeout to prevent hanging
+        // Add timeout to prevent hanging (increased to 20 seconds for slow queries)
         const queryPromise = queryWithFilter;
         const timeoutPromise = new Promise<{ data: null; error: { message: string } }>((resolve) => 
-          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 10 seconds" } }), 10000)
+          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 20 seconds" } }), 20000)
         );
         
         const result = await Promise.race([
@@ -256,7 +256,7 @@ export const DocumentsSidebar: React.FC<{
               .limit(50);
             
             const fallbackTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
-              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout" } }), 8000)
+              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout" } }), 15000)
             );
             
             const fallbackResult = await Promise.race([
@@ -303,11 +303,18 @@ export const DocumentsSidebar: React.FC<{
           setIsLoading(false);
           setDocuments([]);
           
-          toast({
-            title: "Error loading documents",
-            description: error.message || "Failed to load documents. Check console for details.",
-            variant: "destructive",
-          });
+          // Only show error toast if it's not a timeout (to avoid spam, safety timeout will handle it)
+          const isTimeout = error.message?.includes("timeout") || error.message?.includes("Timeout");
+          if (!isTimeout) {
+            toast({
+              title: "Error loading documents",
+              description: error.message || "Failed to load documents. Check console for details.",
+              variant: "destructive",
+            });
+          } else {
+            // For timeouts, just log - safety timeout will clear the UI
+            console.warn("[DocumentsSidebar] Query timed out, safety timeout will clear loading state");
+          }
           return;
         }
       }
@@ -409,14 +416,21 @@ export const DocumentsSidebar: React.FC<{
     
     let safetyTimeout: NodeJS.Timeout | null = null;
     
-    // Add a safety timeout to force loading state to clear after 15 seconds
+    // Add a safety timeout to force loading state to clear after 25 seconds (after query timeout)
     safetyTimeout = setTimeout(() => {
-      console.warn("[DocumentsSidebar] Safety timeout: Forcing loading state to clear after 15s");
+      console.warn("[DocumentsSidebar] Safety timeout: Forcing loading state to clear after 25s");
       setIsLoading(false);
       setIsLoadingRef(false);
       setHasCheckedSession(true);
-      // Don't clear documents - let the query finish if it's still running
-    }, 15000);
+      // Show helpful message if still loading
+      if (documents.length === 0) {
+        toast({
+          title: "Documents loading slowly",
+          description: "Query is taking longer than expected. Try refreshing or check your connection.",
+          variant: "default",
+        });
+      }
+    }, 25000);
     
     const initialLoadTimeout = setTimeout(() => {
       loadDocuments()
