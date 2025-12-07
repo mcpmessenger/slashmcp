@@ -168,14 +168,31 @@ export const DocumentsSidebar: React.FC<{
       let data, error;
       try {
         console.log("[DocumentsSidebar] Starting query for userId:", userId);
-        // First, get all processing jobs (filter by document-analysis)
-        const { data: queryData, error: queryError } = await supabaseClient
+        // First, get all processing jobs (try with filter first, fallback without if needed)
+        let queryData, queryError;
+        
+        // Try query with analysis_target filter
+        const queryWithFilter = supabaseClient
           .from("processing_jobs")
           .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
           .eq("user_id", userId)
           .eq("analysis_target", "document-analysis")
           .order("created_at", { ascending: false })
           .limit(50);
+        
+        // Add timeout to prevent hanging
+        const queryPromise = queryWithFilter;
+        const timeoutPromise = new Promise<{ data: null; error: { message: string } }>((resolve) => 
+          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 10 seconds" } }), 10000)
+        );
+        
+        const result = await Promise.race([
+          queryPromise.then(r => ({ data: r.data, error: r.error })),
+          timeoutPromise,
+        ]);
+        
+        queryData = result.data;
+        queryError = result.error;
         
         if (queryError) {
           data = null;
@@ -228,45 +245,61 @@ export const DocumentsSidebar: React.FC<{
         });
         
         // Try a simpler query without analysis_target filter to debug
-        console.log("[DocumentsSidebar] Attempting fallback query without analysis_target filter...");
-        try {
-          const { data: fallbackData, error: fallbackError } = await supabaseClient
-            .from("processing_jobs")
-            .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
-            .eq("user_id", userId)
-            .order("created_at", { ascending: false })
-            .limit(50);
-          
-          if (!fallbackError && fallbackData) {
-            // Fetch analysis results for fallback data too
-            const jobIds = fallbackData.map(job => job.id);
-            if (jobIds.length > 0) {
-              const { data: analysisData } = await supabaseClient
-                .from("analysis_results")
-                .select("job_id, vision_summary, ocr_text")
-                .in("job_id", jobIds);
-              
-              const analysisMap = new Map(analysisData?.map(ar => [ar.job_id, ar]) || []);
-              const fallbackWithAnalysis = fallbackData.map(job => ({
-                ...job,
-                analysis_results: analysisMap.get(job.id) || null
-              }));
-              
-              // Use the fallback data if it has document-analysis jobs
-              const docJobs = fallbackWithAnalysis.filter(j => j.analysis_target === "document-analysis");
-              if (docJobs.length > 0) {
-                data = docJobs;
-                error = null;
-                console.log(`[DocumentsSidebar] Fallback query loaded ${docJobs.length} documents`);
+        if (error || !data || data.length === 0) {
+          console.log("[DocumentsSidebar] Attempting fallback query without analysis_target filter...");
+          try {
+            const fallbackQuery = supabaseClient
+              .from("processing_jobs")
+              .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
+              .eq("user_id", userId)
+              .order("created_at", { ascending: false })
+              .limit(50);
+            
+            const fallbackTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
+              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout" } }), 8000)
+            );
+            
+            const fallbackResult = await Promise.race([
+              fallbackQuery.then(r => ({ data: r.data, error: r.error })),
+              fallbackTimeout,
+            ]);
+            
+            if (!fallbackResult.error && fallbackResult.data) {
+              // Fetch analysis results for fallback data too
+              const jobIds = fallbackResult.data.map(job => job.id);
+              if (jobIds.length > 0) {
+                const { data: analysisData } = await supabaseClient
+                  .from("analysis_results")
+                  .select("job_id, vision_summary, ocr_text")
+                  .in("job_id", jobIds);
+                
+                const analysisMap = new Map(analysisData?.map(ar => [ar.job_id, ar]) || []);
+                const fallbackWithAnalysis = fallbackResult.data.map(job => ({
+                  ...job,
+                  analysis_results: analysisMap.get(job.id) || null
+                }));
+                
+                // Use the fallback data if it has document-analysis jobs, or show all if none
+                const docJobs = fallbackWithAnalysis.filter(j => j.analysis_target === "document-analysis");
+                if (docJobs.length > 0) {
+                  data = docJobs;
+                  error = null;
+                  console.log(`[DocumentsSidebar] Fallback query loaded ${docJobs.length} documents`);
+                } else if (fallbackWithAnalysis.length > 0) {
+                  // Show all jobs if no document-analysis jobs found (for debugging)
+                  data = fallbackWithAnalysis;
+                  error = null;
+                  console.log(`[DocumentsSidebar] Fallback query loaded ${fallbackWithAnalysis.length} total jobs (no document-analysis filter)`);
+                }
               }
             }
+          } catch (fallbackError) {
+            console.error("[DocumentsSidebar] Fallback query also failed:", fallbackError);
           }
-        } catch (fallbackError) {
-          console.error("[DocumentsSidebar] Fallback query also failed:", fallbackError);
         }
         
-        if (error) {
-          // CRITICAL: Always clear loading state on error
+        // CRITICAL: Always clear loading state, even if there's an error or no data
+        if (error && (!data || data.length === 0)) {
           setIsLoading(false);
           setDocuments([]);
           
@@ -308,10 +341,11 @@ export const DocumentsSidebar: React.FC<{
       });
       
       // CRITICAL: Always set documents and clear loading, even if empty
+      // This must happen regardless of whether we found documents or not
       setDocuments(docs);
       setIsLoading(false);
-      setHasCheckedSession(true);
       setIsLoadingRef(false);
+      setHasCheckedSession(true);
       setHasError(false);
       
       // Notify parent of document count change
@@ -327,8 +361,10 @@ export const DocumentsSidebar: React.FC<{
         console.warn("  2. Documents have different user_id");
         console.warn("  3. Documents have different analysis_target");
         console.warn("  4. RLS policies blocking the query");
+        console.warn("  5. Query timed out or failed silently");
       } else {
         console.log(`[DocumentsSidebar] ✅ Successfully loaded ${docs.length} document(s)`);
+        console.log(`[DocumentsSidebar] Documents with summaries: ${docs.filter(d => d.summary).length}`);
       }
     } catch (error) {
       console.error("[DocumentsSidebar] Error loading documents:", error);
@@ -336,8 +372,10 @@ export const DocumentsSidebar: React.FC<{
       // CRITICAL: Always clear loading state even on error
       setIsLoading(false);
       setIsLoadingRef(false);
+      setHasCheckedSession(true);
       setDocuments([]); // Clear documents on error
       setHasError(true); // Mark that there's an error
+      onDocumentsChange?.(0); // Notify parent of 0 documents
       
       // Notify parent of document count change (0 on error)
       onDocumentsChange?.(0);
@@ -368,14 +406,31 @@ export const DocumentsSidebar: React.FC<{
     // This resolves the race condition where query executes before client is ready
     // Updated: 2025-12-03 - Final fix using setTimeout delay
     console.log("[DocumentsSidebar] About to call loadDocuments() after 500ms delay...");
+    
+    let safetyTimeout: NodeJS.Timeout | null = null;
+    
+    // Add a safety timeout to force loading state to clear after 15 seconds
+    safetyTimeout = setTimeout(() => {
+      console.warn("[DocumentsSidebar] Safety timeout: Forcing loading state to clear after 15s");
+      setIsLoading(false);
+      setIsLoadingRef(false);
+      setHasCheckedSession(true);
+      // Don't clear documents - let the query finish if it's still running
+    }, 15000);
+    
     const initialLoadTimeout = setTimeout(() => {
-      loadDocuments().catch((error) => {
-        console.error("[DocumentsSidebar] Error loading documents:", error);
-        setIsLoading(false);
-        setIsLoadingRef(false);
-        setDocuments([]);
-        setHasError(true);
-      });
+      loadDocuments()
+        .then(() => {
+          if (safetyTimeout) clearTimeout(safetyTimeout); // Clear safety timeout if query completes
+        })
+        .catch((error) => {
+          if (safetyTimeout) clearTimeout(safetyTimeout); // Clear safety timeout on error
+          console.error("[DocumentsSidebar] Error loading documents:", error);
+          setIsLoading(false);
+          setIsLoadingRef(false);
+          setDocuments([]);
+          setHasError(true);
+        });
     }, 500);
     
     // Set up polling interval for status updates (only if no persistent error)
@@ -397,6 +452,7 @@ export const DocumentsSidebar: React.FC<{
     
     return () => {
       clearTimeout(initialLoadTimeout);
+      if (safetyTimeout) clearTimeout(safetyTimeout);
       clearInterval(interval);
     };
   }, [propUserId, hasError]);

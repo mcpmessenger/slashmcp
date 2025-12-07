@@ -32,7 +32,8 @@ $functions = @(
     "doc-context", 
     "textract-worker",
     "uploads",
-    "agent-orchestrator-v1"
+    "agent-orchestrator-v1",
+    "playwright-wrapper"
 )
 
 foreach ($function in $functions) {
