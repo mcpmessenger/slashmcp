@@ -974,9 +974,9 @@ export function ChatInput({
         if (response.uploadUrl) {
           const uploadResp = await fetch(response.uploadUrl, {
             method: "PUT",
-            headers: {
-              "Content-Type": file.type || "application/octet-stream",
-            },
+            headers: file.type
+              ? { "Content-Type": file.type }
+              : {},
             body: file,
           });
 
