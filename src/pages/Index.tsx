@@ -381,33 +381,6 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Sign-in prompt banner */}
-      {authReady && !session && !guestMode && !oauthJustCompleted && (
-        <div className="mx-4 mt-4 mb-0 rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 flex items-start gap-3">
-          <AlertCircle className="h-5 w-5 text-amber-500 flex-shrink-0 mt-0.5" />
-          <div className="flex-1">
-            <h3 className="font-semibold text-foreground mb-1">Sign in required</h3>
-            <p className="text-sm text-muted-foreground mb-3">
-              Please sign in to use MCP Messenger. Sign in with Google to access all features including chat, workflows, and MCP tools.
-            </p>
-            <button
-              type="button"
-              onClick={() => void signInWithGoogle()}
-              disabled={isAuthLoading}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors",
-                isAuthLoading
-                  ? "opacity-60 cursor-not-allowed"
-                  : "hover:bg-primary/90"
-              )}
-            >
-              <LogIn className="h-4 w-4" />
-              <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
-            </button>
-          </div>
-        </div>
-      )}
-      
       {/* Header with logo and navigation */}
       <PageHeader>
         {authReady && (
