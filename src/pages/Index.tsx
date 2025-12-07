@@ -84,6 +84,7 @@ const Index = () => {
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const [documentsSidebarRefreshTrigger, setDocumentsSidebarRefreshTrigger] = useState(0);
   const [documentCount, setDocumentCount] = useState(0); // Track document count for conditional rendering
+  const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Debounce refresh triggers
   
   // Manual reset function for stuck uploads
   const resetStuckUpload = useCallback(() => {
@@ -514,50 +515,25 @@ const Index = () => {
         {/* Chat Messages with Documents Sidebar and Chat Layout */}
         <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Left Pane: Documents Sidebar - Only show when there are documents (like logs panel) */}
-          {/* Always render DocumentsSidebar when authenticated to allow it to load, but only show panel when documents exist */}
+          {/* Left Pane: Documents Sidebar - Show when authenticated (like logs panel on right) */}
           {(session || guestMode) && (
             <>
-              {documentCount > 0 && (
-                <>
-                  <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
-                    <div className="h-full p-4">
-                      {/* Using original component with userId prop (fixes timeout issue) */}
-                      {console.log("[Index] Rendering DocumentsSidebar with:", { 
-                        hasSession: !!session, 
-                        hasGuestMode: !!guestMode,
-                        userId: session?.user?.id,
-                        userIdType: typeof session?.user?.id,
-                        documentCount
-                      })}
-                      <DocumentsSidebar
-                        refreshTrigger={documentsSidebarRefreshTrigger}
-                        userId={session?.user?.id}
-                        onDocumentClick={(jobId) => {
-                          // When document is clicked, could trigger a search or show details
-                          console.log("Document clicked:", jobId);
-                        }}
-                        onDocumentsChange={(count) => {
-                          setDocumentCount(count);
-                        }}
-                      />
-                    </div>
-                  </ResizablePanel>
-                  <ResizableHandle withHandle className="hidden lg:flex" />
-                </>
-              )}
-              {/* Hidden DocumentsSidebar to allow loading when count is 0 */}
-              {documentCount === 0 && (
-                <div className="hidden">
+              <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
+                <div className="h-full p-4">
                   <DocumentsSidebar
                     refreshTrigger={documentsSidebarRefreshTrigger}
                     userId={session?.user?.id}
+                    onDocumentClick={(jobId) => {
+                      // When document is clicked, could trigger a search or show details
+                      console.log("Document clicked:", jobId);
+                    }}
                     onDocumentsChange={(count) => {
                       setDocumentCount(count);
                     }}
                   />
                 </div>
-              )}
+              </ResizablePanel>
+              <ResizableHandle withHandle className="hidden lg:flex" />
             </>
           )}
           {/* Middle Pane: Chat */}
@@ -829,7 +805,7 @@ const Index = () => {
                   job.status === "queued" || job.status === "processing" || job.status === "uploading"
                 );
                 const uploadedJobs = uploadJobs.filter(job => 
-                  job.status === "completed" && (job.stage === "uploaded" || !job.stage || job.stage === "unknown")
+                  job.status === "completed" && (job.stage === "uploaded" || !job.stage)
                 );
                 
                 if (processingJobs.length > 0) {
@@ -874,13 +850,22 @@ const Index = () => {
               setUploadJobs(jobs);
               setIsRegisteringUpload(isRegistering);
               // Trigger DocumentsSidebar refresh when new jobs are added or status changes
-              // Add a small delay to allow database insert to complete
-              if (jobs.length > 0) {
+              // Use debouncing to prevent infinite refresh loops
+              // Only trigger if jobs actually changed (not just re-render)
+              const previousJobIds = uploadJobs.map(j => j.id).sort().join(',');
+              const currentJobIds = jobs.map(j => j.id).sort().join(',');
+              const jobsChanged = previousJobIds !== currentJobIds;
+              
+              if (jobs.length > 0 && jobsChanged) {
                 console.log("[Index] Triggering DocumentsSidebar refresh due to job changes");
-                // Delay refresh slightly to ensure database insert is complete
-                setTimeout(() => {
+                // Debounce: clear any pending refresh and set a new one
+                if (refreshTimeoutRef.current) {
+                  clearTimeout(refreshTimeoutRef.current);
+                }
+                refreshTimeoutRef.current = setTimeout(() => {
                   setDocumentsSidebarRefreshTrigger(prev => prev + 1);
-                }, 1000); // 1 second delay
+                  refreshTimeoutRef.current = null;
+                }, 2000); // 2 second delay with debouncing
               }
             }}
             onEvent={(event) => {

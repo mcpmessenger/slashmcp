@@ -621,10 +621,37 @@ function formatMcpResult(result: McpInvocationResult): string {
 
   if (result.type === "json") {
     try {
-      const dataStr = JSON.stringify(result.data, null, 2);
-      // For search results, format them nicely
-      if (result.data && typeof result.data === "object" && "results" in result.data) {
-        const searchData = result.data as { query?: string; maxResults?: number; results?: Array<{ title: string; url: string; snippet: string }> };
+      const data = result.data;
+      
+      // Format marketplace listings (Craigslist, Facebook Marketplace, etc.)
+      if (data && typeof data === "object" && "listings" in data && Array.isArray((data as { listings: unknown }).listings)) {
+        const listingData = data as { 
+          listings: Array<{ title: string; price: string; location: string; url: string; date?: string; image?: string }>;
+          totalFound?: number;
+          message?: string;
+          source?: string;
+          note?: string;
+        };
+        const listings = listingData.listings ?? [];
+        
+        if (listings.length > 0) {
+          const sourceName = listingData.source === "facebook-marketplace" ? "Facebook Marketplace" : 
+                           listingData.source === "craigslist" ? "Craigslist" : "Marketplace";
+          const header = result.summary || listingData.message || `Found ${listings.length} listing${listings.length !== 1 ? "s" : ""} on ${sourceName}`;
+          const formattedListings = listings.map((listing, i) => {
+            const priceInfo = listing.price && listing.price !== "Price not listed" ? ` - **${listing.price}**` : "";
+            const locationInfo = listing.location && listing.location !== "Location not specified" ? ` (${listing.location})` : "";
+            const imageInfo = listing.image ? `\n   📷 Image: ${listing.image}` : "";
+            return `${i + 1}. **${listing.title}**${priceInfo}${locationInfo}${imageInfo}\n   🔗 ${listing.url}`;
+          });
+          const note = listingData.note ? `\n\n⚠️ ${listingData.note}` : "";
+          return `${header}${note}\n\n${formattedListings.join("\n\n")}`;
+        }
+      }
+      
+      // Format search results (web search, etc.)
+      if (data && typeof data === "object" && "results" in data) {
+        const searchData = data as { query?: string; maxResults?: number; results?: Array<{ title: string; url: string; snippet: string }> };
         const results = searchData.results ?? [];
         if (results.length > 0) {
           const lines = results.map((r, i) => {
@@ -634,8 +661,33 @@ function formatMcpResult(result: McpInvocationResult): string {
           return `${header}${lines.join("\n\n")}`;
         }
       }
+      
+      // Format browser navigation results (make them more user-friendly)
+      if (data && typeof data === "object" && "pageInfo" in data && "url" in data) {
+        const navData = data as { 
+          url: string; 
+          status: number;
+          pageInfo: { title: string; links?: string[]; headings?: string[] };
+          message?: string;
+        };
+        const statusText = navData.status === 200 ? "✅ Successfully loaded" : `⚠️ Status ${navData.status}`;
+        let output = `${statusText}: ${navData.pageInfo.title}\n🔗 ${navData.url}`;
+        
+        // If it's a Craigslist homepage, suggest searching
+        if (navData.url.includes("craigslist.org") && !navData.url.includes("/search/")) {
+          output += "\n\n💡 **Tip:** To search for items, navigate to a search URL like:\n`https://[city].craigslist.org/search/cta?query=shuttle+bus`\n(Replace [city] with your city, e.g., chicago, detroit, milwaukee)";
+        }
+        
+        return output;
+      }
+      
       // For other JSON, show summary if available, otherwise show formatted JSON
+      const dataStr = JSON.stringify(data, null, 2);
       if (result.summary) {
+        // If summary is clear enough, just show it without the JSON dump
+        if (result.summary.length > 20 && !dataStr.includes("pageInfo") && !dataStr.includes("listings")) {
+          return result.summary;
+        }
         return `${result.summary}\n\n\`\`\`json\n${dataStr}\n\`\`\``;
       }
       return `\`\`\`json\n${dataStr}\n\`\`\``;
