@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { supabaseClient } from "@/lib/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -101,6 +101,9 @@ interface Document {
   stage: string;
   createdAt: string;
   updatedAt: string;
+  summary?: string | null; // vision_summary or ocr_text preview
+  visionSummary?: string | null;
+  ocrText?: string | null;
 }
 
 export const DocumentsSidebar: React.FC<{ 
@@ -161,23 +164,51 @@ export const DocumentsSidebar: React.FC<{
       // Client should be ready at this point (checked by onAuthStateChange)
       setHasCheckedSession(true);
       
-      // Execute query directly - matching ragService.ts pattern exactly
+      // Execute query - first get jobs, then fetch summaries separately
       let data, error;
       try {
+        console.log("[DocumentsSidebar] Starting query for userId:", userId);
+        // First, get all processing jobs (filter by document-analysis)
         const { data: queryData, error: queryError } = await supabaseClient
           .from("processing_jobs")
           .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
           .eq("user_id", userId)
+          .eq("analysis_target", "document-analysis")
           .order("created_at", { ascending: false })
           .limit(50);
         
-        data = queryData;
-        error = queryError;
-        
-        if (error) {
-          console.error("[DocumentsSidebar] Query error:", error);
+        if (queryError) {
+          data = null;
+          error = queryError;
+          console.error("[DocumentsSidebar] Query error:", queryError);
         } else {
+          data = queryData;
           console.log(`[DocumentsSidebar] Loaded ${data?.length || 0} documents`);
+          
+          // If we have jobs, fetch their analysis results separately
+          if (data && data.length > 0) {
+            const jobIds = data.map(job => job.id);
+            const { data: analysisData, error: analysisError } = await supabaseClient
+              .from("analysis_results")
+              .select("job_id, vision_summary, ocr_text")
+              .in("job_id", jobIds);
+            
+            if (!analysisError && analysisData) {
+              // Create a map of job_id -> analysis_result
+              const analysisMap = new Map(analysisData.map(ar => [ar.job_id, ar]));
+              
+              // Attach analysis results to jobs
+              data = data.map(job => ({
+                ...job,
+                analysis_results: analysisMap.get(job.id) || null
+              }));
+              
+              console.log(`[DocumentsSidebar] Loaded ${analysisData.length} analysis results`);
+            } else if (analysisError) {
+              console.warn("[DocumentsSidebar] Failed to load analysis results:", analysisError);
+              // Continue without summaries - not critical
+            }
+          }
         }
       } catch (queryError) {
         console.error("[DocumentsSidebar] Query exception:", queryError);
@@ -199,28 +230,35 @@ export const DocumentsSidebar: React.FC<{
         // Try a simpler query without analysis_target filter to debug
         console.log("[DocumentsSidebar] Attempting fallback query without analysis_target filter...");
         try {
-          const fallbackQuery = supabaseClient
+          const { data: fallbackData, error: fallbackError } = await supabaseClient
             .from("processing_jobs")
             .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
             .eq("user_id", userId)
             .order("created_at", { ascending: false })
             .limit(50);
           
-          const fallbackResult = await Promise.race([
-            fallbackQuery.then(r => ({ data: r.data, error: r.error })),
-            new Promise<{ data: null; error: { message: string } }>((resolve) => 
-              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout" } }), 5000)
-            ),
-          ]);
-          
-          if (fallbackResult.data) {
-            // Fallback query succeeded - use the data
-            
-            // Use the fallback data if it has document-analysis jobs
-            const docJobs = fallbackResult.data.filter(j => j.analysis_target === "document-analysis");
-            if (docJobs.length > 0) {
-              data = docJobs;
-              error = null;
+          if (!fallbackError && fallbackData) {
+            // Fetch analysis results for fallback data too
+            const jobIds = fallbackData.map(job => job.id);
+            if (jobIds.length > 0) {
+              const { data: analysisData } = await supabaseClient
+                .from("analysis_results")
+                .select("job_id, vision_summary, ocr_text")
+                .in("job_id", jobIds);
+              
+              const analysisMap = new Map(analysisData?.map(ar => [ar.job_id, ar]) || []);
+              const fallbackWithAnalysis = fallbackData.map(job => ({
+                ...job,
+                analysis_results: analysisMap.get(job.id) || null
+              }));
+              
+              // Use the fallback data if it has document-analysis jobs
+              const docJobs = fallbackWithAnalysis.filter(j => j.analysis_target === "document-analysis");
+              if (docJobs.length > 0) {
+                data = docJobs;
+                error = null;
+                console.log(`[DocumentsSidebar] Fallback query loaded ${docJobs.length} documents`);
+              }
             }
           }
         } catch (fallbackError) {
@@ -244,6 +282,16 @@ export const DocumentsSidebar: React.FC<{
       const docs = (data || []).map((job: any) => {
         const metadata = job.metadata as Record<string, unknown> | null;
         const stage = metadata?.job_stage as string | undefined;
+        
+        // Extract summary from analysis_results (now a single object or null)
+        const analysisResult = job.analysis_results || null;
+        
+        const visionSummary = analysisResult?.vision_summary || null;
+        const ocrText = analysisResult?.ocr_text || null;
+        
+        // Prefer vision_summary, fallback to first 200 chars of ocr_text
+        const summary = visionSummary || (ocrText ? ocrText.substring(0, 200) + (ocrText.length > 200 ? "..." : "") : null);
+        
         return {
           jobId: job.id,
           fileName: job.file_name,
@@ -253,6 +301,9 @@ export const DocumentsSidebar: React.FC<{
           stage: stage || "unknown",
           createdAt: job.created_at,
           updatedAt: job.updated_at,
+          summary,
+          visionSummary,
+          ocrText: ocrText ? (ocrText.length > 200 ? ocrText.substring(0, 200) + "..." : ocrText) : null,
         };
       });
       
@@ -351,18 +402,23 @@ export const DocumentsSidebar: React.FC<{
   }, [propUserId, hasError]);
 
   // Refresh when external trigger changes (e.g., when files are uploaded)
+  // Use ref to track last refresh trigger to prevent duplicate refreshes
+  const lastRefreshTriggerRef = useRef<number>(0);
   useEffect(() => {
-    if (refreshTrigger && refreshTrigger > 0 && propUserId) {
+    if (refreshTrigger && refreshTrigger > 0 && propUserId && refreshTrigger !== lastRefreshTriggerRef.current) {
+      lastRefreshTriggerRef.current = refreshTrigger;
       console.log("[DocumentsSidebar] External refresh triggered:", refreshTrigger);
       setHasError(false); // Reset error state on manual refresh
       setIsLoading(true); // Show loading state
       // Small delay to ensure database insert is complete
-      setTimeout(() => {
+      const refreshTimeout = setTimeout(() => {
         loadDocuments().catch((error) => {
           console.error("[DocumentsSidebar] Error on external refresh:", error);
           setIsLoading(false);
         });
-      }, 500); // 500ms delay to allow DB insert to complete
+      }, 1000); // 1 second delay to allow DB insert to complete
+      
+      return () => clearTimeout(refreshTimeout);
     }
   }, [refreshTrigger, propUserId]);
 
@@ -571,6 +627,11 @@ export const DocumentsSidebar: React.FC<{
                       <p className="text-[10px] text-muted-foreground mt-0.5">
                         {formatFileSize(doc.fileSize)}
                       </p>
+                      {doc.summary && (
+                        <p className="text-[10px] text-muted-foreground mt-1.5 line-clamp-2" title={doc.summary}>
+                          {doc.summary}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </button>

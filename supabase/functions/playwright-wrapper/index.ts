@@ -77,6 +77,186 @@ function extractPageInfo(html: string): {
   return { title, links: links.slice(0, 20), buttons: buttons.slice(0, 20), headings: headings.slice(0, 10) };
 }
 
+// Helper: Parse Craigslist listings from HTML
+function parseCraigslistListings(html: string, baseUrl: string): Array<{
+  title: string;
+  price: string;
+  location: string;
+  url: string;
+  date?: string;
+}> {
+  const listings: Array<{ title: string; price: string; location: string; url: string; date?: string }> = [];
+  
+  // Craigslist search results are typically in <li class="cl-search-result"> or similar
+  // Try multiple patterns to catch different Craigslist layouts
+  const listingPatterns = [
+    // Modern Craigslist format
+    /<li[^>]*class="[^"]*cl-search-result[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+    // Alternative format
+    /<li[^>]*class="[^"]*result-row[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+  ];
+
+  for (const pattern of listingPatterns) {
+    const matches = html.matchAll(pattern);
+    for (const match of matches) {
+      const listingHtml = match[1];
+      
+      // Extract title and URL
+      const titleMatch = listingHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/a>/i) ||
+                        listingHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/i);
+      
+      if (titleMatch) {
+        let href = titleMatch[1];
+        const title = titleMatch[2].trim().replace(/\s+/g, " ");
+        
+        // Make URL absolute
+        if (href.startsWith("/")) {
+          const urlObj = new URL(baseUrl);
+          href = `${urlObj.protocol}//${urlObj.host}${href}`;
+        } else if (!href.startsWith("http")) {
+          href = `${baseUrl}${href}`;
+        }
+        
+        // Extract price
+        const priceMatch = listingHtml.match(/<span[^>]*class="[^"]*price[^"]*"[^>]*>([^<]+)<\/span>/i) ||
+                          listingHtml.match(/\$\d+/);
+        const price = priceMatch ? priceMatch[1]?.trim() || priceMatch[0] : "Price not listed";
+        
+        // Extract location
+        const locationMatch = listingHtml.match(/<span[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)<\/span>/i) ||
+                             listingHtml.match(/<span[^>]*class="[^"]*result-hood[^"]*"[^>]*>([^<]+)<\/span>/i);
+        const location = locationMatch ? locationMatch[1].trim() : "Location not specified";
+        
+        // Extract date
+        const dateMatch = listingHtml.match(/<time[^>]*datetime=["']([^"']+)["'][^>]*>/i) ||
+                         listingHtml.match(/<span[^>]*class="[^"]*date[^"]*"[^>]*>([^<]+)<\/span>/i);
+        const date = dateMatch ? dateMatch[1] : undefined;
+        
+        listings.push({ title, price, location, url: href, date });
+      }
+    }
+    
+    if (listings.length > 0) break; // Use first pattern that finds results
+  }
+  
+  return listings.slice(0, 50); // Limit to 50 listings
+}
+
+// Helper: Parse Facebook Marketplace listings from HTML
+function parseFacebookMarketplaceListings(html: string, baseUrl: string): Array<{
+  title: string;
+  price: string;
+  location: string;
+  url: string;
+  image?: string;
+}> {
+  const listings: Array<{ title: string; price: string; location: string; url: string; image?: string }> = [];
+  
+  // Facebook Marketplace uses various HTML structures
+  // Try to find listing containers - Facebook often uses data attributes or specific class patterns
+  const listingPatterns = [
+    // Pattern for marketplace item links
+    /<a[^>]+href=["'](\/marketplace\/item\/[^"']+)["'][^>]*>/gi,
+    // Alternative: look for marketplace item containers
+    /<div[^>]*class="[^"]*marketplace[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+  ];
+
+  // Extract all marketplace item URLs first
+  const itemUrlMatches = html.matchAll(/href=["'](\/marketplace\/item\/[^"']+)["']/gi);
+  const seenUrls = new Set<string>();
+  
+  for (const match of itemUrlMatches) {
+    let href = match[1];
+    if (href.startsWith("/")) {
+      href = `https://www.facebook.com${href}`;
+    }
+    
+    if (seenUrls.has(href)) continue;
+    seenUrls.add(href);
+    
+    // Try to find the listing details near this URL in the HTML
+    // Facebook Marketplace listings are often in nearby elements
+    const contextStart = Math.max(0, match.index! - 500);
+    const contextEnd = Math.min(html.length, match.index! + 2000);
+    const context = html.substring(contextStart, contextEnd);
+    
+    // Extract title - often in aria-label or nearby text
+    const titleMatch = context.match(/aria-label=["']([^"']+)["']/i) ||
+                      context.match(/<span[^>]*>([^<]{10,100})<\/span>/i) ||
+                      context.match(/<div[^>]*>([^<]{10,100})<\/div>/i);
+    const title = titleMatch ? titleMatch[1].trim().replace(/\s+/g, " ") : "Untitled Listing";
+    
+    // Extract price - Facebook often shows prices in specific formats
+    const priceMatch = context.match(/\$[\d,]+/g) || 
+                      context.match(/<span[^>]*>(\$[\d,]+)<\/span>/i);
+    const price = priceMatch ? (Array.isArray(priceMatch) ? priceMatch[0] : priceMatch[1] || priceMatch[0]) : "Price not listed";
+    
+    // Extract location - often in location-related spans
+    const cityStatePattern = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*[A-Z]{2}/;
+    const locationMatch = context.match(/<span[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)<\/span>/i) ||
+                         context.match(cityStatePattern);
+    const location = locationMatch ? locationMatch[1] : "Location not specified";
+    
+    // Extract image URL if available
+    const imageMatch = context.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i);
+    const image = imageMatch ? imageMatch[1] : undefined;
+    
+    listings.push({ title, price, location, url: href, image });
+  }
+  
+  // Alternative: Try to parse from structured data (JSON-LD or similar)
+  const jsonLdMatches = html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi);
+  for (const match of jsonLdMatches) {
+    try {
+      const data = JSON.parse(match[1]);
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          if (item["@type"] === "Product" || item["@type"] === "Offer") {
+            const url = item.url || item.mainEntityOfPage?.["@id"];
+            if (url && url.includes("/marketplace/item/") && !seenUrls.has(url)) {
+              seenUrls.add(url);
+              listings.push({
+                title: item.name || "Untitled Listing",
+                price: item.offers?.price ? `$${item.offers.price}` : "Price not listed",
+                location: item.availableAtOrFrom?.address?.addressLocality || "Location not specified",
+                url: url.startsWith("http") ? url : `https://www.facebook.com${url}`,
+                image: item.image,
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore JSON parse errors
+    }
+  }
+  
+  return listings.slice(0, 50); // Limit to 50 listings
+}
+
+// Helper: Extract plain text from HTML (removes tags)
+function extractPlainText(html: string): string {
+  // Remove script and style tags
+  let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "");
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "");
+  
+  // Replace common HTML entities
+  text = text.replace(/&nbsp;/g, " ");
+  text = text.replace(/&amp;/g, "&");
+  text = text.replace(/&lt;/g, "<");
+  text = text.replace(/&gt;/g, ">");
+  text = text.replace(/&quot;/g, '"');
+  text = text.replace(/&#39;/g, "'");
+  
+  // Remove HTML tags
+  text = text.replace(/<[^>]+>/g, " ");
+  
+  // Clean up whitespace
+  text = text.replace(/\s+/g, " ").trim();
+  
+  return text;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
@@ -289,7 +469,95 @@ serve(async (req) => {
           result = {
             type: "text",
             content: `[Playwright] Simulated click on: ${element} (ref: ${ref})\n\nNote: Full browser automation requires a headless browser service. This is a simplified HTTP-based simulation.`,
-            summary: `Click ${element} (simulated)`,
+          };
+        }
+        break;
+      }
+
+      case "browser_extract_text": {
+        const url = args.url || invocation.positionalArgs?.[0];
+        if (!url) {
+          result = {
+            type: "error",
+            message: "Missing required parameter: url",
+          };
+          break;
+        }
+
+        try {
+          new URL(url); // Validate URL format
+          const { content, status } = await fetchPage(url);
+          const pageInfo = extractPageInfo(content);
+          
+          // Check if this is a Craigslist search results page
+          const isCraigslistSearch = url.includes("craigslist.org") && (url.includes("/search/") || url.includes("query="));
+          
+          // Check if this is a Facebook Marketplace search page
+          const isFacebookMarketplace = url.includes("facebook.com") && (url.includes("/marketplace") || url.includes("marketplace"));
+          
+          if (isCraigslistSearch) {
+            // Parse Craigslist listings
+            const listings = parseCraigslistListings(content, url);
+            
+            if (listings.length > 0) {
+              result = {
+                type: "json",
+                data: {
+                  url,
+                  status,
+                  source: "craigslist",
+                  listings,
+                  totalFound: listings.length,
+                  message: `Found ${listings.length} listing${listings.length !== 1 ? "s" : ""} on Craigslist`,
+                },
+                summary: `Found ${listings.length} Craigslist listing${listings.length !== 1 ? "s" : ""} for your search`,
+              };
+            } else {
+              // Fallback to plain text extraction if no structured listings found
+              const plainText = extractPlainText(content);
+              result = {
+                type: "text",
+                content: plainText.substring(0, 5000), // Limit to 5000 chars
+              };
+            }
+          } else if (isFacebookMarketplace) {
+            // Parse Facebook Marketplace listings
+            const listings = parseFacebookMarketplaceListings(content, url);
+            
+            if (listings.length > 0) {
+              result = {
+                type: "json",
+                data: {
+                  url,
+                  status,
+                  source: "facebook-marketplace",
+                  listings,
+                  totalFound: listings.length,
+                  message: `Found ${listings.length} listing${listings.length !== 1 ? "s" : ""} on Facebook Marketplace`,
+                  note: "Note: Facebook Marketplace requires login and JavaScript. Results may be limited with HTTP-based scraping.",
+                },
+                summary: `Found ${listings.length} Facebook Marketplace listing${listings.length !== 1 ? "s" : ""} for your search`,
+              };
+            } else {
+              // Fallback to plain text extraction if no structured listings found
+              const plainText = extractPlainText(content);
+              result = {
+                type: "text",
+                content: plainText.substring(0, 5000) + "\n\nNote: Facebook Marketplace requires login and JavaScript. For better results, use a headless browser service with authentication.",
+              };
+            }
+          } else {
+            // For non-Craigslist pages, extract plain text
+            const plainText = extractPlainText(content);
+            result = {
+              type: "text",
+              content: plainText.substring(0, 10000), // Limit to 10000 chars
+            };
+          }
+        } catch (error) {
+          result = {
+            type: "error",
+            message: error instanceof Error ? error.message : `Invalid URL: ${url}`,
           };
         }
         break;
@@ -332,7 +600,7 @@ serve(async (req) => {
       default:
         result = {
           type: "error",
-          message: `Unsupported command: ${command}. Supported: browser_navigate, browser_snapshot, browser_click, browser_take_screenshot`,
+          message: `Unsupported command: ${command}. Supported: browser_navigate, browser_snapshot, browser_click, browser_extract_text, browser_take_screenshot`,
         };
     }
 
