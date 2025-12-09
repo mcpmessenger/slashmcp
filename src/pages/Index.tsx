@@ -121,6 +121,48 @@ const Index = () => {
     }
   }, [uploadJobs]);
 
+  // Check for already-completed documents on mount and show summaries
+  useEffect(() => {
+    if (!authReady || (!session && !guestMode)) return;
+    
+    const checkCompletedDocuments = async () => {
+      try {
+        const userId = session?.user?.id;
+        if (!userId) return;
+        
+        // Query for completed documents that haven't been summarized yet
+        const { data: dbJobs, error } = await supabaseClient
+          .from("processing_jobs")
+          .select("id, file_name, status, metadata")
+          .eq("user_id", userId)
+          .in("analysis_target", ["document-analysis", "image-ocr"])
+          .eq("status", "completed")
+          .order("created_at", { ascending: false })
+          .limit(10); // Check last 10 documents
+        
+        if (!error && dbJobs && dbJobs.length > 0) {
+          console.log(`[Index] Found ${dbJobs.length} completed documents on page load, checking for summaries...`);
+          
+          // Show summaries for documents that haven't been summarized yet
+          for (const job of dbJobs) {
+            if (!summarizedJobsRef.current.has(job.id)) {
+              // Small delay to avoid spamming chat
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await showDocumentSummary(job.id, job.file_name);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("[Index] Failed to check for completed documents on load:", error);
+      }
+    };
+    
+    // Only check once after auth is ready
+    const timeoutId = setTimeout(checkCompletedDocuments, 2000); // Wait 2 seconds after mount
+    
+    return () => clearTimeout(timeoutId);
+  }, [authReady, session, guestMode, showDocumentSummary]);
+
   // Auto-show panels when new documents are detected
   useEffect(() => {
     // Skip if still initializing
@@ -172,6 +214,109 @@ const Index = () => {
   }, [mcpEvents.length, panelsVisible, toast]);
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Debounce refresh triggers
   const summarizedJobsRef = useRef<Set<string>>(new Set()); // Track which jobs we've already shown summary for
+  
+  // Helper function to show document summary in chat
+  const showDocumentSummary = useCallback(async (jobId: string, fileName: string) => {
+    // Skip if already summarized
+    if (summarizedJobsRef.current.has(jobId)) {
+      return;
+    }
+    
+    try {
+      console.log(`[Index] Fetching summary for completed document: ${fileName} (${jobId})`);
+      const result = await fetchJobStatus(jobId);
+      
+      if (result.job.status !== "completed") {
+        return; // Not completed yet
+      }
+      
+      summarizedJobsRef.current.add(jobId);
+      
+      // Get summary from analysis results
+      const analysisResult = result.result;
+      const visionSummary = analysisResult?.vision_summary;
+      const ocrText = analysisResult?.ocr_text;
+      
+      // Prefer vision summary, fallback to OCR text preview
+      let summary = visionSummary;
+      let summaryType = "vision";
+      if (!summary && ocrText) {
+        summary = ocrText.substring(0, 800);
+        if (ocrText.length > 800) {
+          summary += "...";
+        }
+        summaryType = "ocr";
+      }
+      if (!summary) {
+        summary = "Document processed successfully and is ready for queries.";
+        summaryType = "generic";
+      }
+      
+      // Get document metadata
+      const metadata = result.job.metadata as Record<string, unknown> | null;
+      const fileSize = metadata?.file_size as number | undefined;
+      const fileSizeKB = fileSize ? Math.round(fileSize / 1024) : null;
+      const pageCount = metadata?.page_count as number | undefined;
+      const wordCount = ocrText ? ocrText.split(/\s+/).length : null;
+      const stage = metadata?.job_stage as string | undefined;
+      
+      // Check if document is indexed for RAG
+      const isIndexed = stage === "indexed" || stage === "extracted" || stage === "injected";
+      
+      const ragStatus = isIndexed 
+        ? "✅ **Indexed for RAG** - Ready for semantic search"
+        : "⏳ **Indexing in progress** - Will be available for RAG shortly";
+      
+      // Build detailed summary message
+      let summaryMessage = `📄 **${fileName}** processing complete!\n\n`;
+      
+      // Add document metadata
+      const metadataParts: string[] = [];
+      if (fileSizeKB) metadataParts.push(`${fileSizeKB}KB`);
+      if (pageCount) metadataParts.push(`${pageCount} page${pageCount > 1 ? 's' : ''}`);
+      if (wordCount) metadataParts.push(`${wordCount.toLocaleString()} words`);
+      if (metadataParts.length > 0) {
+        summaryMessage += `📊 **Document Info:** ${metadataParts.join(' • ')}\n\n`;
+      }
+      
+      // Add summary content
+      summaryMessage += `📝 **${summaryType === "vision" ? "AI Summary" : summaryType === "ocr" ? "Content Preview" : "Status"}:**\n${summary}\n\n`;
+      
+      // Add RAG status
+      summaryMessage += `${ragStatus}\n\n`;
+      
+      // Add usage instructions
+      summaryMessage += `💡 **What you can do:**\n`;
+      summaryMessage += `• Ask questions about this document\n`;
+      summaryMessage += `• Request specific information or summaries\n`;
+      summaryMessage += `• Compare with other documents\n`;
+      summaryMessage += `• The document is automatically included in your knowledge base for semantic search\n`;
+      
+      // Show summary in chat
+      appendAssistantText(summaryMessage);
+      
+      // Trigger DocumentsSidebar refresh
+      setDocumentsSidebarRefreshTrigger(prev => prev + 1);
+      
+      // Auto-show panels if hidden
+      if (!panelsVisible) {
+        setPanelsVisible(true);
+      }
+      
+      // Show toast notification
+      toast({
+        title: "Document ready",
+        description: `${fileName} is ready for queries${isIndexed ? " and RAG search" : ""}. View in Documents panel below.`,
+        duration: 4000,
+      });
+      
+      console.log(`[Index] ✅ Summary shown for ${fileName}`);
+    } catch (error) {
+      console.error(`[Index] Failed to fetch/show summary for ${fileName}:`, error);
+      // Still mark as summarized to avoid retry loops
+      summarizedJobsRef.current.add(jobId);
+    }
+  }, [appendAssistantText, panelsVisible, toast]);
   
   // Manual reset function for stuck uploads
   const resetStuckUpload = useCallback(() => {
@@ -260,88 +405,10 @@ const Index = () => {
             ...stageMetadata,
           });
 
-          // If job completed, show summary in chat and refresh DocumentsSidebar
-          if (newStatus === "completed" && !summarizedJobsRef.current.has(result.job.id)) {
-            summarizedJobsRef.current.add(result.job.id);
-            
-            // Get summary from analysis results
-            const analysisResult = result.result;
-            const visionSummary = analysisResult?.vision_summary;
-            const ocrText = analysisResult?.ocr_text;
-            
-            // Prefer vision summary, fallback to OCR text preview
-            let summary = visionSummary;
-            let summaryType = "vision";
-            if (!summary && ocrText) {
-              summary = ocrText.substring(0, 800); // Increased from 500 to 800
-              if (ocrText.length > 800) {
-                summary += "...";
-              }
-              summaryType = "ocr";
-            }
-            if (!summary) {
-              summary = "Document processed successfully and is ready for queries.";
-              summaryType = "generic";
-            }
-            
-            // Get document metadata for richer summary
-            const fileSize = result.job.metadata?.file_size as number | undefined;
-            const fileSizeKB = fileSize ? Math.round(fileSize / 1024) : null;
-            const pageCount = result.job.metadata?.page_count as number | undefined;
-            const wordCount = ocrText ? ocrText.split(/\s+/).length : null;
-            
-            // Check if document is indexed for RAG
-            const isIndexed = stageMetadata.stage === "indexed" || 
-                             stageMetadata.stage === "extracted" ||
-                             result.job.metadata?.job_stage === "indexed" || 
-                             result.job.metadata?.job_stage === "extracted";
-            
-            const ragStatus = isIndexed 
-              ? "✅ **Indexed for RAG** - Ready for semantic search"
-              : "⏳ **Indexing in progress** - Will be available for RAG shortly";
-            
-            // Build detailed summary message
-            let summaryMessage = `📄 **${result.job.file_name}** processing complete!\n\n`;
-            
-            // Add document metadata
-            const metadataParts: string[] = [];
-            if (fileSizeKB) metadataParts.push(`${fileSizeKB}KB`);
-            if (pageCount) metadataParts.push(`${pageCount} page${pageCount > 1 ? 's' : ''}`);
-            if (wordCount) metadataParts.push(`${wordCount.toLocaleString()} words`);
-            if (metadataParts.length > 0) {
-              summaryMessage += `📊 **Document Info:** ${metadataParts.join(' • ')}\n\n`;
-            }
-            
-            // Add summary content
-            summaryMessage += `📝 **${summaryType === "vision" ? "AI Summary" : summaryType === "ocr" ? "Content Preview" : "Status"}:**\n${summary}\n\n`;
-            
-            // Add RAG status
-            summaryMessage += `${ragStatus}\n\n`;
-            
-            // Add usage instructions
-            summaryMessage += `💡 **What you can do:**\n`;
-            summaryMessage += `• Ask questions about this document\n`;
-            summaryMessage += `• Request specific information or summaries\n`;
-            summaryMessage += `• Compare with other documents\n`;
-            summaryMessage += `• The document is automatically included in your knowledge base for semantic search\n`;
-            
-            // Show enhanced summary in chat
-            appendAssistantText(summaryMessage);
-            
-            // Trigger DocumentsSidebar refresh to show the document
-            console.log("[Index] Job completed, triggering DocumentsSidebar refresh");
-            setDocumentsSidebarRefreshTrigger(prev => prev + 1);
-            
-            // Auto-show panels if they're hidden when document completes
-            if (!panelsVisible) {
-              setPanelsVisible(true);
-            }
-            
-            // Show toast notification
-            toast({
-              title: "Document ready",
-              description: `${result.job.file_name} is ready for queries${isIndexed ? " and RAG search" : ""}. View in Documents panel below.`,
-              duration: 4000,
+          // If job completed, show summary in chat using helper function
+          if (newStatus === "completed") {
+            showDocumentSummary(result.job.id, result.job.file_name).catch(err => {
+              console.error(`[Index] Error showing summary for ${result.job.file_name}:`, err);
             });
           }
 
@@ -890,12 +957,15 @@ const Index = () => {
               
               // CRITICAL FIX: If no completed jobs in uploadJobs but we know documents exist (via documentCount),
               // query the database directly to get document IDs
+              console.log(`[Index] 🔍 DEBUG: Checking for documents - uploadJobs: ${uploadJobs.length}, documentCount: ${documentCount}, userId: ${session?.user?.id || 'none'}, guestMode: ${guestMode}`);
+              
               if (allCompletedJobs.length === 0 && documentCount > 0 && (session?.user?.id || guestMode)) {
                 console.log(`[Index] ⚠️ No completed jobs in uploadJobs but documentCount is ${documentCount}, querying database...`);
                 try {
                   const userId = session?.user?.id;
                   
                   if (userId) {
+                    console.log(`[Index] 🔍 DEBUG: Querying database for userId: ${userId}`);
                     const { data: dbJobs, error: dbError } = await supabaseClient
                       .from("processing_jobs")
                       .select("id, file_name, status, metadata")
@@ -905,8 +975,10 @@ const Index = () => {
                       .order("created_at", { ascending: false })
                       .limit(50);
                     
+                    console.log(`[Index] 🔍 DEBUG: Database query result - found: ${dbJobs?.length || 0}, error: ${dbError ? JSON.stringify(dbError) : 'none'}`);
+                    
                     if (!dbError && dbJobs && dbJobs.length > 0) {
-                      console.log(`[Index] ✅ Found ${dbJobs.length} completed documents in database`);
+                      console.log(`[Index] ✅ Found ${dbJobs.length} completed documents in database:`, dbJobs.map(j => j.file_name));
                       // Convert database jobs to UploadJob format for context
                       allCompletedJobs = dbJobs.map(job => ({
                         id: job.id,
@@ -918,14 +990,20 @@ const Index = () => {
                         contentLength: null,
                         updatedAt: null,
                       }));
-                      console.log(`[Index] Converted ${allCompletedJobs.length} database jobs for context`);
+                      console.log(`[Index] ✅ Converted ${allCompletedJobs.length} database jobs for context`);
                     } else if (dbError) {
-                      console.warn(`[Index] Database query failed:`, dbError);
+                      console.error(`[Index] ❌ Database query failed:`, dbError);
+                    } else {
+                      console.warn(`[Index] ⚠️ Database query returned no documents (but documentCount is ${documentCount})`);
                     }
+                  } else {
+                    console.warn(`[Index] ⚠️ No userId available for database query (session: ${!!session}, guestMode: ${guestMode})`);
                   }
                 } catch (dbQueryError) {
-                  console.warn(`[Index] Failed to query database for documents:`, dbQueryError);
+                  console.error(`[Index] ❌ Failed to query database for documents:`, dbQueryError);
                 }
+              } else {
+                console.log(`[Index] 🔍 DEBUG: Skipping database query - allCompletedJobs: ${allCompletedJobs.length}, documentCount: ${documentCount}, hasUserId: ${!!session?.user?.id}, guestMode: ${guestMode}`);
               }
               
               // Include ALL completed jobs - the backend will handle retrieving content from database
@@ -959,7 +1037,7 @@ const Index = () => {
                   };
                 });
               
-              console.log(`[Index] Found ${contextDocs.length} queryable documents:`, contextDocs.map(d => ({ fileName: d.fileName, jobId: d.jobId })));
+              console.log(`[Index] 🔍 DEBUG: Final context docs - count: ${contextDocs.length}, docs:`, contextDocs.map(d => ({ fileName: d.fileName, jobId: d.jobId, textLength: d.textLength })));
 
               if (contextDocs.length > 0) {
                 toast({
@@ -1096,12 +1174,28 @@ const Index = () => {
               }
             }}
             onJobsChange={(jobs, isRegistering) => {
+              const previousJobs = uploadJobs;
               setUploadJobs(jobs);
               setIsRegisteringUpload(isRegistering);
+              
+              // Check for newly completed jobs and show summaries
+              jobs.forEach(job => {
+                if (job.status === "completed") {
+                  const wasCompleted = previousJobs.find(pj => pj.id === job.id)?.status === "completed";
+                  if (!wasCompleted) {
+                    // Job just completed - show summary
+                    console.log(`[Index] Job ${job.id} (${job.fileName}) just completed, showing summary`);
+                    showDocumentSummary(job.id, job.fileName).catch(err => {
+                      console.error(`[Index] Error showing summary for ${job.fileName}:`, err);
+                    });
+                  }
+                }
+              });
+              
               // Trigger DocumentsSidebar refresh when new jobs are added or status changes
               // Use debouncing to prevent infinite refresh loops
               // Only trigger if jobs actually changed (not just re-render)
-              const previousJobIds = uploadJobs.map(j => j.id).sort().join(',');
+              const previousJobIds = previousJobs.map(j => j.id).sort().join(',');
               const currentJobIds = jobs.map(j => j.id).sort().join(',');
               const jobsChanged = previousJobIds !== currentJobIds;
               
