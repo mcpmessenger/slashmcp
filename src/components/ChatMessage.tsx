@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { User, Bot } from "lucide-react";
+import { User, Bot, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StockQuoteCard } from "@/components/StockQuoteCard";
 import type { Message } from "@/hooks/useChat";
@@ -94,7 +94,29 @@ export const ChatMessage = memo(({ message }: ChatMessageProps) => {
               )}
             </div>
         ) : (
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{linkifyText(message.content)}</p>
+          <div className="flex flex-col gap-2">
+            {/* Document Context Badges */}
+            {message.type === "text" && message.documentContext && message.documentContext.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-1">
+                {message.documentContext.map((doc, idx) => (
+                  <div
+                    key={doc.jobId || idx}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs",
+                      isUser
+                        ? "bg-primary/20 border border-primary/30 text-primary"
+                        : "bg-muted/50 border border-border/40 text-muted-foreground"
+                    )}
+                    title={`Document: ${doc.fileName}${doc.textLength ? ` (${Math.round(doc.textLength / 1000)}KB)` : ""}`}
+                  >
+                    <FileText className="h-3 w-3" />
+                    <span className="max-w-[200px] truncate">{doc.fileName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{linkifyText(message.content)}</p>
+          </div>
         )}
       </div>
       {isUser && (

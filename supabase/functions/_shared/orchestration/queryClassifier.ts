@@ -38,6 +38,7 @@ const DOCUMENT_KEYWORDS = [
   "what do the documents", "what can you tell me about the", "tell me about my",
   "search my documents", "find in my documents", "in my document",
   "from my document", "document says", "document contains", "document mentions",
+  "details on", "details about", "what are the details", "tell me about", // Patterns like "UAOL document"
 ];
 
 /**
@@ -106,13 +107,23 @@ export function classifyQuery(
       }
       
       // Check if query contains significant words from filename
-      const matchingWords = fileNameWords.filter(word => 
-        word.length > 3 && lowerQuery.includes(word.toLowerCase())
-      );
+      // More aggressive matching: accept words 3+ chars, or 2+ chars if they're acronyms/abbreviations
+      const matchingWords = fileNameWords.filter(word => {
+        const wordLower = word.toLowerCase();
+        // Match words 3+ chars, or 2+ chars if they look like acronyms (all caps or mixed case)
+        return (word.length >= 3 && lowerQuery.includes(wordLower)) ||
+               (word.length >= 2 && /^[A-Z0-9]+$/i.test(word) && lowerQuery.includes(wordLower));
+      });
       
-      if (matchingWords.length >= 2 || (matchingWords.length === 1 && fileNameWords.length <= 3)) {
+      // If any significant word from filename matches, consider it a document reference
+      if (matchingWords.length >= 1) {
         documentName = doc.fileName;
-        confidence += 0.2; // Boost confidence if filename words match
+        // Higher confidence boost for better matches
+        if (matchingWords.length >= 2) {
+          confidence += 0.4; // Strong match
+        } else {
+          confidence += 0.3; // Single word match (like "UAOL")
+        }
         break;
       }
     }
@@ -126,10 +137,16 @@ export function classifyQuery(
     confidence += 0.3; // Question patterns suggest document queries
   }
   if (documentName) {
-    confidence += 0.3; // Strong signal if document name is mentioned (increased from 0.2)
+    confidence += 0.4; // Very strong signal if document name is mentioned
   }
+  // CRITICAL: If user has documents available, boost confidence significantly
+  // This ensures we prioritize RAG even for ambiguous queries
   if (availableDocuments && availableDocuments.length > 0) {
-    confidence += 0.2; // User has documents available is important
+    confidence += 0.3; // Increased from 0.2 - having documents is a strong signal
+    // If query contains "document" or "file" AND user has documents, it's almost certainly a document query
+    if (hasDocumentKeyword || hasFileKeyword) {
+      confidence += 0.2; // Additional boost
+    }
   }
   
   // Boost confidence if query contains "about" + document/file keywords
@@ -142,9 +159,32 @@ export function classifyQuery(
     confidence += 0.2;
   }
   
+  // Boost for "details on/about" + document/file keywords (e.g., "details on the UAOL document")
+  if ((lowerQuery.includes("details on") || lowerQuery.includes("details about") || lowerQuery.includes("what are the details")) && (hasDocumentKeyword || hasFileKeyword)) {
+    confidence += 0.3;
+  }
+  
   // Additional boost for explicit document queries
   if (lowerQuery.includes("search my documents") || lowerQuery.includes("find in my documents")) {
     confidence += 0.3;
+  }
+  
+  // Pattern: "[WORD] document" or "[WORD] file" - likely referring to a specific document
+  // This catches queries like "UAOL document", "budget file", etc.
+  const wordDocumentPattern = /\b(\w{2,})\s+(?:document|documents|file|files|pdf)\b/i;
+  if (wordDocumentPattern.test(query) && availableDocuments && availableDocuments.length > 0) {
+    const match = query.match(wordDocumentPattern);
+    if (match && match[1]) {
+      const word = match[1].toLowerCase();
+      // Check if this word appears in any document filename
+      const matchesDoc = availableDocuments.some(doc => {
+        const fileNameLower = doc.fileName.toLowerCase();
+        return fileNameLower.includes(word);
+      });
+      if (matchesDoc) {
+        confidence += 0.4; // Strong signal - word matches a document name
+      }
+    }
   }
   
   // Determine intent

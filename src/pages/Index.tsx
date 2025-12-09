@@ -6,12 +6,14 @@ import { DocumentsSidebarTest } from "@/components/DocumentsSidebar.test";
 import { DocumentsSidebarMinimalTest } from "@/components/DocumentsSidebarMinimalTest";
 import { useChat } from "@/hooks/useChat";
 import { fetchJobStatus } from "@/lib/api";
+import { supabaseClient } from "@/lib/supabaseClient";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
 import {
   Volume2,
   VolumeX,
   LogIn,
   ChevronDown,
+  ChevronUp,
   Server,
   Workflow,
   AlertCircle,
@@ -85,6 +87,23 @@ const Index = () => {
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const [documentsSidebarRefreshTrigger, setDocumentsSidebarRefreshTrigger] = useState(0);
   const [documentCount, setDocumentCount] = useState(0); // Track document count for conditional rendering
+  const [panelsVisible, setPanelsVisible] = useState(true); // Track visibility of documents/logs panels
+  const previousDocumentCountRef = useRef<number>(0); // Track previous count to detect new uploads
+  const previousMcpEventsCountRef = useRef<number>(0); // Track previous MCP events count
+  const isInitialMountRef = useRef<boolean>(true); // Track if this is the first render
+  
+  // Initialize refs on mount to prevent false triggers
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      // Set initial values to current values to prevent false triggers
+      previousDocumentCountRef.current = documentCount;
+      previousMcpEventsCountRef.current = mcpEvents.length;
+      // Mark as initialized after a short delay to allow initial values to settle
+      setTimeout(() => {
+        isInitialMountRef.current = false;
+      }, 1000);
+    }
+  }, [documentCount, mcpEvents.length]);
   
   // Update documentCount from uploadJobs as fallback (when database queries fail)
   // Always sync documentCount with completed jobs in uploadJobs
@@ -101,6 +120,56 @@ const Index = () => {
       console.log(`[Index] No completed jobs in uploadJobs, but keeping documentCount: ${documentCount}`);
     }
   }, [uploadJobs]);
+
+  // Auto-show panels when new documents are detected
+  useEffect(() => {
+    // Skip if still initializing
+    if (isInitialMountRef.current) return;
+    
+    const previousCount = previousDocumentCountRef.current;
+    const hasNewDocuments = documentCount > previousCount;
+    
+    if (hasNewDocuments && !panelsVisible) {
+      console.log(`[Index] New documents detected (${previousCount} -> ${documentCount}), auto-showing panels`);
+      setPanelsVisible(true);
+      
+      // Show a toast to notify user
+      toast({
+        title: "New document ready",
+        description: `${documentCount - previousCount} new document(s) available. Panels shown below.`,
+        duration: 3000,
+      });
+    }
+    
+    // Update previous count
+    previousDocumentCountRef.current = documentCount;
+  }, [documentCount, panelsVisible, toast]);
+
+  // Auto-show panels when new MCP events are detected
+  useEffect(() => {
+    // Skip if still initializing
+    if (isInitialMountRef.current) return;
+    
+    const previousCount = previousMcpEventsCountRef.current;
+    const hasNewEvents = mcpEvents.length > previousCount;
+    
+    if (hasNewEvents && !panelsVisible && mcpEvents.length > 0) {
+      console.log(`[Index] New MCP events detected (${previousCount} -> ${mcpEvents.length}), auto-showing panels`);
+      setPanelsVisible(true);
+      
+      // Show a toast to notify user (only if significant number of events)
+      if (mcpEvents.length - previousCount >= 3) {
+        toast({
+          title: "Activity detected",
+          description: `New events in logs. Panels shown below.`,
+          duration: 2000,
+        });
+      }
+    }
+    
+    // Update previous count
+    previousMcpEventsCountRef.current = mcpEvents.length;
+  }, [mcpEvents.length, panelsVisible, toast]);
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Debounce refresh triggers
   const summarizedJobsRef = useRef<Set<string>>(new Set()); // Track which jobs we've already shown summary for
   
@@ -202,15 +271,24 @@ const Index = () => {
             
             // Prefer vision summary, fallback to OCR text preview
             let summary = visionSummary;
+            let summaryType = "vision";
             if (!summary && ocrText) {
-              summary = ocrText.substring(0, 500);
-              if (ocrText.length > 500) {
+              summary = ocrText.substring(0, 800); // Increased from 500 to 800
+              if (ocrText.length > 800) {
                 summary += "...";
               }
+              summaryType = "ocr";
             }
             if (!summary) {
               summary = "Document processed successfully and is ready for queries.";
+              summaryType = "generic";
             }
+            
+            // Get document metadata for richer summary
+            const fileSize = result.job.metadata?.file_size as number | undefined;
+            const fileSizeKB = fileSize ? Math.round(fileSize / 1024) : null;
+            const pageCount = result.job.metadata?.page_count as number | undefined;
+            const wordCount = ocrText ? ocrText.split(/\s+/).length : null;
             
             // Check if document is indexed for RAG
             const isIndexed = stageMetadata.stage === "indexed" || 
@@ -222,23 +300,48 @@ const Index = () => {
               ? "✅ **Indexed for RAG** - Ready for semantic search"
               : "⏳ **Indexing in progress** - Will be available for RAG shortly";
             
-            // Show summary in chat with RAG status
-            appendAssistantText(
-              `📄 **${result.job.file_name}** processing complete!\n\n` +
-              `${summary}\n\n` +
-              `${ragStatus}\n\n` +
-              `_You can now ask questions about this document. The document is automatically saved to your knowledge base for RAG queries._`
-            );
+            // Build detailed summary message
+            let summaryMessage = `📄 **${result.job.file_name}** processing complete!\n\n`;
+            
+            // Add document metadata
+            const metadataParts: string[] = [];
+            if (fileSizeKB) metadataParts.push(`${fileSizeKB}KB`);
+            if (pageCount) metadataParts.push(`${pageCount} page${pageCount > 1 ? 's' : ''}`);
+            if (wordCount) metadataParts.push(`${wordCount.toLocaleString()} words`);
+            if (metadataParts.length > 0) {
+              summaryMessage += `📊 **Document Info:** ${metadataParts.join(' • ')}\n\n`;
+            }
+            
+            // Add summary content
+            summaryMessage += `📝 **${summaryType === "vision" ? "AI Summary" : summaryType === "ocr" ? "Content Preview" : "Status"}:**\n${summary}\n\n`;
+            
+            // Add RAG status
+            summaryMessage += `${ragStatus}\n\n`;
+            
+            // Add usage instructions
+            summaryMessage += `💡 **What you can do:**\n`;
+            summaryMessage += `• Ask questions about this document\n`;
+            summaryMessage += `• Request specific information or summaries\n`;
+            summaryMessage += `• Compare with other documents\n`;
+            summaryMessage += `• The document is automatically included in your knowledge base for semantic search\n`;
+            
+            // Show enhanced summary in chat
+            appendAssistantText(summaryMessage);
             
             // Trigger DocumentsSidebar refresh to show the document
             console.log("[Index] Job completed, triggering DocumentsSidebar refresh");
             setDocumentsSidebarRefreshTrigger(prev => prev + 1);
             
+            // Auto-show panels if they're hidden when document completes
+            if (!panelsVisible) {
+              setPanelsVisible(true);
+            }
+            
             // Show toast notification
             toast({
               title: "Document ready",
-              description: `${result.job.file_name} is ready for queries${isIndexed ? " and RAG search" : ""}.`,
-              duration: 3000,
+              description: `${result.job.file_name} is ready for queries${isIndexed ? " and RAG search" : ""}. View in Documents panel below.`,
+              duration: 4000,
             });
           }
 
@@ -553,244 +656,147 @@ const Index = () => {
       </PageHeader>
       
       <div className="flex-1 flex flex-col overflow-hidden">
-
-        {/* Chat Messages with Documents Sidebar and Chat Layout */}
-        <div className="flex-1 overflow-hidden">
-        <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Left Pane: Documents Sidebar - Show when authenticated AND documents exist */}
-          {/* Show if documentCount > 0 OR if we have completed jobs in uploadJobs (fallback) */}
-          {(session || guestMode) && (documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) && (
-            <>
-              <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
-                <div className="h-full p-4">
-                  <DocumentsSidebar
-                    refreshTrigger={documentsSidebarRefreshTrigger}
-                    userId={session?.user?.id}
-                    fallbackJobs={(() => {
-                      const completed = uploadJobs.filter(job => job.status === "completed");
-                      console.log(`[Index] Passing fallbackJobs to DocumentsSidebar: ${completed.length} completed jobs out of ${uploadJobs.length} total`);
-                      return completed.map(job => ({
-                        id: job.id,
-                        fileName: job.fileName,
-                        status: job.status,
-                        visionSummary: job.visionSummary,
-                        resultText: job.resultText,
-                        updatedAt: job.updatedAt,
-                        stage: job.stage,
-                        contentLength: job.contentLength, // Include file size
-                      }));
-                    })()}
-                    onDocumentClick={(jobId) => {
-                      // When document is clicked, could trigger a search or show details
-                      console.log("Document clicked:", jobId);
-                    }}
-                    onDocumentsChange={(count) => {
-                      console.log("[Index] DocumentsSidebar reported document count:", count);
-                      setDocumentCount(count);
-                    }}
-                  />
-                </div>
-              </ResizablePanel>
-              <ResizableHandle withHandle className="hidden lg:flex" />
-            </>
-          )}
-          {/* Hidden DocumentsSidebar to load documents even when panel is hidden */}
-          {/* This runs in background to detect when documents are uploaded and trigger panel to appear */}
-          {/* Only show hidden sidebar if we have no visible sidebar AND no completed jobs in uploadJobs */}
-          {(session || guestMode) && documentCount === 0 && uploadJobs.filter(job => job.status === "completed").length === 0 && (
-            <div className="hidden" aria-hidden="true">
-              <DocumentsSidebar
-                refreshTrigger={documentsSidebarRefreshTrigger}
-                userId={session?.user?.id}
-                fallbackJobs={(() => {
-                  const completed = uploadJobs.filter(job => job.status === "completed");
-                  console.log(`[Index] Passing fallbackJobs to hidden DocumentsSidebar: ${completed.length} completed jobs`);
-                  return completed.map(job => ({
-                    id: job.id,
-                    fileName: job.fileName,
-                    status: job.status,
-                    visionSummary: job.visionSummary,
-                    resultText: job.resultText,
-                    updatedAt: job.updatedAt,
-                    stage: job.stage,
-                  }));
-                })()}
-                onDocumentClick={(jobId) => {
-                  console.log("Document clicked:", jobId);
-                }}
-                onDocumentsChange={(count) => {
-                  console.log("[Index] Hidden DocumentsSidebar reported document count:", count);
-                  setDocumentCount(count);
-                }}
-              />
-            </div>
-          )}
-          {/* Middle Pane: Chat */}
-          {/* Chat panel takes full width when no side panels, adjusts when panels appear */}
-          <ResizablePanel 
-            defaultSize={
-              !(session || guestMode) ? 100 : // No auth: full width
-              (documentCount > 0 || mcpEvents.length > 0) ? 50 : // Has panels: half width
-              100 // Auth but no panels: full width (Documents panel hidden when documentCount === 0)
-            } 
-            minSize={40} 
-            className="min-w-0"
-          >
-            <div className="h-full overflow-y-auto px-4 py-8">
-              <div className="max-w-4xl mx-auto space-y-6">
-                {!authReady || (!session && !guestMode) ? (
-                  <div className="text-center mt-20 space-y-4">
-                    <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
-                    <p className="text-muted-foreground text-lg">
-                      Scrape anything with MCP Messenger
+        {/* Chat Messages - Full width, takes most of the space */}
+        <div className="flex-1 overflow-y-auto px-4 py-8">
+          <div className="max-w-4xl mx-auto space-y-6">
+            {!authReady || (!session && !guestMode) ? (
+              <div className="text-center mt-20 space-y-4">
+                <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
+                <p className="text-muted-foreground text-lg">
+                  Scrape anything with MCP Messenger
+                </p>
+                {!authReady ? (
+                  <div className="space-y-2">
+                    <p className="text-sm text-muted-foreground">Loading...</p>
+                    <p className="text-xs text-muted-foreground/70">
+                      If this takes too long, check your browser console for errors.
                     </p>
-                    {!authReady ? (
-                      <div className="space-y-2">
-                        <p className="text-sm text-muted-foreground">Loading...</p>
-                        <p className="text-xs text-muted-foreground/70">
-                          If this takes too long, check your browser console for errors.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        <p className="text-muted-foreground">
-                          Sign in to access all features, or continue as guest.
-                        </p>
-                        <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
-                          <button
-                            type="button"
-                            onClick={enableGuestMode}
-                            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-6 py-3 text-base font-medium text-foreground transition-colors hover:bg-muted"
-                          >
-                            <span>Continue as Guest</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void signInWithGoogle()}
-                            disabled={isAuthLoading}
-                            className={cn(
-                              "inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground transition-colors",
-                              isAuthLoading
-                                ? "opacity-60 cursor-not-allowed"
-                                : "hover:bg-primary/90"
-                            )}
-                          >
-                            <LogIn className="h-5 w-5" />
-                            <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : messages.length === 0 ? (
-                  <div className="text-center mt-20 space-y-3">
-                    <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
-                    <p className="text-muted-foreground">
-                      Scrape anything with MCP Messenger
-                    </p>
-                    {renderModelMenu("initial")}
                   </div>
                 ) : (
-                  <div className="flex justify-center">
-                    {renderModelMenu("compact")}
+                  <div className="space-y-4">
+                    <p className="text-muted-foreground">
+                      Sign in to access all features, or continue as guest.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-3 justify-center items-center">
+                      <button
+                        type="button"
+                        onClick={enableGuestMode}
+                        className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-6 py-3 text-base font-medium text-foreground transition-colors hover:bg-muted"
+                      >
+                        <span>Continue as Guest</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void signInWithGoogle()}
+                        disabled={isAuthLoading}
+                        className={cn(
+                          "inline-flex items-center gap-2 rounded-md bg-primary px-6 py-3 text-base font-medium text-primary-foreground transition-colors",
+                          isAuthLoading
+                            ? "opacity-60 cursor-not-allowed"
+                            : "hover:bg-primary/90"
+                        )}
+                      >
+                        <LogIn className="h-5 w-5" />
+                        <span>{isAuthLoading ? "Connecting..." : "Sign in with Google"}</span>
+                      </button>
+                    </div>
                   </div>
                 )}
-                {(session || guestMode) && messages.map((message, index) => (
-                  <ChatMessage key={index} message={message} />
-                ))}
-                {(session || guestMode) && isLoading && (() => {
-                  // Get the latest progress message from MCP events
-                  const latestProgressEvent = mcpEvents
-                    .filter(e => e.type === "system" && e.metadata?.message && (
-                      e.metadata.category === "progress" ||
-                      e.metadata.category === "tool_call_progress" ||
-                      e.metadata.category === "tool_result_progress" ||
-                      e.metadata.category === "agent_progress" ||
-                      e.metadata.category === "heartbeat"
-                    ))
-                    .sort((a, b) => b.timestamp - a.timestamp)[0];
-                  
-                  const progressMessage = latestProgressEvent?.metadata?.message as string | undefined;
-                  const displayMessage = progressMessage || "Thinking hard on your request...";
-                  
-                  return (
-                    <div className="flex gap-3 justify-start items-center animate-fade-in">
-                      <div className="h-9 w-9 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
-                        <div className="thinking-runner-icon">
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <circle cx="8" cy="5" r="2" fill="currentColor" />
-                            <path
-                              d="M7 7.5c1.5.5 2.8 1.4 3.6 2.7l1.1 1.9c.3.5.9.9 1.5 1l2.3.4"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.7"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <path
-                              d="M6 11.5l2.2-1.6L9 12l-1.2 2"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.7"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                            <path
-                              d="M11 14.5l-1.2 2.2L7.5 16 6 17.5"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.7"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </div>
-                      </div>
-                      <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex gap-1">
-                            <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                            <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                            <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                          </div>
-                          <span className="text-xs text-foreground/60">
-                            {displayMessage}
-                          </span>
-                          {/* Add link to view logs when hanging */}
-                          <a
-                            href="https://supabase.com/dashboard/project/akxdroedpsvmckvqvggr/functions/chat/logs"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-[10px] text-blue-500 hover:text-blue-600 underline mt-1 flex items-center gap-1"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                            }}
-                          >
-                            <ExternalLink className="h-3 w-3" />
-                            View logs in Supabase
-                          </a>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })()}
-                <div ref={messagesEndRef} />
               </div>
-            </div>
-          </ResizablePanel>
-
-          {/* Resizable Handle - Only show when MCP events panel is expanded */}
-          {mcpEvents.length > 0 && (
-            <ResizableHandle withHandle className="hidden lg:flex" />
-          )}
-
-          {/* Right Pane: MCP Event Log - Collapsible */}
-          {mcpEvents.length > 0 && (
-            <ResizablePanel defaultSize={session || guestMode ? 30 : 50} minSize={15} maxSize={40} className="hidden lg:block min-w-0">
-              <McpEventLog events={mcpEvents} className="h-full border-l" />
-            </ResizablePanel>
-          )}
-        </ResizablePanelGroup>
+            ) : messages.length === 0 ? (
+              <div className="text-center mt-20 space-y-3">
+                <h1 className="text-4xl font-bold text-foreground">MCP Messenger</h1>
+                <p className="text-muted-foreground">
+                  Scrape anything with MCP Messenger
+                </p>
+                {renderModelMenu("initial")}
+              </div>
+            ) : (
+              <div className="flex justify-center">
+                {renderModelMenu("compact")}
+              </div>
+            )}
+            {(session || guestMode) && messages.map((message, index) => (
+              <ChatMessage key={index} message={message} />
+            ))}
+            {(session || guestMode) && isLoading && (() => {
+              // Get the latest progress message from MCP events
+              const latestProgressEvent = mcpEvents
+                .filter(e => e.type === "system" && e.metadata?.message && (
+                  e.metadata.category === "progress" ||
+                  e.metadata.category === "tool_call_progress" ||
+                  e.metadata.category === "tool_result_progress" ||
+                  e.metadata.category === "agent_progress" ||
+                  e.metadata.category === "heartbeat"
+                ))
+                .sort((a, b) => b.timestamp - a.timestamp)[0];
+              
+              const progressMessage = latestProgressEvent?.metadata?.message as string | undefined;
+              const displayMessage = progressMessage || "Thinking hard on your request...";
+              
+              return (
+                <div className="flex gap-3 justify-start items-center animate-fade-in">
+                  <div className="h-9 w-9 rounded-full bg-gradient-glass backdrop-blur-xl border border-glass-border/30 flex items-center justify-center flex-shrink-0">
+                    <div className="thinking-runner-icon">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <circle cx="8" cy="5" r="2" fill="currentColor" />
+                        <path
+                          d="M7 7.5c1.5.5 2.8 1.4 3.6 2.7l1.1 1.9c.3.5.9.9 1.5 1l2.3.4"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M6 11.5l2.2-1.6L9 12l-1.2 2"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                        <path
+                          d="M11 14.5l-1.2 2.2L7.5 16 6 17.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="bg-gradient-glass backdrop-blur-xl border border-glass-border/30 rounded-2xl px-4 py-3">
+                    <div className="flex flex-col gap-1">
+                      <div className="flex gap-1">
+                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <div className="h-2 w-2 bg-foreground/50 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </div>
+                      <span className="text-xs text-foreground/60">
+                        {displayMessage}
+                      </span>
+                      {/* Add link to view logs when hanging */}
+                      <a
+                        href="https://supabase.com/dashboard/project/akxdroedpsvmckvqvggr/functions/chat/logs"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[10px] text-blue-500 hover:text-blue-600 underline mt-1 flex items-center gap-1"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                        }}
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        View logs in Supabase
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* File Upload Status - Hidden since DocumentsSidebar is the primary display */}
@@ -873,14 +879,54 @@ const Index = () => {
               // Build contextDocs from uploadJobs - include ALL completed jobs with content
               // This ensures documents are available for RAG even if database queries fail
               // Include any completed job that has text, summary, or is in a processed stage
-              const allCompletedJobs = nextJobs.filter(job => job.status === "completed");
-              console.log(`[Index] Total completed jobs: ${allCompletedJobs.length}`, allCompletedJobs.map(j => ({ 
+              let allCompletedJobs = nextJobs.filter(job => job.status === "completed");
+              console.log(`[Index] Total completed jobs in uploadJobs: ${allCompletedJobs.length}`, allCompletedJobs.map(j => ({ 
                 id: j.id, 
                 fileName: j.fileName, 
                 hasText: !!j.resultText, 
                 hasSummary: !!j.visionSummary, 
                 stage: j.stage 
               })));
+              
+              // CRITICAL FIX: If no completed jobs in uploadJobs but we know documents exist (via documentCount),
+              // query the database directly to get document IDs
+              if (allCompletedJobs.length === 0 && documentCount > 0 && (session?.user?.id || guestMode)) {
+                console.log(`[Index] ⚠️ No completed jobs in uploadJobs but documentCount is ${documentCount}, querying database...`);
+                try {
+                  const userId = session?.user?.id;
+                  
+                  if (userId) {
+                    const { data: dbJobs, error: dbError } = await supabaseClient
+                      .from("processing_jobs")
+                      .select("id, file_name, status, metadata")
+                      .eq("user_id", userId)
+                      .in("analysis_target", ["document-analysis", "image-ocr"])
+                      .eq("status", "completed")
+                      .order("created_at", { ascending: false })
+                      .limit(50);
+                    
+                    if (!dbError && dbJobs && dbJobs.length > 0) {
+                      console.log(`[Index] ✅ Found ${dbJobs.length} completed documents in database`);
+                      // Convert database jobs to UploadJob format for context
+                      allCompletedJobs = dbJobs.map(job => ({
+                        id: job.id,
+                        fileName: job.file_name,
+                        status: "completed" as const,
+                        stage: (job.metadata as Record<string, unknown> | null)?.job_stage as string | undefined,
+                        resultText: null,
+                        visionSummary: null,
+                        contentLength: null,
+                        updatedAt: null,
+                      }));
+                      console.log(`[Index] Converted ${allCompletedJobs.length} database jobs for context`);
+                    } else if (dbError) {
+                      console.warn(`[Index] Database query failed:`, dbError);
+                    }
+                  }
+                } catch (dbQueryError) {
+                  console.warn(`[Index] Failed to query database for documents:`, dbQueryError);
+                }
+              }
               
               // Include ALL completed jobs - the backend will handle retrieving content from database
               // This ensures documents are available for RAG even if in-memory state doesn't have content yet
@@ -889,7 +935,7 @@ const Index = () => {
               allCompletedJobs.forEach(job => jobsToInclude.add(job.id));
               selectedDocumentIds.forEach(jobId => jobsToInclude.add(jobId));
               
-              const contextDocs = nextJobs
+              const contextDocs = allCompletedJobs
                 .filter(job => jobsToInclude.has(job.id))
                 .map(job => {
                   const hasContent = !!(job.resultText || job.visionSummary);
@@ -1000,17 +1046,35 @@ const Index = () => {
                 const stage = metadata?.job_stage as string | undefined;
                 const isIndexed = stage === "indexed" || stage === "extracted";
                 
+                // Get document metadata
+                const fileSize = metadata?.file_size as number | undefined;
+                const fileSizeKB = fileSize ? Math.round(fileSize / 1024) : null;
+                const pageCount = metadata?.page_count as number | undefined;
+                const wordCount = ocrText ? ocrText.split(/\s+/).length : null;
+                
                 const ragStatus = isIndexed 
                   ? "✅ **Indexed for RAG** - Ready for semantic search"
                   : "⏳ **Indexing in progress** - Will be available for RAG shortly";
                 
-                // Show summary in chat
-                appendAssistantText(
-                  `📄 **${fileName}** attached!\n\n` +
-                  `${summary}\n\n` +
-                  `${ragStatus}\n\n` +
-                  `_This document will be included in your next message._`
-                );
+                // Build detailed attachment message
+                let attachmentMessage = `📄 **${fileName}** attached!\n\n`;
+                
+                // Add document metadata
+                const metadataParts: string[] = [];
+                if (fileSizeKB) metadataParts.push(`${fileSizeKB}KB`);
+                if (pageCount) metadataParts.push(`${pageCount} page${pageCount > 1 ? 's' : ''}`);
+                if (wordCount) metadataParts.push(`${wordCount.toLocaleString()} words`);
+                if (metadataParts.length > 0) {
+                  attachmentMessage += `📊 **Document Info:** ${metadataParts.join(' • ')}\n\n`;
+                }
+                
+                // Add summary
+                attachmentMessage += `📝 **Summary:**\n${summary}\n\n`;
+                attachmentMessage += `${ragStatus}\n\n`;
+                attachmentMessage += `_This document will be included in your next message for context._`;
+                
+                // Show enhanced summary in chat
+                appendAssistantText(attachmentMessage);
                 
                 toast({
                   title: "Document attached",
@@ -1060,6 +1124,153 @@ const Index = () => {
             }}
           />
         )}
+
+        {/* Documents and Logs Panels - Below Chat Input */}
+        {authReady && (session || guestMode) && 
+          ((documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) || mcpEvents.length > 0) ? (
+            <div className="border-t">
+              {/* Toggle Button */}
+              <div className="flex items-center justify-center py-2 border-b bg-muted/30">
+                <button
+                  type="button"
+                  onClick={() => setPanelsVisible(!panelsVisible)}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 rounded-md text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors",
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                  )}
+                  aria-label={panelsVisible ? "Hide panels" : "Show panels"}
+                >
+                  {panelsVisible ? (
+                    <>
+                      <ChevronDown className="h-4 w-4" />
+                      <span>Hide Documents & Logs</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronUp className="h-4 w-4" />
+                      <span>Show Documents & Logs</span>
+                      {((documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) && mcpEvents.length > 0) && (
+                        <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-primary/10 text-primary">
+                          {documentCount || uploadJobs.filter(job => job.status === "completed").length} docs • {mcpEvents.length} events
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              </div>
+              {panelsVisible && (
+                <ResizablePanelGroup direction="horizontal" className="h-[300px] min-h-[200px] max-h-[400px]">
+                {/* Documents Panel */}
+                {(documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) && (
+                  <>
+                    <ResizablePanel defaultSize={50} minSize={30} maxSize={70} className="min-w-0">
+                      <div className="h-full p-4 overflow-y-auto">
+                        <DocumentsSidebar
+                          refreshTrigger={documentsSidebarRefreshTrigger}
+                          userId={session?.user?.id}
+                          fallbackJobs={(() => {
+                            const completed = uploadJobs.filter(job => job.status === "completed");
+                            console.log(`[Index] Passing fallbackJobs to DocumentsSidebar: ${completed.length} completed jobs out of ${uploadJobs.length} total`);
+                            return completed.map(job => ({
+                              id: job.id,
+                              fileName: job.fileName,
+                              status: job.status,
+                              visionSummary: job.visionSummary,
+                              resultText: job.resultText,
+                              updatedAt: job.updatedAt,
+                              stage: job.stage,
+                              contentLength: job.contentLength, // Include file size
+                            }));
+                          })()}
+                          onDocumentClick={(jobId) => {
+                            // When document is clicked, could trigger a search or show details
+                            console.log("Document clicked:", jobId);
+                          }}
+                          onDocumentsChange={(count) => {
+                            console.log("[Index] DocumentsSidebar reported document count:", count);
+                            const previousCount = documentCount;
+                            setDocumentCount(count);
+                            
+                            // Auto-show panels if new documents are detected
+                            if (count > previousCount && !panelsVisible) {
+                              console.log(`[Index] New documents detected via sidebar (${previousCount} -> ${count}), auto-showing panels`);
+                              setPanelsVisible(true);
+                              toast({
+                                title: "Documents available",
+                                description: `${count - previousCount} new document(s) detected. Panels shown below.`,
+                                duration: 3000,
+                              });
+                            }
+                          }}
+                        />
+                      </div>
+                    </ResizablePanel>
+                    {mcpEvents.length > 0 && (
+                      <ResizableHandle withHandle />
+                    )}
+                  </>
+                )}
+                {/* Hidden DocumentsSidebar to load documents even when panel is hidden */}
+                {/* This runs in background to detect when documents are uploaded and trigger panel to appear */}
+                {/* Only show hidden sidebar if we have no visible sidebar AND no completed jobs in uploadJobs */}
+                {documentCount === 0 && uploadJobs.filter(job => job.status === "completed").length === 0 && (
+                  <div className="hidden" aria-hidden="true">
+                    <DocumentsSidebar
+                      refreshTrigger={documentsSidebarRefreshTrigger}
+                      userId={session?.user?.id}
+                      fallbackJobs={(() => {
+                        const completed = uploadJobs.filter(job => job.status === "completed");
+                        console.log(`[Index] Passing fallbackJobs to hidden DocumentsSidebar: ${completed.length} completed jobs`);
+                        return completed.map(job => ({
+                          id: job.id,
+                          fileName: job.fileName,
+                          status: job.status,
+                          visionSummary: job.visionSummary,
+                          resultText: job.resultText,
+                          updatedAt: job.updatedAt,
+                          stage: job.stage,
+                        }));
+                      })()}
+                      onDocumentClick={(jobId) => {
+                        console.log("Document clicked:", jobId);
+                      }}
+                      onDocumentsChange={(count) => {
+                        console.log("[Index] Hidden DocumentsSidebar reported document count:", count);
+                        const previousCount = documentCount;
+                        setDocumentCount(count);
+                        
+                        // Auto-show panels if new documents are detected
+                        if (count > previousCount && !panelsVisible) {
+                          console.log(`[Index] New documents detected via hidden sidebar (${previousCount} -> ${count}), auto-showing panels`);
+                          setPanelsVisible(true);
+                          toast({
+                            title: "Documents available",
+                            description: `${count - previousCount} new document(s) detected. Panels shown below.`,
+                            duration: 3000,
+                          });
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+                {/* MCP Event Log Panel */}
+                {mcpEvents.length > 0 && (
+                  <ResizablePanel 
+                    defaultSize={
+                      (documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) ? 50 : 100
+                    } 
+                    minSize={30} 
+                    maxSize={70} 
+                    className="min-w-0"
+                  >
+                    <McpEventLog events={mcpEvents} className="h-full border-l" />
+                  </ResizablePanel>
+                )}
+                </ResizablePanelGroup>
+              )}
+            </div>
+          ) : null
+        }
       </div>
       
       {/* Footer */}

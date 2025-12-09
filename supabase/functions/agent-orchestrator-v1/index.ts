@@ -177,40 +177,61 @@ async function executeOrchestration(
     console.log(`Query classification: intent=${classification.intent}, confidence=${classification.confidence}, tool=${classification.suggestedTool}`);
     
     // Enhance orchestrator instructions with document context
+    // CRITICAL: Always prioritize RAG when documents exist, regardless of query classification
     let enhancedInstructions = "";
     if (documentContext && documentContext.availableDocuments.length > 0) {
       enhancedInstructions = `\n\n=== CURRENT USER CONTEXT ===\n${formatDocumentContext(documentContext)}\n\n`;
       
-      // Always provide context if user has documents, even if classification is uncertain
-      if (classification.intent === "document" || classification.intent === "hybrid" || classification.confidence >= 0.3) {
-        enhancedInstructions += `=== QUERY ANALYSIS ===\n`;
-        enhancedInstructions += `- User query intent: ${classification.intent} (confidence: ${classification.confidence.toFixed(2)})\n`;
-        enhancedInstructions += `- Suggested tool: ${classification.suggestedTool}\n`;
-        
-        if (classification.context.documentName) {
-          enhancedInstructions += `- User mentioned document: ${classification.context.documentName}\n`;
-        }
-        if (classification.context.mentionsDocument || classification.context.mentionsFile) {
-          enhancedInstructions += `- Query mentions documents/files - this is a DOCUMENT QUERY\n`;
-        }
-        
-        if (documentContext.readyDocuments > 0) {
-          enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
-          enhancedInstructions += `- ${documentContext.readyDocuments} document(s) are ready for search\n`;
-          enhancedInstructions += `- YOU MUST use the search_documents tool immediately\n`;
-          enhancedInstructions += `- DO NOT ask for clarification - use search_documents with the user's query\n`;
-          enhancedInstructions += `- DO NOT use web search - use search_documents instead\n\n`;
-        } else if (documentContext.processingDocuments > 0) {
-          enhancedInstructions += `\n=== DOCUMENT STATUS ===\n`;
-          enhancedInstructions += `- ${documentContext.processingDocuments} document(s) are still processing\n`;
-          enhancedInstructions += `- Inform user that documents are processing and will be available soon\n`;
-          enhancedInstructions += `- You can still try search_documents - it will return status information\n\n`;
-        } else {
-          enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
-          enhancedInstructions += `- User has documents but they may not be ready\n`;
-          enhancedInstructions += `- Try search_documents tool first - it will handle the status appropriately\n`;
-          enhancedInstructions += `- DO NOT ask for clarification about which document - search all available documents\n\n`;
-        }
+      // CRITICAL RULE: If user has documents, ALWAYS try RAG first before web search
+      // This applies to ALL queries, not just those classified as document queries
+      enhancedInstructions += `=== CRITICAL ROUTING RULE ===\n`;
+      enhancedInstructions += `- User has ${documentContext.availableDocuments.length} document(s) available\n`;
+      enhancedInstructions += `- BEFORE using ANY other tool (web_search, etc.), you MUST check if the query can be answered from uploaded documents\n`;
+      enhancedInstructions += `- Use search_documents tool FIRST for ANY query that might relate to uploaded content\n`;
+      enhancedInstructions += `- Only use web_search if search_documents returns no relevant results\n\n`;
+      
+      enhancedInstructions += `=== QUERY ANALYSIS ===\n`;
+      enhancedInstructions += `- User query intent: ${classification.intent} (confidence: ${classification.confidence.toFixed(2)})\n`;
+      enhancedInstructions += `- Suggested tool: ${classification.suggestedTool}\n`;
+      
+      if (classification.context.documentName) {
+        enhancedInstructions += `- User mentioned document: ${classification.context.documentName}\n`;
+      }
+      if (classification.context.mentionsDocument || classification.context.mentionsFile) {
+        enhancedInstructions += `- Query mentions documents/files - this is DEFINITELY a DOCUMENT QUERY\n`;
+      }
+      
+      // Check if query mentions any document filename (even partially)
+      const queryLower = input.message.toLowerCase();
+      const matchingDocs = documentContext.availableDocuments.filter(doc => {
+        const fileNameLower = doc.fileName.toLowerCase();
+        const fileNameWords = fileNameLower.replace(/\.(pdf|docx?|txt|csv)/, "").split(/[\s_-]+/);
+        return fileNameWords.some(word => word.length > 3 && queryLower.includes(word.toLowerCase()));
+      });
+      
+      if (matchingDocs.length > 0) {
+        enhancedInstructions += `- Query likely refers to: ${matchingDocs.map(d => d.fileName).join(", ")}\n`;
+        enhancedInstructions += `- YOU MUST use search_documents with these document(s)\n`;
+      }
+      
+      if (documentContext.readyDocuments > 0) {
+        enhancedInstructions += `\n=== ACTION REQUIRED - HIGHEST PRIORITY ===\n`;
+        enhancedInstructions += `- ${documentContext.readyDocuments} document(s) are ready for search\n`;
+        enhancedInstructions += `- YOU MUST use the search_documents tool IMMEDIATELY\n`;
+        enhancedInstructions += `- DO NOT ask for clarification - use search_documents with the user's query\n`;
+        enhancedInstructions += `- DO NOT use web search - use search_documents instead\n`;
+        enhancedInstructions += `- If search_documents returns results, use those results - do NOT fall back to web search\n\n`;
+      } else if (documentContext.processingDocuments > 0) {
+        enhancedInstructions += `\n=== DOCUMENT STATUS ===\n`;
+        enhancedInstructions += `- ${documentContext.processingDocuments} document(s) are still processing\n`;
+        enhancedInstructions += `- Try search_documents first - it will check status and may still find results\n`;
+        enhancedInstructions += `- Inform user if documents are still processing\n\n`;
+      } else {
+        enhancedInstructions += `\n=== ACTION REQUIRED ===\n`;
+        enhancedInstructions += `- User has documents but they may not be ready\n`;
+        enhancedInstructions += `- Try search_documents tool FIRST - it will handle the status appropriately\n`;
+        enhancedInstructions += `- DO NOT ask for clarification about which document - search all available documents\n`;
+        enhancedInstructions += `- Only use web_search if search_documents confirms no documents are ready\n\n`;
       }
     }
     

@@ -134,6 +134,11 @@ type StockMessage = BaseMessage & {
 
 type TextMessage = BaseMessage & {
   type: "text";
+  documentContext?: Array<{
+    jobId: string;
+    fileName: string;
+    textLength?: number;
+  }>;
 };
 
 type ImageMessage = BaseMessage & {
@@ -1677,7 +1682,12 @@ export function useChat() {
   };
 
   const sendMessage = useCallback(async (input: string, documentContext?: DocumentContextReference[]) => {
-    const userMsg: Message = { role: "user", type: "text", content: input };
+    const userMsg: Message = { 
+      role: "user", 
+      type: "text", 
+      content: input,
+      documentContext: documentContext && documentContext.length > 0 ? documentContext : undefined,
+    };
     setMessages(prev => [...prev, userMsg]);
 
     const trimmedInput = input.trim();
