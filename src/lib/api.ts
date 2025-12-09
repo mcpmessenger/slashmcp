@@ -115,17 +115,27 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   if (session?.access_token) {
     // Use the user's session token so edge functions can extract OAuth provider tokens
     headers.Authorization = `Bearer ${session.access_token}`;
+    // Always include apikey header (required by Supabase API gateway)
     if (SUPABASE_ANON_KEY) {
       headers.apikey = SUPABASE_ANON_KEY;
+    } else {
+      console.warn("[getAuthHeaders] WARNING: SUPABASE_ANON_KEY is not set - apikey header will be missing");
     }
-    console.log("[getAuthHeaders] Using session token for authorization");
+    console.log("[getAuthHeaders] Using session token for authorization", {
+      hasApikey: !!headers.apikey,
+      hasAuthorization: !!headers.Authorization,
+    });
   } else if (SUPABASE_ANON_KEY) {
     // Fallback to anon key if not signed in or session failed
     headers.apikey = SUPABASE_ANON_KEY;
     headers.Authorization = `Bearer ${SUPABASE_ANON_KEY}`;
-    console.log("[getAuthHeaders] Using anon key for authorization (no session or session failed)");
+    console.log("[getAuthHeaders] Using anon key for authorization (no session or session failed)", {
+      hasApikey: !!headers.apikey,
+      hasAuthorization: !!headers.Authorization,
+    });
   } else {
-    console.warn("[getAuthHeaders] WARNING: No session and no anon key available");
+    console.error("[getAuthHeaders] ERROR: No session and no anon key available - requests will fail!");
+    throw new Error("Cannot make request: No session token and VITE_SUPABASE_PUBLISHABLE_KEY is not set in .env.local");
   }
 
   return headers;
@@ -435,6 +445,10 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
     throw new Error("Functions URL is not configured");
   }
 
+  if (!SUPABASE_ANON_KEY) {
+    throw new Error("Supabase anon key is not configured. Set VITE_SUPABASE_PUBLISHABLE_KEY in .env.local");
+  }
+
   const TRIGGER_TEXTRACT_TIMEOUT_MS = 30_000; // 30 seconds
   const abortController = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -443,6 +457,19 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
 
   try {
     const headers = await getAuthHeaders();
+    
+    // Ensure apikey is always present (required by Supabase API gateway)
+    if (!headers.apikey && SUPABASE_ANON_KEY) {
+      headers.apikey = SUPABASE_ANON_KEY;
+      console.log("[triggerTextractJob] Added missing apikey header");
+    }
+    
+    // Ensure Authorization is present if apikey is set
+    if (headers.apikey && !headers.Authorization) {
+      headers.Authorization = `Bearer ${headers.apikey}`;
+      console.log("[triggerTextractJob] Added Authorization header from apikey");
+    }
+    
     const url = `${FUNCTIONS_URL}${textractFunctionPath}`;
     console.log(`[triggerTextractJob] Calling: ${url}`, { 
       jobId,
@@ -450,6 +477,8 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
       textractFunctionPath,
       fullUrl: url,
       hasHeaders: !!headers,
+      hasApikey: !!headers.apikey,
+      hasAuthorization: !!headers.Authorization,
       headerKeys: Object.keys(headers),
     });
     
@@ -463,7 +492,7 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
         headers: {
           "Origin": window.location.origin,
           "Access-Control-Request-Method": "POST",
-          "Access-Control-Request-Headers": "authorization,content-type",
+          "Access-Control-Request-Headers": "authorization,apikey,content-type",
         },
       });
       console.log(`[triggerTextractJob] OPTIONS preflight response:`, {
