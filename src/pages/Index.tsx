@@ -121,101 +121,11 @@ const Index = () => {
     }
   }, [uploadJobs]);
 
-  // Check for already-completed documents on mount and show summaries
-  useEffect(() => {
-    if (!authReady || (!session && !guestMode)) return;
-    
-    const checkCompletedDocuments = async () => {
-      try {
-        const userId = session?.user?.id;
-        if (!userId) return;
-        
-        // Query for completed documents that haven't been summarized yet
-        const { data: dbJobs, error } = await supabaseClient
-          .from("processing_jobs")
-          .select("id, file_name, status, metadata")
-          .eq("user_id", userId)
-          .in("analysis_target", ["document-analysis", "image-ocr"])
-          .eq("status", "completed")
-          .order("created_at", { ascending: false })
-          .limit(10); // Check last 10 documents
-        
-        if (!error && dbJobs && dbJobs.length > 0) {
-          console.log(`[Index] Found ${dbJobs.length} completed documents on page load, checking for summaries...`);
-          
-          // Show summaries for documents that haven't been summarized yet
-          for (const job of dbJobs) {
-            if (!summarizedJobsRef.current.has(job.id)) {
-              // Small delay to avoid spamming chat
-              await new Promise(resolve => setTimeout(resolve, 500));
-              await showDocumentSummary(job.id, job.file_name);
-            }
-          }
-        }
-      } catch (error) {
-        console.warn("[Index] Failed to check for completed documents on load:", error);
-      }
-    };
-    
-    // Only check once after auth is ready
-    const timeoutId = setTimeout(checkCompletedDocuments, 2000); // Wait 2 seconds after mount
-    
-    return () => clearTimeout(timeoutId);
-  }, [authReady, session, guestMode, showDocumentSummary]);
-
-  // Auto-show panels when new documents are detected
-  useEffect(() => {
-    // Skip if still initializing
-    if (isInitialMountRef.current) return;
-    
-    const previousCount = previousDocumentCountRef.current;
-    const hasNewDocuments = documentCount > previousCount;
-    
-    if (hasNewDocuments && !panelsVisible) {
-      console.log(`[Index] New documents detected (${previousCount} -> ${documentCount}), auto-showing panels`);
-      setPanelsVisible(true);
-      
-      // Show a toast to notify user
-      toast({
-        title: "New document ready",
-        description: `${documentCount - previousCount} new document(s) available. Panels shown below.`,
-        duration: 3000,
-      });
-    }
-    
-    // Update previous count
-    previousDocumentCountRef.current = documentCount;
-  }, [documentCount, panelsVisible, toast]);
-
-  // Auto-show panels when new MCP events are detected
-  useEffect(() => {
-    // Skip if still initializing
-    if (isInitialMountRef.current) return;
-    
-    const previousCount = previousMcpEventsCountRef.current;
-    const hasNewEvents = mcpEvents.length > previousCount;
-    
-    if (hasNewEvents && !panelsVisible && mcpEvents.length > 0) {
-      console.log(`[Index] New MCP events detected (${previousCount} -> ${mcpEvents.length}), auto-showing panels`);
-      setPanelsVisible(true);
-      
-      // Show a toast to notify user (only if significant number of events)
-      if (mcpEvents.length - previousCount >= 3) {
-        toast({
-          title: "Activity detected",
-          description: `New events in logs. Panels shown below.`,
-          duration: 2000,
-        });
-      }
-    }
-    
-    // Update previous count
-    previousMcpEventsCountRef.current = mcpEvents.length;
-  }, [mcpEvents.length, panelsVisible, toast]);
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Debounce refresh triggers
   const summarizedJobsRef = useRef<Set<string>>(new Set()); // Track which jobs we've already shown summary for
   
   // Helper function to show document summary in chat
+  // MUST be defined before useEffects that use it to avoid "Cannot access before initialization" error
   const showDocumentSummary = useCallback(async (jobId: string, fileName: string) => {
     // Skip if already summarized
     if (summarizedJobsRef.current.has(jobId)) {
@@ -317,6 +227,98 @@ const Index = () => {
       summarizedJobsRef.current.add(jobId);
     }
   }, [appendAssistantText, panelsVisible, toast]);
+
+  // Check for already-completed documents on mount and show summaries
+  useEffect(() => {
+    if (!authReady || (!session && !guestMode)) return;
+    
+    const checkCompletedDocuments = async () => {
+      try {
+        const userId = session?.user?.id;
+        if (!userId) return;
+        
+        // Query for completed documents that haven't been summarized yet
+        const { data: dbJobs, error } = await supabaseClient
+          .from("processing_jobs")
+          .select("id, file_name, status, metadata")
+          .eq("user_id", userId)
+          .in("analysis_target", ["document-analysis", "image-ocr"])
+          .eq("status", "completed")
+          .order("created_at", { ascending: false })
+          .limit(10); // Check last 10 documents
+        
+        if (!error && dbJobs && dbJobs.length > 0) {
+          console.log(`[Index] Found ${dbJobs.length} completed documents on page load, checking for summaries...`);
+          
+          // Show summaries for documents that haven't been summarized yet
+          for (const job of dbJobs) {
+            if (!summarizedJobsRef.current.has(job.id)) {
+              // Small delay to avoid spamming chat
+              await new Promise(resolve => setTimeout(resolve, 500));
+              await showDocumentSummary(job.id, job.file_name);
+            }
+          }
+        }
+      } catch (error) {
+        console.warn("[Index] Failed to check for completed documents on load:", error);
+      }
+    };
+    
+    // Only check once after auth is ready
+    const timeoutId = setTimeout(checkCompletedDocuments, 2000); // Wait 2 seconds after mount
+    
+    return () => clearTimeout(timeoutId);
+  }, [authReady, session, guestMode, showDocumentSummary]);
+
+  // Auto-show panels when new documents are detected
+  useEffect(() => {
+    // Skip if still initializing
+    if (isInitialMountRef.current) return;
+    
+    const previousCount = previousDocumentCountRef.current;
+    const hasNewDocuments = documentCount > previousCount;
+    
+    if (hasNewDocuments && !panelsVisible) {
+      console.log(`[Index] New documents detected (${previousCount} -> ${documentCount}), auto-showing panels`);
+      setPanelsVisible(true);
+      
+      // Show a toast to notify user
+      toast({
+        title: "New document ready",
+        description: `${documentCount - previousCount} new document(s) available. Panels shown below.`,
+        duration: 3000,
+      });
+    }
+    
+    // Update previous count
+    previousDocumentCountRef.current = documentCount;
+  }, [documentCount, panelsVisible, toast]);
+
+  // Auto-show panels when new MCP events are detected
+  useEffect(() => {
+    // Skip if still initializing
+    if (isInitialMountRef.current) return;
+    
+    const previousCount = previousMcpEventsCountRef.current;
+    const hasNewEvents = mcpEvents.length > previousCount;
+    
+    if (hasNewEvents && !panelsVisible && mcpEvents.length > 0) {
+      console.log(`[Index] New MCP events detected (${previousCount} -> ${mcpEvents.length}), auto-showing panels`);
+      setPanelsVisible(true);
+      
+      // Show a toast to notify user (only if significant number of events)
+      if (mcpEvents.length - previousCount >= 3) {
+        toast({
+          title: "Activity detected",
+          description: `New events in logs. Panels shown below.`,
+          duration: 2000,
+        });
+      }
+    }
+    
+    // Update previous count
+    previousMcpEventsCountRef.current = mcpEvents.length;
+  }, [mcpEvents.length, panelsVisible, toast]);
   
   // Manual reset function for stuck uploads
   const resetStuckUpload = useCallback(() => {
