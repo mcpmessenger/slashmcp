@@ -185,7 +185,7 @@ export async function getJobStatus(jobId: string): Promise<JobStatusResponse> {
  * @param userId Optional user ID (will be extracted from session if not provided).
  * @returns Array of job IDs that are ready for querying.
  */
-export async function getQueryableDocumentJobs(userId?: string): Promise<string[]> {
+export async function getQueryableDocumentJobs(userId?: string, fallbackJobs?: Array<{id: string, status: string, stage?: string}>): Promise<string[]> {
   if (!userId) {
     const {
       data: { session },
@@ -197,25 +197,48 @@ export async function getQueryableDocumentJobs(userId?: string): Promise<string[
     return [];
   }
 
-  const { data, error } = await supabaseClient
-    .from("processing_jobs")
-    .select("id, status, metadata")
-    .eq("user_id", userId)
-    .eq("status", "completed")
-    .in("analysis_target", ["document-analysis"]);
-
-  if (error) {
-    console.error("Error fetching queryable jobs:", error);
-    return [];
+  // FALLBACK: Use fallbackJobs if provided (when database queries are timing out)
+  if (fallbackJobs && fallbackJobs.length > 0) {
+    console.log("[ragService] Using fallback jobs for getQueryableDocumentJobs:", fallbackJobs.length);
+    return fallbackJobs
+      .filter((job) => {
+        return job.status === "completed" && 
+               (job.stage === "extracted" || job.stage === "injected" || job.stage === "indexed");
+      })
+      .map((job) => job.id);
   }
 
-  // Filter for jobs that have been extracted or indexed
-  return (data || [])
-    .filter((job) => {
-      const metadata = job.metadata as Record<string, unknown> | null;
-      const stage = metadata?.job_stage as string | undefined;
-      return stage === "extracted" || stage === "injected" || stage === "indexed";
-    })
-    .map((job) => job.id);
+  // Try database query with timeout
+  try {
+    const queryPromise = supabaseClient
+      .from("processing_jobs")
+      .select("id, status, metadata")
+      .eq("user_id", userId)
+      .eq("status", "completed")
+      .in("analysis_target", ["document-analysis", "image-ocr"]); // Include image-ocr too
+
+    const timeoutPromise = new Promise<{ data: null; error: { message: string } }>((resolve) => 
+      setTimeout(() => resolve({ data: null, error: { message: "Query timeout" } }), 5000)
+    );
+
+    const result = await Promise.race([queryPromise, timeoutPromise]);
+
+    if (result.error || !result.data) {
+      console.warn("[ragService] Database query failed or timed out, returning empty array");
+      return [];
+    }
+
+    // Filter for jobs that have been extracted or indexed
+    return (result.data || [])
+      .filter((job: any) => {
+        const metadata = job.metadata as Record<string, unknown> | null;
+        const stage = metadata?.job_stage as string | undefined;
+        return stage === "extracted" || stage === "injected" || stage === "indexed";
+      })
+      .map((job: any) => job.id);
+  } catch (error) {
+    console.error("[ragService] Error fetching queryable jobs:", error);
+    return [];
+  }
 }
 

@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { supabaseClient } from "@/lib/supabaseClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText, Image, Loader2, CheckCircle2, XCircle, Clock, Trash2 } from "lucide-react";
+import { FileText, Image, Loader2, CheckCircle2, XCircle, Clock, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/use-toast";
 import { deleteProcessingJob } from "@/lib/api";
@@ -111,7 +111,17 @@ export const DocumentsSidebar: React.FC<{
   refreshTrigger?: number; // External trigger to force refresh
   userId?: string; // Optional userId from parent (bypasses session retrieval)
   onDocumentsChange?: (count: number) => void; // Callback to notify parent of document count changes
-}> = ({ onDocumentClick, refreshTrigger, userId: propUserId, onDocumentsChange }) => {
+  fallbackJobs?: Array<{ // Fallback data source when database queries fail
+    id: string;
+    fileName: string;
+    status: string;
+    visionSummary?: string | null;
+    resultText?: string | null;
+    updatedAt?: string;
+    stage?: string;
+    contentLength?: number | null; // File size in bytes
+  }>;
+}> = ({ onDocumentClick, refreshTrigger, userId: propUserId, onDocumentsChange, fallbackJobs }) => {
   
   const { toast } = useToast();
   const [documents, setDocuments] = useState<Document[]>([]);
@@ -120,6 +130,7 @@ export const DocumentsSidebar: React.FC<{
   const [isLoadingRef, setIsLoadingRef] = useState(false); // Prevent concurrent loads
   const [hasError, setHasError] = useState(false); // Track if there's a persistent error
   const [deletingJobIds, setDeletingJobIds] = useState<Set<string>>(new Set()); // Track jobs being deleted
+  const [isExpanded, setIsExpanded] = useState(false); // Default to collapsed (closed)
 
   const loadDocuments = async () => {
     // Prevent concurrent loads
@@ -127,10 +138,61 @@ export const DocumentsSidebar: React.FC<{
       return;
     }
     
+    // IMMEDIATE FALLBACK: If we have fallbackJobs, use them first (before trying database)
+    // This ensures sidebar shows documents even when database queries always timeout
+    console.log("[DocumentsSidebar] 🔍 Checking fallbackJobs:", {
+      hasFallbackJobs: !!fallbackJobs,
+      fallbackJobsLength: fallbackJobs?.length || 0,
+      fallbackJobs: fallbackJobs?.map(j => ({ id: j.id, fileName: j.fileName, status: j.status })) || []
+    });
+    
+    if (fallbackJobs && fallbackJobs.length > 0) {
+      console.log("[DocumentsSidebar] ⚡ Found fallbackJobs, filtering for completed jobs...");
+      const completedFallbackJobs = fallbackJobs.filter(job => job.status === "completed");
+      console.log(`[DocumentsSidebar] ⚡ Found ${completedFallbackJobs.length} completed jobs in fallbackJobs`);
+      
+      if (completedFallbackJobs.length > 0) {
+        const fallbackDocs = completedFallbackJobs.map(job => ({
+          jobId: job.id,
+          fileName: job.fileName,
+          fileType: job.fileName.split('.').pop() || 'unknown',
+          fileSize: 0,
+          status: job.status,
+          stage: job.stage || "unknown",
+          createdAt: job.updatedAt || new Date().toISOString(),
+          updatedAt: job.updatedAt || new Date().toISOString(),
+          summary: job.visionSummary || (job.resultText ? job.resultText.substring(0, 200) + "..." : null),
+          visionSummary: job.visionSummary || null,
+          ocrText: job.resultText || null,
+        }));
+        
+        setDocuments(fallbackDocs);
+        setIsLoading(false);
+        setIsLoadingRef(false);
+        setHasCheckedSession(true);
+        setHasError(false);
+        setIsExpanded(true); // Auto-expand when documents are loaded
+        onDocumentsChange?.(fallbackDocs.length);
+        console.log(`[DocumentsSidebar] ✅ Loaded ${fallbackDocs.length} documents from fallbackJobs (skipping database query)`);
+        return; // Skip database query entirely if we have fallback data
+      } else {
+        console.log("[DocumentsSidebar] ⚠️ fallbackJobs provided but none are completed - will try database query");
+      }
+    } else {
+      console.log("[DocumentsSidebar] ⚠️ No fallbackJobs provided - will try database query");
+    }
+    
     try {
       setIsLoadingRef(true);
       setIsLoading(true);
       setHasError(false); // Clear error state on new attempt
+      
+      // LOG: Check fallbackJobs before proceeding
+      console.log("[DocumentsSidebar] 🔍 Checking fallbackJobs:", {
+        hasFallbackJobs: !!fallbackJobs,
+        fallbackJobsLength: fallbackJobs?.length || 0,
+        completedCount: fallbackJobs?.filter(j => j.status === "completed").length || 0
+      });
       
       let userId: string | undefined = propUserId;
       let session: { access_token?: string; refresh_token?: string; user?: { id: string } } | null = null;
@@ -147,17 +209,24 @@ export const DocumentsSidebar: React.FC<{
         if (session?.access_token && session?.user?.id) {
           userId = session.user.id;
         } else {
+          // No user ID - could be guest mode or not logged in
+          console.warn("[DocumentsSidebar] No userId found - user may be in guest mode");
           setIsLoading(false);
           setDocuments([]);
           setHasCheckedSession(true);
+          // Still notify parent of 0 documents
+          onDocumentsChange?.(0);
           return;
         }
       }
       
       if (!userId) {
+        console.warn("[DocumentsSidebar] No userId available for query");
         setIsLoading(false);
         setDocuments([]);
         setHasCheckedSession(true);
+        // Still notify parent of 0 documents
+        onDocumentsChange?.(0);
         return;
       }
       
@@ -167,64 +236,192 @@ export const DocumentsSidebar: React.FC<{
       // Execute query - first get jobs, then fetch summaries separately
       let data, error;
       try {
-        console.log("[DocumentsSidebar] Starting query for userId:", userId);
+        console.log("[DocumentsSidebar] ===== Starting query =====");
+        console.log("[DocumentsSidebar] Query parameters:", {
+          userId,
+          analysisTarget: "document-analysis",
+          hasSession: !!session,
+          sessionUserId: session?.user?.id,
+        });
         // First, get all processing jobs (try with filter first, fallback without if needed)
         let queryData, queryError;
         
-        // Try query with analysis_target filter
-        const queryWithFilter = supabaseClient
+        // CRITICAL FIX: Use separate queries instead of join to avoid RLS performance issues
+        // The join query was causing 20+ second timeouts due to RLS policy evaluation
+        // Query jobs first (simple, fast), then fetch analysis_results separately
+        console.log("[DocumentsSidebar] Using separate queries (join was causing timeouts)");
+        
+        // Step 1: Query processing_jobs (split into two queries for better index usage)
+        // CRITICAL: RLS policy must allow: auth.uid() = user_id OR user_id IS NULL
+        // Split into two queries instead of .or() for better index performance
+        console.log("[DocumentsSidebar] Querying jobs for user_id:", userId);
+        
+        // Query 1: Get jobs with matching user_id (uses index efficiently)
+        // Include both "document-analysis" and "image-ocr" since both can produce documents
+        // NOTE: Using REST API directly as fallback if Supabase client times out
+        const userJobsQuery = supabaseClient
           .from("processing_jobs")
           .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
           .eq("user_id", userId)
-          .eq("analysis_target", "document-analysis")
+          .in("analysis_target", ["document-analysis", "image-ocr"])
+          .order("created_at", { ascending: false })
+          .limit(50)
+          .abortSignal(AbortSignal.timeout(8000)); // 8 second timeout
+        
+        // Query 2: Get jobs with NULL user_id (for backward compatibility)
+        const nullUserJobsQuery = supabaseClient
+          .from("processing_jobs")
+          .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
+          .is("user_id", null)
+          .in("analysis_target", ["document-analysis", "image-ocr"])
           .order("created_at", { ascending: false })
           .limit(50);
         
-        // Add timeout to prevent hanging (increased to 20 seconds for slow queries)
-        const queryPromise = queryWithFilter;
-        const timeoutPromise = new Promise<{ data: null; error: { message: string } }>((resolve) => 
-          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 20 seconds" } }), 20000)
+        // Execute both queries in parallel with timeout (10 seconds each - increased from 3s)
+        // Note: If still timing out, check:
+        // 1. Indexes exist: SELECT indexname FROM pg_indexes WHERE tablename = 'processing_jobs';
+        // 2. RLS policy allows NULL: auth.uid() = user_id OR user_id IS NULL
+        const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
+          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 10 seconds" } }), 10000)
         );
         
-        const result = await Promise.race([
-          queryPromise.then(r => ({ data: r.data, error: r.error })),
-          timeoutPromise,
+        const [userJobsResult, nullJobsResult] = await Promise.all([
+          Promise.race([
+            userJobsQuery.then(r => ({ data: r.data, error: r.error })),
+            queryTimeout,
+          ]),
+          Promise.race([
+            nullUserJobsQuery.then(r => ({ data: r.data, error: r.error })),
+            queryTimeout,
+          ]),
         ]);
         
-        queryData = result.data;
-        queryError = result.error;
+        // Combine results
+        let jobsResult: { data: any[] | null; error: any } = { data: [], error: null };
         
-        if (queryError) {
-          data = null;
-          error = queryError;
-          console.error("[DocumentsSidebar] Query error:", queryError);
+        if (userJobsResult.error && nullJobsResult.error) {
+          // Both queries failed
+          jobsResult = { data: null, error: userJobsResult.error };
+          console.error("[DocumentsSidebar] Both queries failed:", userJobsResult.error, nullJobsResult.error);
         } else {
-          data = queryData;
-          console.log(`[DocumentsSidebar] Loaded ${data?.length || 0} documents`);
+          // Combine successful results
+          const userJobs = userJobsResult.data || [];
+          const nullJobs = nullJobsResult.data || [];
+          const combined = [...userJobs, ...nullJobs];
           
-          // If we have jobs, fetch their analysis results separately
-          if (data && data.length > 0) {
-            const jobIds = data.map(job => job.id);
-            const { data: analysisData, error: analysisError } = await supabaseClient
+          // Sort by created_at and limit to 50
+          combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+          jobsResult = { data: combined.slice(0, 50), error: null };
+          
+          console.log(`[DocumentsSidebar] ✅ Loaded ${userJobs.length} user jobs + ${nullJobs.length} NULL user_id jobs = ${jobsResult.data.length} total`);
+        }
+        
+        if (jobsResult.error) {
+          data = null;
+          error = jobsResult.error;
+          console.error("[DocumentsSidebar] ❌ Jobs query failed:", jobsResult.error);
+          console.error("[DocumentsSidebar] This might indicate:");
+          console.error("  1. RLS policies blocking the query - check: auth.uid() = user_id OR user_id IS NULL");
+          console.error("  2. Missing database indexes - run: 20251203012910_add_processing_jobs_indexes.sql");
+          console.error("  3. Database connection issue");
+          console.error("  4. Query timeout - queries took > 10 seconds");
+          console.error("  5. Missing database indexes - run this in Supabase SQL Editor:");
+          console.error("     SELECT indexname FROM pg_indexes WHERE tablename = 'processing_jobs';");
+          console.error("     If missing, run: supabase/migrations/20251203012910_add_processing_jobs_indexes.sql");
+        } else if (jobsResult.data) {
+          data = jobsResult.data;
+          error = null;
+          if (data.length > 0) {
+            console.log(`[DocumentsSidebar] ✅ Loaded ${data.length} jobs`);
+        } else {
+            console.log("[DocumentsSidebar] No jobs found (empty result)");
+          }
+          
+          // Step 2: Fetch analysis_results separately (only if we have jobs)
+          if (data.length > 0) {
+            const jobIds = data.map((job: any) => job.id);
+            console.log(`[DocumentsSidebar] Fetching analysis_results for ${jobIds.length} jobs...`);
+            
+            try {
+              // Use a shorter timeout for analysis_results (3 seconds)
+              const analysisQuery = supabaseClient
               .from("analysis_results")
               .select("job_id, vision_summary, ocr_text")
               .in("job_id", jobIds);
             
-            if (!analysisError && analysisData) {
-              // Create a map of job_id -> analysis_result
-              const analysisMap = new Map(analysisData.map(ar => [ar.job_id, ar]));
+              const analysisTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
+                setTimeout(() => resolve({ data: null, error: { message: "Analysis query timeout after 10 seconds" } }), 10000)
+              );
               
-              // Attach analysis results to jobs
-              data = data.map(job => ({
+              const analysisResult = await Promise.race([
+                analysisQuery.then(r => ({ data: r.data, error: r.error })),
+                analysisTimeout,
+              ]);
+              
+              if (!analysisResult.error && analysisResult.data) {
+                const analysisMap = new Map(analysisResult.data.map((ar: any) => [ar.job_id, ar]));
+                data = data.map((job: any) => ({
                 ...job,
                 analysis_results: analysisMap.get(job.id) || null
               }));
-              
-              console.log(`[DocumentsSidebar] Loaded ${analysisData.length} analysis results`);
-            } else if (analysisError) {
-              console.warn("[DocumentsSidebar] Failed to load analysis results:", analysisError);
-              // Continue without summaries - not critical
+                const resultsWithSummaries = data.filter((j: any) => j.analysis_results).length;
+                console.log(`[DocumentsSidebar] ✅ Loaded ${analysisResult.data.length} analysis results (${resultsWithSummaries} jobs have summaries)`);
+              } else {
+                console.warn("[DocumentsSidebar] ⚠️ Could not load analysis_results:", analysisResult.error);
+                console.warn("[DocumentsSidebar] 💡 Documents will show without summaries");
+                // Continue without summaries - documents will still show
+                data = data.map((job: any) => ({
+                  ...job,
+                  analysis_results: null
+                }));
+              }
+            } catch (analysisErr) {
+              console.warn("[DocumentsSidebar] ⚠️ Exception loading analysis_results:", analysisErr);
+              // Continue without summaries
+              data = data.map((job: any) => ({
+                ...job,
+                analysis_results: null
+              }));
             }
+          } else {
+            console.log("[DocumentsSidebar] No jobs found, skipping analysis_results query");
+            }
+        } else {
+          // No data and no error - empty result
+          data = [];
+          error = null;
+          console.log("[DocumentsSidebar] No jobs found with analysis_target in ['document-analysis', 'image-ocr']");
+          
+          // DEBUG: Try a fallback query to see what analysis_target values actually exist
+          try {
+            const debugQuery = supabaseClient
+              .from("processing_jobs")
+              .select("id, file_name, analysis_target, status, user_id")
+              .eq("user_id", userId)
+              .order("created_at", { ascending: false })
+              .limit(5);
+            
+            const debugResult = await Promise.race([
+              debugQuery.then(r => ({ data: r.data, error: r.error })),
+              new Promise<{ data: null; error: { message: string } }>((resolve) => 
+                setTimeout(() => resolve({ data: null, error: { message: "Debug query timeout" } }), 2000)
+              ),
+            ]);
+            
+            if (debugResult.data && debugResult.data.length > 0) {
+              const analysisTargets = [...new Set(debugResult.data.map((j: any) => j.analysis_target))];
+              console.warn("[DocumentsSidebar] 🔍 DEBUG: Found jobs with different analysis_target values:", analysisTargets);
+              console.warn("[DocumentsSidebar] 🔍 DEBUG: Sample jobs:", debugResult.data.map((j: any) => ({
+                file: j.file_name,
+                target: j.analysis_target,
+                status: j.status
+              })));
+              console.warn("[DocumentsSidebar] 💡 TIP: If documents have different analysis_target, they won't show. Current filter: ['document-analysis', 'image-ocr']");
+            } else {
+              console.log("[DocumentsSidebar] 🔍 DEBUG: No jobs found for this user at all");
+            }
+          } catch (debugErr) {
+            console.warn("[DocumentsSidebar] Debug query failed:", debugErr);
           }
         }
       } catch (queryError) {
@@ -234,29 +431,41 @@ export const DocumentsSidebar: React.FC<{
       }
 
       if (error) {
-        console.error("[DocumentsSidebar] Database query error:", error);
+        console.error("[DocumentsSidebar] ❌ Database query error:", error);
         console.error("[DocumentsSidebar] Error details:", JSON.stringify(error, null, 2));
         console.error("[DocumentsSidebar] Query was:", {
           table: "processing_jobs",
           filters: {
-            user_id: session.user.id,
+            user_id: userId,
             analysis_target: "document-analysis",
           },
+          sessionUserId: session?.user?.id,
         });
+        
+        // If RLS error, provide helpful message
+        if (error?.message?.includes("permission") || error?.message?.includes("policy") || error?.code === "42501") {
+          console.error("[DocumentsSidebar] 🔒 RLS Policy Error Detected!");
+          console.error("[DocumentsSidebar] This usually means:");
+          console.error("  1. RLS policies are not applied - run migration: 20251203012909_fix_processing_jobs_rls.sql");
+          console.error("  2. User ID mismatch - check if userId matches auth.uid()");
+          console.error("  3. User is not authenticated - check session");
+        }
         
         // Try a simpler query without analysis_target filter to debug
         if (error || !data || data.length === 0) {
-          console.log("[DocumentsSidebar] Attempting fallback query without analysis_target filter...");
+          console.log("[DocumentsSidebar] ⚠️ Primary query returned no results, attempting fallback query...");
+          console.log("[DocumentsSidebar] Fallback query will show ALL jobs for this user (not just document-analysis)");
           try {
+            // Fallback query: Also include documents with NULL user_id (for backward compatibility)
             const fallbackQuery = supabaseClient
               .from("processing_jobs")
               .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
-              .eq("user_id", userId)
+              .or(`user_id.eq.${userId},user_id.is.null`) // Include documents with matching user_id OR NULL user_id
               .order("created_at", { ascending: false })
               .limit(50);
             
             const fallbackTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
-              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout" } }), 15000)
+              setTimeout(() => resolve({ data: null, error: { message: "Fallback query timeout after 5 seconds" } }), 5000)
             );
             
             const fallbackResult = await Promise.race([
@@ -266,30 +475,87 @@ export const DocumentsSidebar: React.FC<{
             
             if (!fallbackResult.error && fallbackResult.data) {
               // Fetch analysis results for fallback data too
-              const jobIds = fallbackResult.data.map(job => job.id);
+              const jobIds = fallbackResult.data.map((job: any) => job.id);
               if (jobIds.length > 0) {
-                const { data: analysisData } = await supabaseClient
+                try {
+                  // Use shorter timeout for analysis_results in fallback too
+                  const analysisQuery = supabaseClient
                   .from("analysis_results")
                   .select("job_id, vision_summary, ocr_text")
                   .in("job_id", jobIds);
                 
-                const analysisMap = new Map(analysisData?.map(ar => [ar.job_id, ar]) || []);
-                const fallbackWithAnalysis = fallbackResult.data.map(job => ({
+                  const analysisTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
+                    setTimeout(() => resolve({ data: null, error: { message: "Analysis query timeout" } }), 3000)
+                  );
+                  
+                  const analysisResult = await Promise.race([
+                    analysisQuery.then(r => ({ data: r.data, error: r.error })),
+                    analysisTimeout,
+                  ]);
+                  
+                  const analysisData = analysisResult.data;
+                  const analysisError = analysisResult.error;
+                  
+                  const analysisMap = new Map((analysisData || [])?.map((ar: any) => [ar.job_id, ar]) || []);
+                  const fallbackWithAnalysis = fallbackResult.data.map((job: any) => ({
                   ...job,
                   analysis_results: analysisMap.get(job.id) || null
                 }));
+                  
+                  // Log which jobs have analysis results (helps diagnose processing issues)
+                  const jobsWithResults = fallbackWithAnalysis.filter((j: any) => j.analysis_results).length;
+                  const jobsWithoutResults = fallbackWithAnalysis.length - jobsWithResults;
+                  console.log(`[DocumentsSidebar] Fallback: ${jobsWithResults} jobs have analysis results, ${jobsWithoutResults} do not`);
+                  
+                  if (jobsWithoutResults > 0) {
+                    const jobsNeedingProcessing = fallbackWithAnalysis
+                      .filter((j: any) => !j.analysis_results && j.status !== "failed")
+                      .map((j: any) => ({ id: j.id, fileName: j.file_name, status: j.status }));
+                    console.warn(`[DocumentsSidebar] ⚠️ ${jobsWithoutResults} jobs are missing analysis results:`, jobsNeedingProcessing);
+                    console.warn(`[DocumentsSidebar] 💡 These jobs may still be processing. Check textract-worker logs.`);
+                  }
                 
                 // Use the fallback data if it has document-analysis jobs, or show all if none
-                const docJobs = fallbackWithAnalysis.filter(j => j.analysis_target === "document-analysis");
+                  const docJobs = fallbackWithAnalysis.filter((j: any) => j.analysis_target === "document-analysis");
                 if (docJobs.length > 0) {
                   data = docJobs;
                   error = null;
-                  console.log(`[DocumentsSidebar] Fallback query loaded ${docJobs.length} documents`);
+                    console.log(`[DocumentsSidebar] ✅ Fallback query loaded ${docJobs.length} documents`);
                 } else if (fallbackWithAnalysis.length > 0) {
-                  // Show all jobs if no document-analysis jobs found (for debugging)
+                  // Show all jobs if no document-analysis jobs found (they might have different analysis_target)
+                  // This helps debug and shows any uploaded files
                   data = fallbackWithAnalysis;
                   error = null;
-                  console.log(`[DocumentsSidebar] Fallback query loaded ${fallbackWithAnalysis.length} total jobs (no document-analysis filter)`);
+                  console.log(`[DocumentsSidebar] ⚠️ Fallback query loaded ${fallbackWithAnalysis.length} total jobs (showing all, not just document-analysis)`);
+                    console.log(`[DocumentsSidebar] Analysis targets found:`, fallbackWithAnalysis.map((j: any) => j.analysis_target));
+                  console.log(`[DocumentsSidebar] 💡 Documents exist but have different analysis_target. Showing all jobs.`);
+                  console.log(`[DocumentsSidebar] 💡 To fix: Documents should have analysis_target = 'document-analysis'`);
+                } else {
+                  // No jobs found at all - this means either no documents or user_id mismatch
+                  console.warn(`[DocumentsSidebar] ⚠️ Fallback query also returned 0 documents`);
+                  console.warn(`[DocumentsSidebar] This means:`);
+                  console.warn(`  1. No documents exist for user_id: ${userId}`);
+                  console.warn(`  2. OR user_id mismatch - documents might have different user_id`);
+                  console.warn(`[DocumentsSidebar] 💡 Check Supabase: SELECT * FROM processing_jobs WHERE user_id = '${userId}'`);
+                  console.warn(`[DocumentsSidebar] 💡 Or check all documents: SELECT * FROM processing_jobs ORDER BY created_at DESC LIMIT 10`);
+                  }
+                } catch (analysisErr) {
+                  console.warn("[DocumentsSidebar] ⚠️ Failed to load analysis_results in fallback:", analysisErr);
+                  // Continue without summaries
+                  const fallbackWithoutAnalysis = fallbackResult.data.map((job: any) => ({
+                    ...job,
+                    analysis_results: null
+                  }));
+                  const docJobs = fallbackWithoutAnalysis.filter((j: any) => j.analysis_target === "document-analysis");
+                  if (docJobs.length > 0) {
+                    data = docJobs;
+                    error = null;
+                    console.log(`[DocumentsSidebar] ✅ Fallback query loaded ${docJobs.length} documents (without summaries)`);
+                  } else if (fallbackWithoutAnalysis.length > 0) {
+                    data = fallbackWithoutAnalysis;
+                    error = null;
+                    console.log(`[DocumentsSidebar] ⚠️ Fallback query loaded ${fallbackWithoutAnalysis.length} total jobs (without summaries)`);
+                  }
                 }
               }
             }
@@ -300,8 +566,42 @@ export const DocumentsSidebar: React.FC<{
         
         // CRITICAL: Always clear loading state, even if there's an error or no data
         if (error && (!data || data.length === 0)) {
+          // FALLBACK: Try using fallbackJobs if database query failed
+          if (fallbackJobs && fallbackJobs.length > 0) {
+            console.log("[DocumentsSidebar] ⚠️ Database query failed, using fallback jobs:", fallbackJobs.length);
+            const fallbackDocs = fallbackJobs
+              .filter(job => job.status === "completed")
+              .map(job => ({
+                jobId: job.id,
+                fileName: job.fileName,
+                fileType: job.fileName.split('.').pop() || 'unknown',
+                fileSize: 0,
+                status: job.status,
+                stage: job.stage || "unknown",
+                createdAt: job.updatedAt || new Date().toISOString(),
+                updatedAt: job.updatedAt || new Date().toISOString(),
+                summary: job.visionSummary || (job.resultText ? job.resultText.substring(0, 200) + "..." : null),
+                visionSummary: job.visionSummary || null,
+                ocrText: job.resultText || null,
+              }));
+            
+            setDocuments(fallbackDocs);
+            setIsLoading(false);
+            setIsLoadingRef(false);
+            setHasCheckedSession(true);
+            setHasError(false);
+            onDocumentsChange?.(fallbackDocs.length);
+            console.log(`[DocumentsSidebar] ✅ Loaded ${fallbackDocs.length} documents from fallback`);
+            return;
+          }
+          
           setIsLoading(false);
+          setIsLoadingRef(false); // CRITICAL: Clear this too, otherwise loading state gets stuck
           setDocuments([]);
+          setHasCheckedSession(true);
+          
+          // Still notify parent of 0 documents
+          onDocumentsChange?.(0);
           
           // Only show error toast if it's not a timeout (to avoid spam, safety timeout will handle it)
           const isTimeout = error.message?.includes("timeout") || error.message?.includes("Timeout");
@@ -347,6 +647,21 @@ export const DocumentsSidebar: React.FC<{
         };
       });
       
+      // CRITICAL: Don't overwrite documents if we already have fallback documents
+      // Only update if database query returned more documents, or if we have no documents yet
+      const hasExistingDocs = documents.length > 0;
+      const hasNewDocs = docs.length > 0;
+      
+      if (hasExistingDocs && !hasNewDocs) {
+        console.log("[DocumentsSidebar] ⚠️ Database query returned 0 documents, but we have existing documents from fallback. Keeping existing documents.");
+        setIsLoading(false);
+        setIsLoadingRef(false);
+        setHasCheckedSession(true);
+        setHasError(false);
+        // Don't update documents or call onDocumentsChange - keep existing state
+        return;
+      }
+      
       // CRITICAL: Always set documents and clear loading, even if empty
       // This must happen regardless of whether we found documents or not
       setDocuments(docs);
@@ -355,23 +670,36 @@ export const DocumentsSidebar: React.FC<{
       setHasCheckedSession(true);
       setHasError(false);
       
-      // Notify parent of document count change
+      // CRITICAL: Always notify parent of document count change (even if 0)
+      // This allows the panel to show/hide correctly
       onDocumentsChange?.(docs.length);
       
+      // Auto-expand when documents are found
+      if (docs.length > 0 && !isExpanded) {
+        setIsExpanded(true);
+      }
+      
       if (docs.length === 0) {
-        console.warn("[DocumentsSidebar] No documents found. Query filters:", {
+        console.warn("[DocumentsSidebar] ⚠️ No documents found in query results");
+        console.warn("[DocumentsSidebar] Query filters used:", {
           userId: userId,
           analysisTarget: "document-analysis",
+          sessionUserId: session?.user?.id,
         });
-        console.warn("[DocumentsSidebar] This might indicate:");
-        console.warn("  1. No documents uploaded yet");
-        console.warn("  2. Documents have different user_id");
-        console.warn("  3. Documents have different analysis_target");
-        console.warn("  4. RLS policies blocking the query");
-        console.warn("  5. Query timed out or failed silently");
+        console.warn("[DocumentsSidebar] Possible causes:");
+        console.warn("  1. No documents uploaded yet for this user");
+        console.warn("  2. Documents have different user_id (check database)");
+        console.warn("  3. Documents have different analysis_target (fallback query should catch this)");
+        console.warn("  4. RLS policies blocking the query (check Supabase migrations)");
+        console.warn("  5. Query timed out (check for timeout errors above)");
+        console.warn("[DocumentsSidebar] 💡 Next steps:");
+        console.warn("  - Check Supabase SQL Editor: SELECT * FROM processing_jobs WHERE user_id = '" + userId + "'");
+        console.warn("  - Verify RLS policies: SELECT * FROM pg_policies WHERE tablename = 'processing_jobs'");
+        console.warn("  - Check analysis_target: SELECT DISTINCT analysis_target FROM processing_jobs WHERE user_id = '" + userId + "'");
       } else {
         console.log(`[DocumentsSidebar] ✅ Successfully loaded ${docs.length} document(s)`);
         console.log(`[DocumentsSidebar] Documents with summaries: ${docs.filter(d => d.summary).length}`);
+        console.log(`[DocumentsSidebar] Document file names:`, docs.map(d => d.fileName));
       }
     } catch (error) {
       console.error("[DocumentsSidebar] Error loading documents:", error);
@@ -382,9 +710,7 @@ export const DocumentsSidebar: React.FC<{
       setHasCheckedSession(true);
       setDocuments([]); // Clear documents on error
       setHasError(true); // Mark that there's an error
-      onDocumentsChange?.(0); // Notify parent of 0 documents
-      
-      // Notify parent of document count change (0 on error)
+      // Notify parent of 0 documents (only once)
       onDocumentsChange?.(0);
       
       // Only show error toast if it's not a timeout (to avoid spam)
@@ -416,9 +742,9 @@ export const DocumentsSidebar: React.FC<{
     
     let safetyTimeout: NodeJS.Timeout | null = null;
     
-    // Add a safety timeout to force loading state to clear after 25 seconds (after query timeout)
+    // Add a safety timeout to force loading state to clear after 15 seconds (after query timeout of 10s)
     safetyTimeout = setTimeout(() => {
-      console.warn("[DocumentsSidebar] Safety timeout: Forcing loading state to clear after 25s");
+      console.warn("[DocumentsSidebar] Safety timeout: Forcing loading state to clear after 15s");
       setIsLoading(false);
       setIsLoadingRef(false);
       setHasCheckedSession(true);
@@ -477,18 +803,21 @@ export const DocumentsSidebar: React.FC<{
   useEffect(() => {
     if (refreshTrigger && refreshTrigger > 0 && propUserId && refreshTrigger !== lastRefreshTriggerRef.current) {
       lastRefreshTriggerRef.current = refreshTrigger;
-      console.log("[DocumentsSidebar] External refresh triggered:", refreshTrigger);
+      console.log("[DocumentsSidebar] 🔄 External refresh triggered:", refreshTrigger, "for userId:", propUserId);
       setHasError(false); // Reset error state on manual refresh
       setIsLoading(true); // Show loading state
-      // Small delay to ensure database insert is complete
+      // Increased delay to ensure database insert and analysis_results are complete
       const refreshTimeout = setTimeout(() => {
+        console.log("[DocumentsSidebar] 🔄 Executing refresh after delay...");
         loadDocuments().catch((error) => {
-          console.error("[DocumentsSidebar] Error on external refresh:", error);
+          console.error("[DocumentsSidebar] ❌ Error on external refresh:", error);
           setIsLoading(false);
         });
-      }, 1000); // 1 second delay to allow DB insert to complete
+      }, 2000); // 2 second delay to allow DB insert and analysis_results to complete
       
       return () => clearTimeout(refreshTimeout);
+    } else if (refreshTrigger && refreshTrigger > 0 && !propUserId) {
+      console.warn("[DocumentsSidebar] ⚠️ Refresh triggered but no userId available yet");
     }
   }, [refreshTrigger, propUserId]);
 
@@ -599,6 +928,120 @@ export const DocumentsSidebar: React.FC<{
     }
   };
 
+  const handleDeleteAll = async () => {
+    if (documents.length === 0) {
+      toast({
+        title: "No documents",
+        description: "There are no documents to delete.",
+      });
+      return;
+    }
+
+    if (!confirm(`Delete ALL ${documents.length} document(s)? This cannot be undone and will also delete files from S3.`)) {
+      return;
+    }
+
+    const jobIdsToDelete = new Set(documents.map(doc => doc.jobId));
+    setDeletingJobIds(jobIdsToDelete);
+
+    try {
+      await Promise.all(
+        documents.map(doc => deleteProcessingJob(doc.jobId, true))
+      );
+      toast({
+        title: "All documents deleted",
+        description: `Deleted ${documents.length} document(s).`,
+      });
+      // Clear all documents from state
+      setDocuments([]);
+      onDocumentsChange?.(0);
+    } catch (error) {
+      console.error("Failed to delete all documents:", error);
+      toast({
+        title: "Delete all failed",
+        description: error instanceof Error ? error.message : "Failed to delete some documents.",
+        variant: "destructive",
+      });
+    } finally {
+      setDeletingJobIds(new Set());
+    }
+  };
+
+  // Expose deleteAll to window for console access
+  // This version queries the database directly, so it works even when queries timeout
+  useEffect(() => {
+    if (typeof window !== "undefined" && propUserId) {
+      (window as any).deleteAllDocuments = async () => {
+        console.log("[DocumentsSidebar] 🗑️ Delete all function called - querying database directly...");
+        
+        try {
+          // Query database directly (bypasses state)
+          const { data: jobs, error } = await supabaseClient
+            .from('processing_jobs')
+            .select('id, file_name')
+            .eq('user_id', propUserId)
+            .in('analysis_target', ['document-analysis', 'image-ocr']);
+          
+          if (error) {
+            console.error('[DocumentsSidebar] Failed to fetch jobs:', error);
+            alert(`Failed to fetch documents: ${error.message}`);
+            return;
+          }
+          
+          if (!jobs || jobs.length === 0) {
+            console.log('[DocumentsSidebar] No documents found');
+            alert('No documents found to delete');
+            return;
+          }
+          
+          const confirmed = confirm(`Delete ALL ${jobs.length} document(s)?\n\nThis will:\n- Delete from database\n- Delete files from S3\n- Cannot be undone!`);
+          
+          if (!confirmed) {
+            console.log('[DocumentsSidebar] Deletion cancelled');
+            return;
+          }
+          
+          console.log(`[DocumentsSidebar] Deleting ${jobs.length} documents...`);
+          
+          let deleted = 0;
+          let failed = 0;
+          
+          for (const job of jobs) {
+            try {
+              await deleteProcessingJob(job.id, true);
+              deleted++;
+              console.log(`✅ Deleted: ${job.file_name}`);
+            } catch (error) {
+              failed++;
+              console.error(`❌ Failed: ${job.file_name}`, error);
+            }
+          }
+          
+          console.log(`[DocumentsSidebar] ✅ Deleted: ${deleted}/${jobs.length}`);
+          if (failed > 0) {
+            console.error(`[DocumentsSidebar] ❌ Failed: ${failed}/${jobs.length}`);
+          }
+          
+          alert(`Deleted ${deleted} of ${jobs.length} document(s). ${failed > 0 ? `\n${failed} failed.` : ''}\n\nRefresh the page to see changes.`);
+          
+          // Trigger refresh
+          if (deleted > 0) {
+            loadDocuments().catch(() => {});
+          }
+        } catch (error) {
+          console.error('[DocumentsSidebar] Delete all error:', error);
+          alert(`Error: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      };
+      console.log("[DocumentsSidebar] 💡 Delete all function available: window.deleteAllDocuments()");
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        delete (window as any).deleteAllDocuments;
+      }
+    };
+  }, [propUserId]);
+
   const failedCount = documents.filter(doc => doc.status === "failed").length;
 
   // DIAGNOSTIC: Log render with current state
@@ -608,18 +1051,123 @@ export const DocumentsSidebar: React.FC<{
     hasError,
     propUserId,
     hasCheckedSession,
+    isExpanded, // Add this to see if sidebar is expanded
   });
 
+  // Ensure onDocumentsChange is always called with current document count
+  // This is critical for the hidden instance to notify parent when documents are found
+  useLayoutEffect(() => {
+    if (hasCheckedSession && !isLoading) {
+      onDocumentsChange?.(documents.length);
+    }
+  }, [documents.length, hasCheckedSession, isLoading, onDocumentsChange]);
+
+  // Auto-expand sidebar when documents are loaded (even if not expanded yet)
+  // Also check fallbackJobs directly if we don't have documents yet
+  useLayoutEffect(() => {
+    // If we have documents, expand
+    if (documents.length > 0 && !isExpanded && hasCheckedSession && !isLoading) {
+      console.log(`[DocumentsSidebar] 🔓 Auto-expanding sidebar - ${documents.length} documents available`);
+      setIsExpanded(true);
+    }
+    
+    // If we don't have documents but have fallbackJobs, use them immediately
+    if (documents.length === 0 && fallbackJobs && fallbackJobs.length > 0 && !isLoading) {
+      const completedFallbackJobs = fallbackJobs.filter(job => job.status === "completed");
+      if (completedFallbackJobs.length > 0) {
+        console.log(`[DocumentsSidebar] 🔓 Using fallbackJobs immediately - ${completedFallbackJobs.length} completed jobs`);
+        const fallbackDocs = completedFallbackJobs.map(job => ({
+          jobId: job.id,
+          fileName: job.fileName,
+          fileType: job.fileName.split('.').pop() || 'unknown',
+          fileSize: job.contentLength ?? 0, // Use contentLength from fallbackJobs
+          status: job.status,
+          stage: job.stage || "unknown",
+          createdAt: job.updatedAt || new Date().toISOString(),
+          updatedAt: job.updatedAt || new Date().toISOString(),
+          summary: job.visionSummary || (job.resultText ? job.resultText.substring(0, 200) + "..." : null),
+          visionSummary: job.visionSummary || null,
+          ocrText: job.resultText || null,
+        }));
+        setDocuments(fallbackDocs);
+        setIsExpanded(true);
+        setHasCheckedSession(true);
+        onDocumentsChange?.(fallbackDocs.length);
+      }
+    }
+  }, [documents.length, isExpanded, hasCheckedSession, isLoading, fallbackJobs, onDocumentsChange]);
+
+  // Check if we have fallbackJobs that could be used
+  const hasAvailableFallbackJobs = fallbackJobs && fallbackJobs.length > 0 && fallbackJobs.some(job => job.status === "completed");
+  
+  // Don't render UI if no documents and not loading (for hidden loader instance)
+  // This prevents showing "No documents yet" when panel should be completely hidden
+  // The onDocumentsChange callback is ensured above via useLayoutEffect
+  // IMPORTANT: This ensures the panel is completely hidden (not just collapsed) when empty
+  // This applies to both logged-in users and guest mode
+  // EXCEPTION: If we have fallbackJobs, allow rendering so they can be loaded
+  if (documents.length === 0 && !isLoading && hasCheckedSession && !hasAvailableFallbackJobs) {
+    return null;
+  }
+
+  // Also don't render if we're still loading and haven't checked session yet
+  // This prevents showing loading state when we don't have a user
+  // EXCEPTION: If we have fallbackJobs, allow rendering so they can be loaded
+  if (!hasCheckedSession && !isLoading && !hasAvailableFallbackJobs) {
+    return null;
+  }
+
+  // Don't render if we have no userId (guest mode without proper setup)
+  // This ensures guest users don't see an empty panel
+  if (!propUserId && documents.length === 0 && !isLoading) {
+    return null;
+  }
+
   return (
-    <Card className="h-full">
-      <CardHeader className="pb-3">
+    <Card className="h-full flex flex-col">
+      <CardHeader className="pb-3 flex-shrink-0">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold">
-            Documents & Knowledge
-            {/* DIAGNOSTIC: Show propUserId in title if available */}
-            {propUserId && <span className="text-xs text-muted-foreground ml-2">(User: {propUserId.substring(0, 8)}...)</span>}
-          </CardTitle>
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-semibold">
+              Documents & Knowledge
+              {documents.length > 0 && (
+                <span className="text-xs text-muted-foreground ml-2">({documents.length})</span>
+              )}
+            </CardTitle>
+          </div>
           <div className="flex items-center gap-1">
+            {documents.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleDeleteAll}
+                disabled={isLoading || deletingJobIds.size > 0}
+                className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                title="Delete all documents"
+              >
+                <Trash2 className="h-3 w-3 mr-1" />
+                Delete All
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                console.log(`[DocumentsSidebar] Toggling expanded: ${isExpanded} -> ${!isExpanded}`);
+                setIsExpanded(!isExpanded);
+              }}
+              className="h-7 w-7 p-0"
+              title={isExpanded ? "Collapse" : "Expand"}
+            >
+              {isExpanded ? <X className="h-4 w-4" /> : <FileText className="h-4 w-4" />}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      {isExpanded && (
+        <CardContent className="p-2 flex-1 overflow-hidden flex flex-col">
+          <div className="flex items-center justify-between mb-2">
             {failedCount > 0 && (
               <Button
                 variant="ghost"
@@ -638,14 +1186,11 @@ export const DocumentsSidebar: React.FC<{
               size="sm"
               onClick={loadDocuments}
               disabled={isLoading}
-              className="h-6 px-2 text-xs"
+              className="h-6 px-2 text-xs ml-auto"
             >
               {isLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Refresh"}
             </Button>
           </div>
-        </div>
-      </CardHeader>
-      <CardContent className="p-2">
         {isLoading && documents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -670,10 +1215,26 @@ export const DocumentsSidebar: React.FC<{
             {documents.map((doc) => (
               <div
                 key={doc.jobId}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("application/json", JSON.stringify({
+                    jobId: doc.jobId,
+                    fileName: doc.fileName,
+                    fileType: doc.fileType,
+                  }));
+                  // Add visual feedback
+                  e.currentTarget.style.opacity = "0.5";
+                }}
+                onDragEnd={(e) => {
+                  e.currentTarget.style.opacity = "1";
+                }}
                 className={cn(
-                  "w-full p-2 rounded-md border transition-colors group",
+                  "w-full p-2 rounded-md border transition-colors group cursor-move",
                   "hover:bg-muted/50 hover:border-primary/50",
+                  "active:cursor-grabbing",
                 )}
+                title={`Drag to chat to include "${doc.fileName}" in your message`}
               >
                 <button
                   onClick={() => onDocumentClick?.(doc.jobId)}
@@ -728,7 +1289,8 @@ export const DocumentsSidebar: React.FC<{
             ))}
           </div>
         )}
-      </CardContent>
+        </CardContent>
+      )}
     </Card>
   );
 };

@@ -210,6 +210,7 @@ interface ChatInputProps {
   isSpeaking?: boolean;
   onJobsChange?: (jobs: UploadJob[], isRegistering: boolean) => void;
   onEvent?: (event: McpEvent) => void;
+  onDocumentDrop?: (jobId: string, fileName: string) => void; // Callback when document is dropped from sidebar
 }
 
 interface OptionTagProps {
@@ -279,6 +280,7 @@ export function ChatInput({
   isSpeaking = false,
   onJobsChange,
   onEvent,
+  onDocumentDrop,
 }: ChatInputProps) {
   const { toast } = useToast();
   const [value, setValue] = useState("");
@@ -972,17 +974,124 @@ export function ChatInput({
         }
 
         if (response.uploadUrl) {
-          const uploadResp = await fetch(response.uploadUrl, {
-            method: "PUT",
-            headers: {
-              "Content-Type": file.type || "application/octet-stream",
-            },
-            body: file,
+          console.log("[ChatInput] Uploading file to S3 presigned URL...");
+          
+          // Parse URL for diagnostics (sanitize query params for security)
+          let uploadUrlInfo: any;
+          try {
+            const url = new URL(response.uploadUrl);
+            uploadUrlInfo = {
+              protocol: url.protocol,
+              hostname: url.hostname,
+              pathname: url.pathname.substring(0, 100) + (url.pathname.length > 100 ? "..." : ""),
+              hasQueryParams: url.search.length > 0,
+              queryParamCount: url.searchParams ? url.searchParams.toString().split('&').length : 0,
+              // Don't log actual query params (contains sensitive signature)
+            };
+          } catch (urlError) {
+            uploadUrlInfo = { error: "Failed to parse URL", urlError };
+          }
+          
+          console.log("[ChatInput] S3 upload details:", {
+            fileSize: file.size,
+            fileType: file.type,
+            fileName: file.name,
+            uploadUrlInfo,
+            isLargeFile: file.size > 100 * 1024 * 1024, // > 100MB
+            currentOrigin: typeof window !== "undefined" ? window.location.origin : "N/A",
+            userAgent: typeof navigator !== "undefined" ? navigator.userAgent.substring(0, 50) + "..." : "N/A",
           });
+          
+          let uploadResp: Response;
+          try {
+            const uploadStartTime = Date.now();
+            
+            // CRITICAL FIX: Only include Content-Type header if file.type is present
+            // The presigned URL is signed with Content-Type only if contentType was provided
+            // If we send Content-Type when it wasn't signed, S3 will reject the request
+            // Also trim whitespace to ensure exact match with server signature
+            const uploadHeaders: Record<string, string> = {};
+            if (file.type && file.type.trim()) {
+              uploadHeaders["Content-Type"] = file.type.trim();
+            }
+            
+            console.log("[ChatInput] Sending PUT request to S3...");
+            console.log("[ChatInput] Request details:", {
+              method: "PUT",
+              url: uploadUrlInfo?.hostname + uploadUrlInfo?.pathname,
+              contentType: file.type || "(not included - matches presigned URL signature)",
+              contentLength: file.size,
+              origin: typeof window !== "undefined" ? window.location.origin : "N/A",
+              headersMatchSignature: file.type ? "Content-Type signed" : "No Content-Type (as signed)",
+            });
+            
+            uploadResp = await fetch(response.uploadUrl, {
+              method: "PUT",
+              headers: uploadHeaders,
+              body: file,
+            });
+            const uploadDuration = Date.now() - uploadStartTime;
+            console.log("[ChatInput] S3 upload response:", {
+              status: uploadResp.status,
+              statusText: uploadResp.statusText,
+              ok: uploadResp.ok,
+              duration: `${uploadDuration}ms`,
+              headers: Object.fromEntries(uploadResp.headers.entries()),
+            });
+          } catch (uploadError) {
+            const errorName = uploadError instanceof Error ? uploadError.name : "Unknown";
+            const errorMessage = uploadError instanceof Error ? uploadError.message : String(uploadError);
+            
+            // Additional diagnostics
+            const isNetworkError = errorName === "TypeError" && errorMessage.includes("fetch");
+            const isCORSError = errorMessage.toLowerCase().includes("cors");
+            const isAbortError = errorName === "AbortError";
+            
+            console.error("[ChatInput] ❌ S3 upload failed:", {
+              error: errorMessage,
+              name: errorName,
+              stack: uploadError instanceof Error ? uploadError.stack : undefined,
+              fileSize: file.size,
+              fileType: file.type,
+              uploadUrlInfo,
+              currentOrigin: typeof window !== "undefined" ? window.location.origin : "N/A",
+              isNetworkError,
+              isCORSError,
+              isAbortError,
+              timestamp: new Date().toISOString(),
+              possibleCauses: [
+                isCORSError ? "🔴 CORS issue - Check S3 bucket CORS configuration" : null,
+                isNetworkError ? "🔴 Network issue - Check connectivity, firewall, or browser extensions" : null,
+                "Presigned URL expired or invalid (check URL generation)",
+                file.size > 100 * 1024 * 1024 ? "File too large for browser upload" : null,
+                "Browser extension blocking S3 request (try incognito)",
+                "S3 bucket policy blocking PUT requests",
+                "Content-Type header mismatch with presigned URL signature",
+              ].filter(Boolean),
+            });
+            
+            // Store error for debugging (accessible in console)
+            if (typeof window !== "undefined") {
+              (window as any).__lastS3UploadError = {
+                error: errorMessage,
+                name: errorName,
+                url: uploadUrlInfo,
+                file: { name: file.name, size: file.size, type: file.type },
+                timestamp: new Date().toISOString(),
+              };
+              console.log("[ChatInput] 💡 Error details stored in window.__lastS3UploadError");
+            }
+            
+            updateJob(response.jobId, { status: "failed", error: "Failed to upload to storage" });
+            throw new Error(
+              `Failed to upload file to storage: ${errorMessage}. ` +
+              "This may indicate a network issue, CORS problem, or invalid presigned URL."
+            );
+          }
 
           if (!uploadResp.ok) {
             updateJob(response.jobId, { status: "failed", error: "Failed to upload to storage" });
-            throw new Error("Upload to storage failed");
+            throw new Error(`Upload to storage failed: ${uploadResp.status} ${uploadResp.statusText}`);
           }
 
           try {
@@ -1027,14 +1136,30 @@ export function ChatInput({
 
           if (shouldRunOCR) {
             try {
+              console.log("[ChatInput] Triggering textract job for:", response.jobId);
               await triggerTextractJob(response.jobId);
+              console.log("[ChatInput] Textract job triggered successfully");
               
               // Poll for job completion with timeout
               const POLL_INTERVAL_MS = 2000; // Check every 2 seconds
               const POLL_TIMEOUT_MS = 300_000; // 5 minutes max
               const pollStartTime = Date.now();
               let pollAttempts = 0;
-              let statusResponse = await fetchJobStatus(response.jobId);
+              
+              console.log("[ChatInput] Fetching initial job status...");
+              let statusResponse;
+              try {
+                statusResponse = await fetchJobStatus(response.jobId);
+                console.log("[ChatInput] Initial job status:", statusResponse.job.status);
+              } catch (statusError) {
+                console.error("[ChatInput] Failed to fetch initial job status:", statusError);
+                // Don't fail the entire upload if status check fails - job might still be processing
+                // Just log and continue - the polling mechanism will handle retries
+                throw new Error(
+                  `Failed to check job status: ${statusError instanceof Error ? statusError.message : String(statusError)}. ` +
+                  "The file was uploaded successfully, but status check failed. The job may still be processing."
+                );
+              }
               
               // Poll until job is completed, failed, or timeout
               while (
@@ -1210,24 +1335,50 @@ export function ChatInput({
   );
 
   const handleDragOver = useCallback((event: React.DragEvent<HTMLFormElement>) => {
-    if (event.dataTransfer?.types.includes("Files")) {
+    // Handle both file drops and document drops from sidebar
+    if (event.dataTransfer?.types.includes("Files") || event.dataTransfer?.types.includes("application/json")) {
       event.preventDefault();
-      event.dataTransfer.dropEffect = "copy";
+      event.dataTransfer.dropEffect = event.dataTransfer?.types.includes("Files") ? "copy" : "move";
     }
   }, []);
 
   const handleDrop = useCallback(
     async (event: React.DragEvent<HTMLFormElement>) => {
-      if (!event.dataTransfer?.files || event.dataTransfer.files.length === 0) {
-        return;
-      }
       event.preventDefault();
-      const fileList = Array.from(event.dataTransfer.files);
-      for (const file of fileList) {
-        await handleFileUpload(file);
+      
+      // Check if it's a document drop from sidebar (application/json)
+      if (event.dataTransfer?.types.includes("application/json")) {
+        try {
+          const jsonData = event.dataTransfer.getData("application/json");
+          const documentData = JSON.parse(jsonData);
+          
+          if (documentData.jobId && documentData.fileName) {
+            console.log("[ChatInput] Document dropped:", documentData);
+            // Call the document drop handler if provided
+            if (onDocumentDrop) {
+              onDocumentDrop(documentData.jobId, documentData.fileName);
+            }
+            toast({
+              title: "Document attached",
+              description: `${documentData.fileName} will be included in your message.`,
+              duration: 2000,
+            });
+            return;
+          }
+        } catch (error) {
+          console.error("[ChatInput] Error parsing dropped document data:", error);
+        }
+      }
+      
+      // Handle file drops (existing behavior)
+      if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
+        const fileList = Array.from(event.dataTransfer.files);
+        for (const file of fileList) {
+          await handleFileUpload(file);
+        }
       }
     },
-    [handleFileUpload],
+    [handleFileUpload, onDocumentDrop, toast],
   );
 
   const isSubmitDisabled = disabled || !value.trim();

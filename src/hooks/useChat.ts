@@ -78,19 +78,40 @@ const getStoredSupabaseSession = (): Session | null => {
     const raw = window.localStorage.getItem(SUPABASE_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      const session = parsed?.currentSession ?? parsed?.session ?? null;
-      if (session) {
-        return session;
+      // Supabase stores session in different formats:
+      // 1. Direct: { access_token, user, ... }
+      // 2. Nested: { currentSession: { access_token, user, ... } }
+      // 3. Nested: { session: { access_token, user, ... } }
+      const session = parsed?.currentSession ?? parsed?.session ?? (parsed?.access_token ? parsed : null);
+      
+      if (session && session.access_token && session.user) {
+        // Validate session is not expired
+        if (session.expires_at && typeof session.expires_at === 'number') {
+          const now = Math.floor(Date.now() / 1000);
+          if (session.expires_at < now) {
+            console.log("[getStoredSupabaseSession] Session expired, removing from storage");
+            window.localStorage.removeItem(SUPABASE_STORAGE_KEY);
+            return null;
+          }
+        }
+        console.log("[getStoredSupabaseSession] ✅ Found valid session in localStorage");
+        return session as Session;
       }
     }
   } catch (error) {
     console.warn("Unable to parse stored Supabase session", error);
   }
+  
+  // Fallback to custom session key
   if (typeof window === "undefined" || !CUSTOM_SUPABASE_SESSION_KEY) return null;
   try {
     const fallbackRaw = window.localStorage.getItem(CUSTOM_SUPABASE_SESSION_KEY);
     if (!fallbackRaw) return null;
-    return JSON.parse(fallbackRaw);
+    const fallbackSession = JSON.parse(fallbackRaw);
+    if (fallbackSession && fallbackSession.access_token && fallbackSession.user) {
+      console.log("[getStoredSupabaseSession] ✅ Found valid session in custom storage");
+      return fallbackSession as Session;
+    }
   } catch (error) {
     console.warn("Unable to parse fallback Supabase session", error);
     return null;
@@ -1100,30 +1121,68 @@ export function useChat() {
       // Try to restore session from localStorage directly (faster than getSession)
       const storedSession = getStoredSupabaseSession();
       if (storedSession) {
-        console.log("[Auth] Found session in localStorage, restoring...");
+        console.log("[Auth] ✅ Found session in localStorage, restoring immediately...");
+        console.log("[Auth] Session details:", {
+          hasAccessToken: !!storedSession.access_token,
+          hasUser: !!storedSession.user,
+          userId: storedSession.user?.id,
+          expiresAt: storedSession.expires_at,
+        });
         updateSession(storedSession);
         setAuthReady(true);
         
+        // CRITICAL: Disable guest mode immediately when session is restored from localStorage
+        if (storedSession?.user) {
+          console.log("[Auth] ✅ Valid session restored from localStorage - disabling guest mode immediately");
+          setGuestMode(false);
+        } else {
+          console.warn("[Auth] ⚠️ Stored session missing user data:", { hasAccessToken: !!storedSession?.access_token, hasUser: !!storedSession?.user });
+        }
+        
         // Verify with getSession in background (non-blocking)
+        // But don't wait for it - use the localStorage session immediately
         supabaseClient.auth
           .getSession()
           .then(({ data, error }) => {
             if (isCancelled) return;
             if (error) {
-              console.warn("[Auth] getSession verification failed", error);
+              console.warn("[Auth] getSession verification failed (but keeping localStorage session)", error);
               // Keep the localStorage session if getSession fails
             } else if (data.session) {
+              console.log("[Auth] ✅ getSession verified, updating with fresh session");
               // Update with fresh session if available
               updateSession(data.session);
               persistSessionToStorage(data.session); // Explicit persistence to prevent race condition
+              // Ensure guest mode is still disabled
+              if (data.session?.user) {
+                console.log("[Auth] ✅ Fresh session has user - ensuring guest mode is disabled");
+                setGuestMode(false);
+              }
+            } else {
+              console.log("[Auth] getSession returned no session, but localStorage has one - keeping it");
             }
           })
           .catch((error) => {
             if (isCancelled) return;
-            console.warn("[Auth] getSession verification error", error);
+            console.warn("[Auth] getSession verification error (but keeping localStorage session)", error);
             // Keep the localStorage session
           });
         return;
+      } else {
+        console.log("[Auth] No session found in localStorage via getStoredSupabaseSession()");
+        // Debug: Log what's actually in localStorage
+        if (typeof window !== 'undefined' && SUPABASE_STORAGE_KEY) {
+          const raw = window.localStorage.getItem(SUPABASE_STORAGE_KEY);
+          if (raw) {
+            console.log("[Auth] Raw localStorage data exists but wasn't parsed:", raw.substring(0, 200));
+            try {
+              const parsed = JSON.parse(raw);
+              console.log("[Auth] Parsed structure:", Object.keys(parsed));
+            } catch (e) {
+              console.warn("[Auth] Failed to parse raw data:", e);
+            }
+          }
+        }
       }
       
       // No session in localStorage - set authReady and check getSession
@@ -1139,8 +1198,16 @@ export function useChat() {
             console.warn("[Auth] Failed to fetch Supabase session", error);
             updateSession(null);
           } else if (data.session) {
+            console.log("[Auth] ✅ Session found via getSession (no localStorage)");
             updateSession(data.session);
             persistSessionToStorage(data.session); // Explicit persistence to prevent race condition
+            // CRITICAL: Disable guest mode when a valid session is found
+            if (data.session?.user) {
+              console.log("[Auth] ✅ Session has user - disabling guest mode");
+              setGuestMode(false);
+            } else {
+              console.warn("[Auth] ⚠️ Session missing user data");
+            }
           } else {
             updateSession(null);
           }
@@ -1214,6 +1281,14 @@ export function useChat() {
     };
   }, [updateSession]);
 
+  // CRITICAL: Ensure guest mode is disabled when a valid session exists
+  useEffect(() => {
+    if (session?.user && guestMode) {
+      console.log("[Auth] Valid session detected - disabling guest mode to enable document access");
+      setGuestMode(false);
+    }
+  }, [session, guestMode]);
+
   useEffect(() => {
     let isSigningOut = false;
     
@@ -1226,6 +1301,12 @@ export function useChat() {
       
       // Always update session state based on auth state change
       updateSession(nextSession);
+      
+      // CRITICAL: Disable guest mode when a valid session is detected
+      if (nextSession?.user && guestMode) {
+        console.log("[Auth] Valid session detected - disabling guest mode");
+        setGuestMode(false);
+      }
       
       // If OAuth just completed and we get a SIGNED_IN event, ensure authReady is set and session is updated
       const oauthJustCompleted = typeof window !== "undefined" && sessionStorage.getItem('oauth_just_completed') === 'true';
@@ -2342,28 +2423,45 @@ export function useChat() {
         console.error("[useChat] Including document context payload:", documentContextPayload);
       }
       
-      // Get session token for authentication (with timeout to prevent hanging)
-      console.error("[useChat] About to call supabaseClient.auth.getSession()");
+      // Get session token for authentication
+      // CRITICAL: Use the session state first (already loaded from localStorage), then fallback to getSession()
+      console.error("[useChat] Checking session state:", { hasSession: !!session, hasUser: !!session?.user, guestMode });
       let sessionToken: string | null = null;
-      try {
-        const GET_SESSION_TIMEOUT_MS = 15_000; // Increased to 15 seconds
-        const getSessionPromise = supabaseClient.auth.getSession();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error(`getSession timeout after ${GET_SESSION_TIMEOUT_MS}ms`)), GET_SESSION_TIMEOUT_MS)
-        );
-        const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
-        console.error("[useChat] getSession() completed successfully");
-        const authSession = result.data?.session;
-        console.error("[useChat] Session exists?", !!authSession);
-        sessionToken = authSession?.access_token ?? null;
-      } catch (error) {
-        console.error("[useChat] ERROR in getSession():", error);
-        if (error instanceof Error && error.message.includes('timeout')) {
-          console.error("[useChat] getSession timed out - continuing without session token");
-          // Continue without session token - will use publishable key instead
-          sessionToken = null;
-        } else {
-          throw error;
+      
+      // First, try to use the session state (already loaded from localStorage)
+      if (session?.access_token && session.user) {
+        console.error("[useChat] ✅ Using session from state (already loaded)");
+        sessionToken = session.access_token;
+      } else {
+        // Fallback to getSession() if state doesn't have it
+        console.error("[useChat] No session in state, trying getSession()...");
+        try {
+          const GET_SESSION_TIMEOUT_MS = 5_000; // Reduced timeout since we prefer state
+          const getSessionPromise = supabaseClient.auth.getSession();
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`getSession timeout after ${GET_SESSION_TIMEOUT_MS}ms`)), GET_SESSION_TIMEOUT_MS)
+          );
+          const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
+          console.error("[useChat] getSession() completed successfully");
+          const authSession = result.data?.session;
+          console.error("[useChat] Session exists?", !!authSession);
+          sessionToken = authSession?.access_token ?? null;
+        } catch (error) {
+          console.error("[useChat] ERROR in getSession():", error);
+          if (error instanceof Error && error.message.includes('timeout')) {
+            console.error("[useChat] getSession timed out - trying localStorage fallback");
+            // Try localStorage as final fallback
+            const storedSession = getStoredSupabaseSession();
+            if (storedSession?.access_token) {
+              console.error("[useChat] ✅ Found session in localStorage fallback");
+              sessionToken = storedSession.access_token;
+            } else {
+              console.error("[useChat] No session found in localStorage either - will use publishable key");
+              sessionToken = null;
+            }
+          } else {
+            throw error;
+          }
         }
       }
       

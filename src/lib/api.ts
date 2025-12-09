@@ -30,7 +30,7 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
  * Get session from localStorage directly (fast, no network call)
  * Falls back to getSession() if localStorage doesn't have it
  */
-function getSessionFromStorage(): { access_token?: string } | null {
+function getSessionFromStorage(): { access_token?: string; user?: { id: string } } | null {
   if (typeof window === "undefined") return null;
   
   try {
@@ -145,11 +145,33 @@ export async function registerUploadJob(params: {
   metadata?: Record<string, unknown>;
   userId?: string;
 }): Promise<UploadJobResponse> {
+  // Try to get userId from session if not provided
+  let userId = params.userId;
+  if (!userId) {
+    try {
+      const session = getSessionFromStorage();
+      if (session?.user?.id) {
+        userId = session.user.id;
+        console.log("[registerUploadJob] Extracted userId from session:", userId);
+      } else {
+        // Try getSession as fallback
+        const { data: { session: sessionData } } = await supabaseClient.auth.getSession();
+        if (sessionData?.user?.id) {
+          userId = sessionData.user.id;
+          console.log("[registerUploadJob] Extracted userId from getSession():", userId);
+        }
+      }
+    } catch (error) {
+      console.warn("[registerUploadJob] Failed to extract userId from session:", error);
+    }
+  }
+
   console.log("[registerUploadJob] Starting upload registration", {
     fileName: params.file.name,
     fileSize: params.file.size,
     fileType: params.file.type,
     analysisTarget: params.analysisTarget,
+    userId: userId || "NOT PROVIDED (will be NULL in database)",
   });
 
   // Robust error handling: Explicit check with detailed error message
@@ -177,7 +199,7 @@ export async function registerUploadJob(params: {
     fileSize: params.file.size,
     analysisTarget: params.analysisTarget,
     metadata: params.metadata ?? {},
-    userId: params.userId,
+    userId: userId, // Use extracted userId if available
   };
 
   console.log("[registerUploadJob] Request body prepared", { body: { ...body, metadata: "..." } });
@@ -242,10 +264,12 @@ export async function registerUploadJob(params: {
     const fetchStartTime = Date.now();
     
     console.log("[registerUploadJob] About to call fetch()...");
+    // Note: Browser handles CORS preflight (OPTIONS) automatically - no need to test manually
     
     // Wrap fetch in try-catch to catch synchronous errors
     let response: Response;
     try {
+      console.log("[registerUploadJob] Sending POST request...");
       response = await fetch(fetchUrl, {
         method: "POST",
         headers,
@@ -255,16 +279,46 @@ export async function registerUploadJob(params: {
       console.log("[registerUploadJob] fetch() returned, processing response...");
     } catch (fetchError) {
       // Catch synchronous errors (like network errors, invalid URL, etc.)
+      const errorName = fetchError instanceof Error ? fetchError.name : "Unknown";
+      const errorMessage = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      
       console.error("[registerUploadJob] CRITICAL: fetch() threw synchronous error", {
-        error: fetchError instanceof Error ? fetchError.message : String(fetchError),
-        name: fetchError instanceof Error ? fetchError.name : "Unknown",
+        error: errorMessage,
+        name: errorName,
         stack: fetchError instanceof Error ? fetchError.stack : undefined,
         url: fetchUrl,
+        FUNCTIONS_URL,
+        hasHeaders: !!headers.Authorization,
+        hasApikey: !!headers.apikey,
+        isNetworkError: errorName === "TypeError" && errorMessage.includes("fetch"),
+        possibleCauses: [
+          "Network connectivity issue",
+          "CORS problem (check browser console for CORS errors)",
+          "Browser extension blocking request (try incognito)",
+          "Invalid URL or server down",
+          "Mixed content (HTTP/HTTPS) issue",
+        ],
       });
-      throw new Error(
-        `Failed to send upload request: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
-        "This may indicate a network issue, CORS problem, or invalid URL."
-      );
+      
+      // Provide more specific error messages based on error type
+      let userFriendlyMessage = `Failed to send upload request: ${errorMessage}. `;
+      
+      if (errorName === "TypeError" && errorMessage.includes("Failed to fetch")) {
+        userFriendlyMessage += 
+          "This usually means:\n" +
+          "1. Network connectivity issue - check your internet connection\n" +
+          "2. CORS problem - the server may not allow requests from this origin\n" +
+          "3. Invalid URL - check if FUNCTIONS_URL is configured correctly\n" +
+          "4. Server is down - check Supabase Edge Functions status\n\n" +
+          `Attempted URL: ${fetchUrl}\n` +
+          `FUNCTIONS_URL: ${FUNCTIONS_URL || "NOT CONFIGURED"}`;
+      } else if (errorName === "AbortError") {
+        userFriendlyMessage += "The request was aborted (likely due to timeout).";
+      } else {
+        userFriendlyMessage += "This may indicate a network issue, CORS problem, or invalid URL.";
+      }
+      
+      throw new Error(userFriendlyMessage);
     }
     
     const fetchDuration = Date.now() - fetchStartTime;
@@ -348,16 +402,32 @@ export async function updateJobStage(jobId: string, stage: "registered" | "uploa
   }
 
   const headers = await getAuthHeaders();
-  const response = await fetch(`${FUNCTIONS_URL}/uploads`, {
+  const url = `${FUNCTIONS_URL}/uploads`;
+  
+  console.log(`[updateJobStage] Updating job ${jobId} to stage: ${stage}`);
+  
+  let response: Response;
+  try {
+    response = await fetch(url, {
     method: "PATCH",
     headers,
     body: JSON.stringify({ jobId, stage }),
   });
+  } catch (fetchError) {
+    console.error(`[updateJobStage] Fetch failed:`, fetchError);
+    throw new Error(
+      `Failed to update job stage: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
+      "This may indicate a network issue or CORS problem."
+    );
+  }
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error?.error || "Failed to update job stage");
+    console.error(`[updateJobStage] Response not OK:`, { status: response.status, error });
+    throw new Error(error?.error || `Failed to update job stage: ${response.status} ${response.statusText}`);
   }
+  
+  console.log(`[updateJobStage] Successfully updated job ${jobId} to stage: ${stage}`);
 }
 
 export async function triggerTextractJob(jobId: string): Promise<void> {
@@ -491,20 +561,39 @@ export async function fetchJobStatus(jobId: string): Promise<JobStatusResponse> 
 
   try {
     const headers = await getAuthHeaders();
-    const response = await fetch(`${FUNCTIONS_URL}${jobStatusPath}?jobId=${encodeURIComponent(jobId)}`, {
+    const url = `${FUNCTIONS_URL}${jobStatusPath}?jobId=${encodeURIComponent(jobId)}`;
+    console.log(`[fetchJobStatus] Fetching status for job: ${jobId}`);
+    
+    let response: Response;
+    try {
+      response = await fetch(url, {
       method: "GET",
       headers,
       signal: abortController.signal,
     });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      console.error(`[fetchJobStatus] Fetch failed:`, fetchError);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        throw new Error(`Job status fetch timed out after ${FETCH_STATUS_TIMEOUT_MS}ms`);
+      }
+      throw new Error(
+        `Failed to fetch job status: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
+        "This may indicate a network issue or CORS problem."
+      );
+    }
 
     clearTimeout(timeoutId);
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
-      throw new Error(error?.error || "Failed to fetch job status");
+      console.error(`[fetchJobStatus] Response not OK:`, { status: response.status, error });
+      throw new Error(error?.error || `Failed to fetch job status: ${response.status} ${response.statusText}`);
     }
 
-    return response.json();
+    const result = await response.json();
+    console.log(`[fetchJobStatus] Success for job ${jobId}:`, result.job.status);
+    return result;
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {

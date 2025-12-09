@@ -69,6 +69,7 @@ const Index = () => {
   } = useChat();
   const { toast } = useToast();
   const hasChatHistory = (!!session || guestMode) && (messages.length > 0 || mcpEvents.length > 0);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(new Set()); // Track documents dropped into chat
 
   const handleRefreshChat = useCallback(() => {
     if (!session && !guestMode) return;
@@ -84,7 +85,24 @@ const Index = () => {
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const [documentsSidebarRefreshTrigger, setDocumentsSidebarRefreshTrigger] = useState(0);
   const [documentCount, setDocumentCount] = useState(0); // Track document count for conditional rendering
+  
+  // Update documentCount from uploadJobs as fallback (when database queries fail)
+  // Always sync documentCount with completed jobs in uploadJobs
+  useEffect(() => {
+    const completedJobsCount = uploadJobs.filter(job => job.status === "completed").length;
+    if (completedJobsCount > 0) {
+      // Always update if we have completed jobs (ensures sidebar shows even when DB queries fail)
+      if (documentCount !== completedJobsCount) {
+        console.log(`[Index] Updating documentCount from uploadJobs: ${documentCount} -> ${completedJobsCount}`);
+        setDocumentCount(completedJobsCount);
+      }
+    } else if (documentCount > 0 && completedJobsCount === 0) {
+      // Only set to 0 if we truly have no completed jobs (don't override sidebar's count if it found docs)
+      console.log(`[Index] No completed jobs in uploadJobs, but keeping documentCount: ${documentCount}`);
+    }
+  }, [uploadJobs]);
   const refreshTimeoutRef = useRef<NodeJS.Timeout | null>(null); // Debounce refresh triggers
+  const summarizedJobsRef = useRef<Set<string>>(new Set()); // Track which jobs we've already shown summary for
   
   // Manual reset function for stuck uploads
   const resetStuckUpload = useCallback(() => {
@@ -172,6 +190,57 @@ const Index = () => {
             updatedAt: result.job.updated_at,
             ...stageMetadata,
           });
+
+          // If job completed, show summary in chat and refresh DocumentsSidebar
+          if (newStatus === "completed" && !summarizedJobsRef.current.has(result.job.id)) {
+            summarizedJobsRef.current.add(result.job.id);
+            
+            // Get summary from analysis results
+            const analysisResult = result.result;
+            const visionSummary = analysisResult?.vision_summary;
+            const ocrText = analysisResult?.ocr_text;
+            
+            // Prefer vision summary, fallback to OCR text preview
+            let summary = visionSummary;
+            if (!summary && ocrText) {
+              summary = ocrText.substring(0, 500);
+              if (ocrText.length > 500) {
+                summary += "...";
+              }
+            }
+            if (!summary) {
+              summary = "Document processed successfully and is ready for queries.";
+            }
+            
+            // Check if document is indexed for RAG
+            const isIndexed = stageMetadata.stage === "indexed" || 
+                             stageMetadata.stage === "extracted" ||
+                             result.job.metadata?.job_stage === "indexed" || 
+                             result.job.metadata?.job_stage === "extracted";
+            
+            const ragStatus = isIndexed 
+              ? "✅ **Indexed for RAG** - Ready for semantic search"
+              : "⏳ **Indexing in progress** - Will be available for RAG shortly";
+            
+            // Show summary in chat with RAG status
+            appendAssistantText(
+              `📄 **${result.job.file_name}** processing complete!\n\n` +
+              `${summary}\n\n` +
+              `${ragStatus}\n\n` +
+              `_You can now ask questions about this document. The document is automatically saved to your knowledge base for RAG queries._`
+            );
+            
+            // Trigger DocumentsSidebar refresh to show the document
+            console.log("[Index] Job completed, triggering DocumentsSidebar refresh");
+            setDocumentsSidebarRefreshTrigger(prev => prev + 1);
+            
+            // Show toast notification
+            toast({
+              title: "Document ready",
+              description: `${result.job.file_name} is ready for queries${isIndexed ? " and RAG search" : ""}.`,
+              duration: 3000,
+            });
+          }
 
           // If job completed or failed, remove from tracking
           if (newStatus === "completed" || newStatus === "failed") {
@@ -488,19 +557,35 @@ const Index = () => {
         {/* Chat Messages with Documents Sidebar and Chat Layout */}
         <div className="flex-1 overflow-hidden">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Left Pane: Documents Sidebar - Show when authenticated (like logs panel on right) */}
-          {(session || guestMode) && (
+          {/* Left Pane: Documents Sidebar - Show when authenticated AND documents exist */}
+          {/* Show if documentCount > 0 OR if we have completed jobs in uploadJobs (fallback) */}
+          {(session || guestMode) && (documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) && (
             <>
               <ResizablePanel defaultSize={20} minSize={15} maxSize={30} className="min-w-0 border-r">
                 <div className="h-full p-4">
                   <DocumentsSidebar
                     refreshTrigger={documentsSidebarRefreshTrigger}
                     userId={session?.user?.id}
+                    fallbackJobs={(() => {
+                      const completed = uploadJobs.filter(job => job.status === "completed");
+                      console.log(`[Index] Passing fallbackJobs to DocumentsSidebar: ${completed.length} completed jobs out of ${uploadJobs.length} total`);
+                      return completed.map(job => ({
+                        id: job.id,
+                        fileName: job.fileName,
+                        status: job.status,
+                        visionSummary: job.visionSummary,
+                        resultText: job.resultText,
+                        updatedAt: job.updatedAt,
+                        stage: job.stage,
+                        contentLength: job.contentLength, // Include file size
+                      }));
+                    })()}
                     onDocumentClick={(jobId) => {
                       // When document is clicked, could trigger a search or show details
                       console.log("Document clicked:", jobId);
                     }}
                     onDocumentsChange={(count) => {
+                      console.log("[Index] DocumentsSidebar reported document count:", count);
                       setDocumentCount(count);
                     }}
                   />
@@ -509,12 +594,44 @@ const Index = () => {
               <ResizableHandle withHandle className="hidden lg:flex" />
             </>
           )}
+          {/* Hidden DocumentsSidebar to load documents even when panel is hidden */}
+          {/* This runs in background to detect when documents are uploaded and trigger panel to appear */}
+          {/* Only show hidden sidebar if we have no visible sidebar AND no completed jobs in uploadJobs */}
+          {(session || guestMode) && documentCount === 0 && uploadJobs.filter(job => job.status === "completed").length === 0 && (
+            <div className="hidden" aria-hidden="true">
+              <DocumentsSidebar
+                refreshTrigger={documentsSidebarRefreshTrigger}
+                userId={session?.user?.id}
+                fallbackJobs={(() => {
+                  const completed = uploadJobs.filter(job => job.status === "completed");
+                  console.log(`[Index] Passing fallbackJobs to hidden DocumentsSidebar: ${completed.length} completed jobs`);
+                  return completed.map(job => ({
+                    id: job.id,
+                    fileName: job.fileName,
+                    status: job.status,
+                    visionSummary: job.visionSummary,
+                    resultText: job.resultText,
+                    updatedAt: job.updatedAt,
+                    stage: job.stage,
+                  }));
+                })()}
+                onDocumentClick={(jobId) => {
+                  console.log("Document clicked:", jobId);
+                }}
+                onDocumentsChange={(count) => {
+                  console.log("[Index] Hidden DocumentsSidebar reported document count:", count);
+                  setDocumentCount(count);
+                }}
+              />
+            </div>
+          )}
           {/* Middle Pane: Chat */}
+          {/* Chat panel takes full width when no side panels, adjusts when panels appear */}
           <ResizablePanel 
             defaultSize={
               !(session || guestMode) ? 100 : // No auth: full width
               (documentCount > 0 || mcpEvents.length > 0) ? 50 : // Has panels: half width
-              100 // Auth but no panels: full width
+              100 // Auth but no panels: full width (Documents panel hidden when documentCount === 0)
             } 
             minSize={40} 
             className="min-w-0"
@@ -753,16 +870,48 @@ const Index = () => {
                 setUploadJobs(nextJobs);
               }
 
+              // Build contextDocs from uploadJobs - include ALL completed jobs with content
+              // This ensures documents are available for RAG even if database queries fail
+              // Include any completed job that has text, summary, or is in a processed stage
+              const allCompletedJobs = nextJobs.filter(job => job.status === "completed");
+              console.log(`[Index] Total completed jobs: ${allCompletedJobs.length}`, allCompletedJobs.map(j => ({ 
+                id: j.id, 
+                fileName: j.fileName, 
+                hasText: !!j.resultText, 
+                hasSummary: !!j.visionSummary, 
+                stage: j.stage 
+              })));
+              
+              // Include ALL completed jobs - the backend will handle retrieving content from database
+              // This ensures documents are available for RAG even if in-memory state doesn't have content yet
+              // Also include any documents that were explicitly dropped into chat
+              const jobsToInclude = new Set<string>();
+              allCompletedJobs.forEach(job => jobsToInclude.add(job.id));
+              selectedDocumentIds.forEach(jobId => jobsToInclude.add(jobId));
+              
               const contextDocs = nextJobs
-                .filter(job =>
-                  job.status === "completed" &&
-                  (job.stage === "extracted" || job.stage === "injected" || job.stage === "indexed"),
-                )
-                .map(job => ({
-                  jobId: job.id,
-                  fileName: job.fileName,
-                  textLength: job.resultText?.length ?? job.contentLength ?? undefined,
-                }));
+                .filter(job => jobsToInclude.has(job.id))
+                .map(job => {
+                  const hasContent = !!(job.resultText || job.visionSummary);
+                  const isProcessed = job.stage === "extracted" || job.stage === "injected" || job.stage === "indexed";
+                  const isSelected = selectedDocumentIds.has(job.id);
+                  
+                  if (isSelected) {
+                    console.log(`[Index] ✅ Including ${job.fileName} - explicitly selected via drag-and-drop`);
+                  } else if (hasContent) {
+                    console.log(`[Index] ✅ Including ${job.fileName} - has content (text: ${!!job.resultText}, summary: ${!!job.visionSummary})`);
+                  } else if (isProcessed) {
+                    console.log(`[Index] ✅ Including ${job.fileName} - processed stage: ${job.stage}`);
+                  } else {
+                    console.log(`[Index] ✅ Including ${job.fileName} - completed (backend will retrieve content)`);
+                  }
+                  
+                  return {
+                    jobId: job.id,
+                    fileName: job.fileName,
+                    textLength: job.resultText?.length ?? job.contentLength ?? undefined,
+                  };
+                });
               
               console.log(`[Index] Found ${contextDocs.length} queryable documents:`, contextDocs.map(d => ({ fileName: d.fileName, jobId: d.jobId })));
 
@@ -807,6 +956,10 @@ const Index = () => {
               console.log("[Index] Context docs:", contextDocs.length);
               try {
                 sendMessage(input, contextDocs.length > 0 ? contextDocs : undefined);
+                // Clear selected documents after sending
+                if (selectedDocumentIds.size > 0) {
+                  setSelectedDocumentIds(new Set());
+                }
               } catch (error) {
                 console.error("[Index] Error calling sendMessage:", error);
                 throw error;
@@ -819,6 +972,65 @@ const Index = () => {
             voicePlaybackEnabled={voicePlaybackEnabled}
             onToggleVoicePlayback={handleToggleVoice}
             isSpeaking={isSpeaking}
+            onDocumentDrop={async (jobId, fileName) => {
+              console.log("[Index] Document dropped into chat:", { jobId, fileName });
+              setSelectedDocumentIds(prev => new Set([...prev, jobId]));
+              
+              // Fetch job status to get summary
+              try {
+                const jobStatus = await fetchJobStatus(jobId);
+                const analysisResult = jobStatus.result;
+                const visionSummary = analysisResult?.vision_summary;
+                const ocrText = analysisResult?.ocr_text;
+                
+                // Prefer vision summary, fallback to OCR text preview
+                let summary = visionSummary;
+                if (!summary && ocrText) {
+                  summary = ocrText.substring(0, 500);
+                  if (ocrText.length > 500) {
+                    summary += "...";
+                  }
+                }
+                if (!summary) {
+                  summary = "Document is ready for queries.";
+                }
+                
+                // Check if document is indexed for RAG
+                const metadata = jobStatus.job.metadata as Record<string, unknown> | null;
+                const stage = metadata?.job_stage as string | undefined;
+                const isIndexed = stage === "indexed" || stage === "extracted";
+                
+                const ragStatus = isIndexed 
+                  ? "✅ **Indexed for RAG** - Ready for semantic search"
+                  : "⏳ **Indexing in progress** - Will be available for RAG shortly";
+                
+                // Show summary in chat
+                appendAssistantText(
+                  `📄 **${fileName}** attached!\n\n` +
+                  `${summary}\n\n` +
+                  `${ragStatus}\n\n` +
+                  `_This document will be included in your next message._`
+                );
+                
+                toast({
+                  title: "Document attached",
+                  description: `${fileName} summary displayed. Document will be included in your message.`,
+                  duration: 3000,
+                });
+              } catch (error) {
+                console.error("[Index] Error fetching document summary:", error);
+                // Still attach the document even if summary fetch fails
+                appendAssistantText(
+                  `📄 **${fileName}** attached!\n\n` +
+                  `_This document will be included in your next message._`
+                );
+                toast({
+                  title: "Document attached",
+                  description: `${fileName} will be included in your next message.`,
+                  duration: 2000,
+                });
+              }
+            }}
             onJobsChange={(jobs, isRegistering) => {
               setUploadJobs(jobs);
               setIsRegisteringUpload(isRegistering);
