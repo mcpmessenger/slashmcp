@@ -126,52 +126,99 @@ async function scrapeListings(
 }
 
 /**
- * Parse listings from HTML content
+ * Parse listings from HTML content - Improved parsing logic
  */
 function parseListingsFromHTML(html: string, source: string, baseUrl: string): Listing[] {
   const listings: Listing[] = [];
 
   if (source === "craigslist") {
-    // Parse Craigslist HTML structure
-    const listingMatches = html.matchAll(
+    // Improved Craigslist parsing - try multiple patterns
+    const listingPatterns = [
       /<li[^>]*class="[^"]*cl-search-result[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
-    );
+      /<li[^>]*class="[^"]*result-row[^"]*"[^>]*>([\s\S]*?)<\/li>/gi,
+    ];
 
-    for (const match of listingMatches) {
-      const listingHtml = match[1];
-      const titleMatch = listingHtml.match(/<a[^>]*class="[^"]*cl-app-anchor[^"]*"[^>]*>([^<]+)<\/a>/i);
-      const priceMatch = listingHtml.match(/\$(\d+(?:\.\d{2})?)/);
-      const urlMatch = listingHtml.match(/href="([^"]+)"/i);
-
-      if (titleMatch && priceMatch) {
-        const title = titleMatch[1].trim();
-        const price = parseFloat(priceMatch[1]);
-        const url = urlMatch ? (urlMatch[1].startsWith("http") ? urlMatch[1] : `https://${new URL(baseUrl).hostname}${urlMatch[1]}`) : "";
-
-        if (title && !isNaN(price) && url) {
-          listings.push({ title, price, url });
+    for (const pattern of listingPatterns) {
+      const matches = html.matchAll(pattern);
+      for (const match of matches) {
+        const listingHtml = match[1];
+        
+        // Try multiple title/URL patterns
+        const titleMatch = listingHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)<\/a>/i) ||
+                          listingHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]*class="[^"]*cl-app-anchor[^"]*"[^>]*>([^<]+)<\/a>/i) ||
+                          listingHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/i);
+        
+        if (titleMatch) {
+          let href = titleMatch[1];
+          const title = titleMatch[2].trim().replace(/\s+/g, " ");
+          
+          // Make URL absolute
+          if (href.startsWith("/")) {
+            const urlObj = new URL(baseUrl);
+            href = `${urlObj.protocol}//${urlObj.host}${href}`;
+          } else if (!href.startsWith("http")) {
+            href = `${baseUrl}${href}`;
+          }
+          
+          // Extract price - try multiple patterns
+          const priceMatch = listingHtml.match(/<span[^>]*class="[^"]*price[^"]*"[^>]*>([^<]+)<\/span>/i) ||
+                            listingHtml.match(/\$(\d+(?:\.\d{2})?)/);
+          const priceStr = priceMatch ? (priceMatch[1]?.trim() || priceMatch[0]) : "";
+          const price = parseFloat(priceStr.replace(/[^0-9.]/g, ""));
+          
+          // Extract location
+          const locationMatch = listingHtml.match(/<span[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)<\/span>/i) ||
+                               listingHtml.match(/<span[^>]*class="[^"]*result-hood[^"]*"[^>]*>([^<]+)<\/span>/i);
+          const location = locationMatch ? locationMatch[1].trim() : undefined;
+          
+          if (title && !isNaN(price) && price > 0 && href) {
+            listings.push({ title, price, url: href, location });
+          }
         }
       }
+      if (listings.length > 0) break; // Use first pattern that finds results
     }
   } else if (source === "offerup") {
-    // Parse OfferUp HTML structure (simplified)
-    const listingMatches = html.matchAll(/<div[^>]*class="[^"]*[Ll]isting[^"]*"[^>]*>([\s\S]*?)<\/div>/gi);
+    // Improved OfferUp parsing
+    // OfferUp uses React/JS, so HTML parsing is limited, but we can try
+    const listingPatterns = [
+      /<div[^>]*class="[^"]*[Ll]isting[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+      /<article[^>]*>([\s\S]*?)<\/article>/gi,
+    ];
 
-    for (const match of listingMatches) {
-      const listingHtml = match[1];
-      const titleMatch = listingHtml.match(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/i);
-      const priceMatch = listingHtml.match(/\$(\d+(?:\.\d{2})?)/);
-      const urlMatch = listingHtml.match(/href="([^"]+)"/i);
-
-      if (titleMatch && priceMatch) {
-        const title = titleMatch[1].trim();
-        const price = parseFloat(priceMatch[1]);
-        const url = urlMatch ? (urlMatch[1].startsWith("http") ? urlMatch[1] : `https://www.offerup.com${urlMatch[1]}`) : "";
-
-        if (title && !isNaN(price) && url) {
-          listings.push({ title, price, url });
+    for (const pattern of listingPatterns) {
+      const matches = html.matchAll(pattern);
+      for (const match of matches) {
+        const listingHtml = match[1];
+        
+        // Extract title
+        const titleMatch = listingHtml.match(/<h[1-6][^>]*>([^<]+)<\/h[1-6]>/i) ||
+                          listingHtml.match(/<a[^>]+href=["']([^"']+)["'][^>]*>([^<]+)<\/a>/i);
+        
+        if (titleMatch) {
+          const title = (titleMatch[2] || titleMatch[1]).trim();
+          
+          // Extract price
+          const priceMatch = listingHtml.match(/\$(\d+(?:\.\d{2})?)/);
+          const price = priceMatch ? parseFloat(priceMatch[1]) : 0;
+          
+          // Extract URL
+          const urlMatch = listingHtml.match(/href=["']([^"']+)["']/i);
+          let url = "";
+          if (urlMatch) {
+            url = urlMatch[1].startsWith("http") ? urlMatch[1] : `https://www.offerup.com${urlMatch[1]}`;
+          }
+          
+          // Extract location
+          const locationMatch = listingHtml.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*[A-Z]{2}/);
+          const location = locationMatch ? locationMatch[0] : undefined;
+          
+          if (title && !isNaN(price) && price > 0 && url) {
+            listings.push({ title, price, url, location });
+          }
         }
       }
+      if (listings.length > 0) break;
     }
   }
 
@@ -179,26 +226,82 @@ function parseListingsFromHTML(html: string, source: string, baseUrl: string): L
 }
 
 /**
- * Parse listings from extracted text (fallback)
+ * Parse listings from extracted text (fallback) - Improved parsing
  */
 function parseListingsFromText(text: string, source: string, baseUrl: string): Listing[] {
   const listings: Listing[] = [];
-  const lines = text.split("\n").filter(line => line.trim().length > 0);
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const priceMatch = line.match(/\$(\d+(?:\.\d{2})?)/);
-    
-    if (priceMatch) {
-      const price = parseFloat(priceMatch[1]);
-      const title = line.replace(/\$[\d.]+/, "").trim();
+  
+  // For Craigslist, look for patterns like "Product Name $Price Location"
+  if (source === "craigslist") {
+    // Pattern: Title $Price Location
+    const listingPattern = /([A-Z][^$]+?)\s+\$(\d+(?:\.\d{2})?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/g;
+    let match;
+    while ((match = listingPattern.exec(text)) !== null) {
+      const title = match[1].trim();
+      const price = parseFloat(match[2]);
+      const location = match[3].trim();
       
-      if (title && !isNaN(price)) {
+      if (title && !isNaN(price) && price > 0) {
+        // Try to find URL in nearby text or construct from title
+        const titleSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").substring(0, 50);
         listings.push({
           title,
           price,
-          url: `${baseUrl}#listing-${i}`,
+          url: `${baseUrl}#${titleSlug}`,
+          location,
         });
+      }
+    }
+    
+    // Fallback: simpler pattern for titles with prices
+    if (listings.length === 0) {
+      const lines = text.split(/\n|\./).filter(line => line.trim().length > 10);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const priceMatch = line.match(/\$(\d+(?:\.\d{2})?)/);
+        
+        if (priceMatch && line.length > 10) {
+          const price = parseFloat(priceMatch[1]);
+          const title = line.replace(/\$[\d.]+.*$/, "").trim();
+          
+          // Extract location if present
+          const locationMatch = line.match(/(Des Moines|West Des Moines|Urbandale|Clive|Ames|Ankeny)/i);
+          const location = locationMatch ? locationMatch[1] : undefined;
+          
+          if (title && title.length > 5 && !isNaN(price) && price > 0) {
+            listings.push({
+              title,
+              price,
+              url: `${baseUrl}#listing-${i}`,
+              location,
+            });
+          }
+        }
+      }
+    }
+  } else if (source === "offerup") {
+    // For OfferUp, look for product names with prices and locations
+    const lines = text.split(/\n|•/).filter(line => line.trim().length > 5);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const priceMatch = line.match(/\$(\d+(?:\.\d{2})?)/);
+      
+      if (priceMatch) {
+        const price = parseFloat(priceMatch[1]);
+        // Extract title (text before price)
+        const title = line.substring(0, priceMatch.index).trim();
+        // Extract location (text after price, look for city names)
+        const locationMatch = line.match(/\$[\d.]+.*?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*[A-Z]{2}/);
+        const location = locationMatch ? locationMatch[1] : undefined;
+        
+        if (title && title.length > 5 && !isNaN(price) && price > 0) {
+          listings.push({
+            title,
+            price,
+            url: `${baseUrl}#listing-${i}`,
+            location,
+          });
+        }
       }
     }
   }
@@ -374,6 +477,84 @@ function analyzeResellingOpportunities(
 }
 
 /**
+ * Generate AI-powered conversational summary using OpenAI
+ */
+async function generateAISummary(opportunities: Opportunity[]): Promise<string> {
+  const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
+  if (!OPENAI_API_KEY) {
+    return generateVoiceSummary(opportunities).summary; // Fallback to basic summary
+  }
+
+  try {
+    const strongOpps = opportunities.filter(opp => opp.isStrongOpportunity);
+    const otherOpps = opportunities.filter(opp => !opp.isStrongOpportunity);
+    
+    // Build context for AI
+    const context = {
+      strongOpportunities: strongOpps.slice(0, 5).map(opp => ({
+        product: opp.listing.title,
+        price: opp.listing.price,
+        url: opp.listing.url,
+        location: opp.listing.location,
+        profit: opp.potentialProfit,
+        margin: opp.profitMargin,
+        ebayRange: opp.marketData.ebayUsedRange,
+        amazonPrice: opp.marketData.amazonNewPrice,
+      })),
+      otherListings: otherOpps.slice(0, 10).map(opp => ({
+        product: opp.listing.title,
+        price: opp.listing.price,
+        url: opp.listing.url,
+      })),
+      totalListings: opportunities.length,
+    };
+
+    const prompt = `You are a helpful assistant analyzing reselling opportunities. Generate a concise, conversational summary (2-3 paragraphs) that:
+
+1. Highlights the best reselling opportunities with specific product names, prices, and potential profits
+2. Mentions listing URLs so the user can check them out
+3. Compares prices to eBay Sold listings and Amazon when available
+4. Uses natural, spoken language (avoid bullet points, tables, or complex formatting)
+5. Is friendly and actionable
+
+Context:
+${JSON.stringify(context, null, 2)}
+
+Generate the summary now:`;
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: "You are a helpful assistant that generates concise, conversational summaries of reselling opportunities." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 500,
+        temperature: 0.7,
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const summary = data.choices?.[0]?.message?.content?.trim();
+      if (summary) {
+        return summary;
+      }
+    }
+  } catch (error) {
+    console.warn("Failed to generate AI summary, using fallback:", error);
+  }
+
+  // Fallback to basic summary
+  return generateVoiceSummary(opportunities).summary;
+}
+
+/**
  * Convert analysis results to voice-transcription-friendly text and detailed email report
  */
 function generateVoiceSummary(opportunities: Opportunity[]): { summary: string; emailReport: string } {
@@ -482,8 +663,9 @@ serve(async (req) => {
       // Step 3: Analyze opportunities
       const opportunities = analyzeResellingOpportunities(allListings, marketDataMap);
 
-      // Step 4: Generate voice-friendly summary and email report
-      const { summary, emailReport } = generateVoiceSummary(opportunities);
+      // Step 4: Generate AI-powered conversational summary and email report
+      const { emailReport } = generateVoiceSummary(opportunities);
+      const summary = await generateAISummary(opportunities);
 
       // Return both JSON data and summary
       return new Response(
