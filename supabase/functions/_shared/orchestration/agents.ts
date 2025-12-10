@@ -364,18 +364,21 @@ export function createOrchestratorAgent(
       "- The orchestrator MUST proactively search documents when users ask questions that might be answered by uploaded content\n" +
       "\n" +
       "FOR RESELLING/MARKET ANALYSIS REQUESTS - HIGHEST PRIORITY:\n" +
-      "- CRITICAL: If the user asks to SCRAPE listings, COMPARE prices, find RESELLING OPPORTUNITIES, or EMAIL REPORTS, " +
-      "you MUST use `analyze_reselling_opportunities` tool IMMEDIATELY - do NOT manually scrape with playwright-wrapper:\n" +
+      "- 🚨 CRITICAL: If the user asks to SCRAPE listings, COMPARE prices, find RESELLING OPPORTUNITIES, or EMAIL REPORTS, " +
+      "you MUST use `analyze_reselling_opportunities` tool IMMEDIATELY - NEVER manually scrape with playwright-wrapper:\n" +
       "  * 'scrape [product] from Craigslist/OfferUp' → USE analyze_reselling_opportunities (NOT playwright-wrapper)\n" +
       "  * 'compare prices', 'find reselling opportunities', 'identify price discrepancies', 'exploit price discrepancies'\n" +
       "  * 'email me a report', 'send me a detailed report with links', 'give me listings with links'\n" +
       "  * 'analyze headphone deals', 'find deals on [product]', 'what are good reselling opportunities'\n" +
       "  * 'compare Craigslist to eBay prices', 'analyze market for [product]', 'find profitable reselling deals'\n" +
+      "  * ANY request mentioning 'Craigslist', 'OfferUp', 'eBay', 'Amazon', and 'price comparison' or 'reselling'\n" +
       "- The tool AUTOMATICALLY: (1) Scrapes Craigslist and OfferUp with full listing URLs, " +
-      "(2) Gets eBay Sold listing prices, (3) Gets Amazon prices, (4) Analyzes opportunities, (5) Returns detailed data with links\n" +
-      "- After getting results, you can use email-mcp to send the report if requested\n" +
+      "(2) Gets eBay Sold listing prices, (3) Gets Amazon prices, (4) Analyzes opportunities, (5) Returns concise summary with links\n" +
+      "- The tool returns a CONCISE SUMMARY by default - not verbose JSON. Use the summary directly in your response.\n" +
+      "- After getting results, you can use email-mcp to send the detailed report if requested\n" +
       "- Examples: 'Scrape headphones from Craigslist Des Moines and compare to eBay' → USE analyze_reselling_opportunities\n" +
       "- DO NOT manually use playwright-wrapper for reselling analysis - the dedicated tool is faster and more accurate\n" +
+      "- If you see the user manually scraping, STOP and use analyze_reselling_opportunities instead\n" +
       "- If the user asks to list their documents (e.g., 'What documents do I have?', 'Show my documents'), " +
       "  use the `list_documents` tool directly.\n" +
       "- If the user asks about document status, use the `get_document_status` tool.\n" +

@@ -544,19 +544,35 @@ export function createResellingAnalysisTool(resellingAnalysisUrl: string): Tool 
         }
 
         const result = await response.json();
-        
-        // If email report is available, include it in the response
         const data = result.data || result;
+        
+        // ALWAYS return concise summary first, then email report if requested
         let responseText = "";
         
-        if (data.emailReport) {
-          responseText = `RESELLING ANALYSIS COMPLETE\n\n${data.summary || ""}\n\n`;
-          responseText += `DETAILED EMAIL REPORT:\n${data.emailReport}\n\n`;
-          responseText += `Full data with ${data.totalListings || 0} listings and ${data.strongOpportunities || 0} strong opportunities available.`;
-        } else if (result.summary) {
-          responseText = result.summary;
+        // Primary response: concise summary
+        if (data.summary) {
+          responseText = data.summary;
         } else {
-          responseText = JSON.stringify(data, null, 2);
+          // Fallback: create a concise summary from opportunities
+          const opportunities = data.opportunities || [];
+          const strongOpps = opportunities.filter((opp: any) => opp.isStrongOpportunity);
+          
+          if (strongOpps.length > 0) {
+            responseText = `Found ${strongOpps.length} strong reselling opportunity(ies):\n\n`;
+            strongOpps.slice(0, 3).forEach((opp: any) => {
+              responseText += `• ${opp.listing.title} - $${opp.listing.price.toFixed(2)} (${opp.listing.url})\n`;
+              if (opp.potentialProfit > 0) {
+                responseText += `  Potential profit: $${opp.potentialProfit.toFixed(2)}\n`;
+              }
+            });
+          } else {
+            responseText = `Analyzed ${data.totalListings || 0} listings. No strong reselling opportunities found at this time.`;
+          }
+        }
+        
+        // Add email report as additional context (not primary response)
+        if (data.emailReport && data.emailReport.length > 0) {
+          responseText += `\n\n--- DETAILED REPORT (for email) ---\n${data.emailReport}`;
         }
         
         return responseText;
