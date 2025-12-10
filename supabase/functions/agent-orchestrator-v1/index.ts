@@ -181,10 +181,68 @@ async function handleResellingRequestDirectly(
     }
 
     const result = await response.json();
+    console.log(`[BYPASS] Raw result from reselling-analysis:`, {
+      type: result.type,
+      hasData: !!result.data,
+      hasSummary: !!result.summary,
+      dataKeys: result.data ? Object.keys(result.data) : [],
+    });
+    
+    // Handle error responses
+    if (result.type === "error") {
+      let errorMessage = result.message || "Reselling analysis failed";
+      
+      // Format error details if available
+      if (result.details) {
+        errorMessage += "\n\n";
+        if (result.details.possibleReasons && Array.isArray(result.details.possibleReasons)) {
+          errorMessage += "Possible reasons:\n";
+          result.details.possibleReasons.forEach((reason: string, idx: number) => {
+            errorMessage += `${idx + 1}. ${reason}\n`;
+          });
+        }
+        if (result.details.suggestions && Array.isArray(result.details.suggestions)) {
+          errorMessage += "\nSuggestions:\n";
+          result.details.suggestions.forEach((suggestion: string, idx: number) => {
+            errorMessage += `${idx + 1}. ${suggestion}\n`;
+          });
+        }
+      }
+      
+      return {
+        finalResponse: errorMessage,
+        error: result.message,
+        details: result.details,
+      };
+    }
+    
     const data = result.data || result;
     
-    // Get concise summary
-    let summary = data.summary || "Reselling analysis completed.";
+    // Get concise summary - ensure we always have something
+    let summary = data.summary || result.summary || "";
+    
+    // If summary is empty or just placeholder, build one from the data
+    if (!summary || summary.trim() === "" || summary === "Reselling analysis completed.") {
+      if (data.opportunities && data.opportunities.length > 0) {
+        const strongOpps = data.opportunities.filter((opp: any) => opp.isStrongOpportunity);
+        if (strongOpps.length > 0) {
+          summary = `Found ${strongOpps.length} strong reselling opportunity${strongOpps.length > 1 ? 'ies' : 'y'}:\n\n`;
+          strongOpps.slice(0, 3).forEach((opp: any, idx: number) => {
+            summary += `${idx + 1}. ${opp.listing.title} - $${opp.listing.price} (Potential profit: $${opp.potentialProfit?.toFixed(2) || 'N/A'})\n   Link: ${opp.listing.url}\n\n`;
+          });
+        } else {
+          summary = `Analyzed ${data.totalListings || data.opportunities.length} listings but found no strong reselling opportunities. All listings were priced too high for profitable reselling.`;
+        }
+      } else if (data.allListings && data.allListings.length > 0) {
+        summary = `Found ${data.allListings.length} listing${data.allListings.length > 1 ? 's' : ''} but couldn't determine reselling opportunities. Check the listings:\n\n`;
+        data.allListings.slice(0, 5).forEach((listing: any, idx: number) => {
+          summary += `${idx + 1}. ${listing.title} - $${listing.price}\n   ${listing.url}\n\n`;
+        });
+      } else {
+        // This should not happen if error handling is working, but provide a clear message
+        summary = "⚠️ No listings were found during scraping. This could mean:\n\n1. No active listings match your search criteria\n2. The websites may have changed their structure, making scraping difficult\n3. Web scraping may have been blocked by the websites\n4. Location-specific results may be limited\n\nTry:\n- Using a more general search term (e.g., 'electronics' instead of 'Sony WH-1000XM4')\n- Checking a different location\n- Verifying the playwright-wrapper function is deployed and working\n- Checking Supabase function logs for detailed error messages";
+      }
+    }
     
     // If user asked for email report, prepare it
     const wantsEmail = input.message.toLowerCase().includes("email") || input.message.toLowerCase().includes("report");
@@ -199,7 +257,7 @@ async function handleResellingRequestDirectly(
       }
     }
     
-    console.log(`✅ [BYPASS] Reselling analysis completed successfully`);
+    console.log(`✅ [BYPASS] Reselling analysis completed: ${data.totalListings || 0} listings, ${data.strongOpportunities || 0} strong opportunities`);
     
     return {
       finalResponse: summary,
@@ -278,15 +336,23 @@ async function executeOrchestration(
     }
     
     // Add RAG tools if we have Supabase access
-    if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY && input.userId) {
+    // Try to get userId from input, or use a guest identifier if available
+    const ragUserId = input.userId || (input.message?.toLowerCase().includes("document") ? "guest" : null);
+    
+    if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
       try {
-        const ragTools = createRagTools(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, input.userId);
+        // For guest mode, we still want RAG tools available if documents might exist
+        // The RAG tool itself will handle guest mode by checking for NULL user_id documents
+        const userIdForRag = input.userId || "guest";
+        const ragTools = createRagTools(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, userIdForRag);
         tools.push(...ragTools);
-        console.log(`Added ${ragTools.length} RAG tools to orchestrator`);
+        console.log(`Added ${ragTools.length} RAG tools to orchestrator (userId: ${userIdForRag})`);
       } catch (error) {
         console.error("Failed to create RAG tools:", error);
         // Continue without RAG tools if there's an error
       }
+    } else {
+      console.warn("RAG tools not available: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
     }
 
     // Add reselling analysis tool

@@ -235,17 +235,26 @@ const Index = () => {
     const checkCompletedDocuments = async () => {
       try {
         const userId = session?.user?.id;
-        if (!userId) return;
         
-        // Query for completed documents that haven't been summarized yet
-        const { data: dbJobs, error } = await supabaseClient
+        // Query for completed documents - support both authenticated and guest mode
+        let query = supabaseClient
           .from("processing_jobs")
           .select("id, file_name, status, metadata")
-          .eq("user_id", userId)
           .in("analysis_target", ["document-analysis", "image-ocr"])
           .eq("status", "completed")
           .order("created_at", { ascending: false })
           .limit(10); // Check last 10 documents
+        
+        // For authenticated users, filter by user_id; for guest mode, get documents with NULL user_id
+        if (userId) {
+          query = query.eq("user_id", userId);
+        } else if (guestMode) {
+          query = query.is("user_id", null);
+        } else {
+          return; // No user and not guest mode
+        }
+        
+        const { data: dbJobs, error } = await query;
         
         if (!error && dbJobs && dbJobs.length > 0) {
           console.log(`[Index] Found ${dbJobs.length} completed documents on page load, checking for summaries...`);
@@ -957,32 +966,42 @@ const Index = () => {
                 stage: j.stage 
               })));
               
-              // CRITICAL FIX: If no completed jobs in uploadJobs but we know documents exist (via documentCount),
-              // query the database directly to get document IDs
+              // CRITICAL FIX: Always query database for completed documents to ensure RAG context is available
+              // This ensures documents from previous sessions or not in uploadJobs state are included
               console.log(`[Index] 🔍 DEBUG: Checking for documents - uploadJobs: ${uploadJobs.length}, documentCount: ${documentCount}, userId: ${session?.user?.id || 'none'}, guestMode: ${guestMode}`);
               
-              if (allCompletedJobs.length === 0 && documentCount > 0 && (session?.user?.id || guestMode)) {
-                console.log(`[Index] ⚠️ No completed jobs in uploadJobs but documentCount is ${documentCount}, querying database...`);
+              // Always query database if we have a user (authenticated or guest mode)
+              if (session?.user?.id || guestMode) {
                 try {
                   const userId = session?.user?.id;
                   
+                  console.log(`[Index] 🔍 DEBUG: Querying database for documents (userId: ${userId || 'guest'})...`);
+                  
+                  let dbQuery = supabaseClient
+                    .from("processing_jobs")
+                    .select("id, file_name, status, metadata")
+                    .in("analysis_target", ["document-analysis", "image-ocr"])
+                    .eq("status", "completed")
+                    .order("created_at", { ascending: false })
+                    .limit(50);
+                  
+                  // Filter by user_id for authenticated users, or NULL for guest mode
                   if (userId) {
-                    console.log(`[Index] 🔍 DEBUG: Querying database for userId: ${userId}`);
-                    const { data: dbJobs, error: dbError } = await supabaseClient
-                      .from("processing_jobs")
-                      .select("id, file_name, status, metadata")
-                      .eq("user_id", userId)
-                      .in("analysis_target", ["document-analysis", "image-ocr"])
-                      .eq("status", "completed")
-                      .order("created_at", { ascending: false })
-                      .limit(50);
-                    
-                    console.log(`[Index] 🔍 DEBUG: Database query result - found: ${dbJobs?.length || 0}, error: ${dbError ? JSON.stringify(dbError) : 'none'}`);
-                    
-                    if (!dbError && dbJobs && dbJobs.length > 0) {
-                      console.log(`[Index] ✅ Found ${dbJobs.length} completed documents in database:`, dbJobs.map(j => j.file_name));
-                      // Convert database jobs to UploadJob format for context
-                      allCompletedJobs = dbJobs.map(job => ({
+                    dbQuery = dbQuery.eq("user_id", userId);
+                  } else if (guestMode) {
+                    dbQuery = dbQuery.is("user_id", null);
+                  }
+                  
+                  const { data: dbJobs, error: dbError } = await dbQuery;
+                  
+                  console.log(`[Index] 🔍 DEBUG: Database query result - found: ${dbJobs?.length || 0}, error: ${dbError ? JSON.stringify(dbError) : 'none'}`);
+                  
+                  if (!dbError && dbJobs && dbJobs.length > 0) {
+                    // Merge with existing allCompletedJobs, avoiding duplicates
+                    const existingIds = new Set(allCompletedJobs.map(j => j.id));
+                    const newJobs = dbJobs
+                      .filter(job => !existingIds.has(job.id))
+                      .map(job => ({
                         id: job.id,
                         fileName: job.file_name,
                         status: "completed" as const,
@@ -992,20 +1011,20 @@ const Index = () => {
                         contentLength: null,
                         updatedAt: null,
                       }));
-                      console.log(`[Index] ✅ Converted ${allCompletedJobs.length} database jobs for context`);
-                    } else if (dbError) {
-                      console.error(`[Index] ❌ Database query failed:`, dbError);
-                    } else {
-                      console.warn(`[Index] ⚠️ Database query returned no documents (but documentCount is ${documentCount})`);
+                    
+                    if (newJobs.length > 0) {
+                      console.log(`[Index] ✅ Found ${newJobs.length} additional completed documents in database:`, newJobs.map(j => j.fileName));
+                      allCompletedJobs = [...allCompletedJobs, ...newJobs];
+                      console.log(`[Index] ✅ Total completed jobs after database query: ${allCompletedJobs.length}`);
                     }
-                  } else {
-                    console.warn(`[Index] ⚠️ No userId available for database query (session: ${!!session}, guestMode: ${guestMode})`);
+                  } else if (dbError) {
+                    console.error(`[Index] ❌ Database query failed:`, dbError);
                   }
                 } catch (dbQueryError) {
                   console.error(`[Index] ❌ Failed to query database for documents:`, dbQueryError);
                 }
               } else {
-                console.log(`[Index] 🔍 DEBUG: Skipping database query - allCompletedJobs: ${allCompletedJobs.length}, documentCount: ${documentCount}, hasUserId: ${!!session?.user?.id}, guestMode: ${guestMode}`);
+                console.log(`[Index] 🔍 DEBUG: Skipping database query - no user session and not in guest mode`);
               }
               
               // Include ALL completed jobs - the backend will handle retrieving content from database

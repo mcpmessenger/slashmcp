@@ -270,10 +270,17 @@ export function createRagTools(
           const supabase = createClient(supabaseUrl, supabaseServiceKey);
           
           // First, check document status
+          // Support both authenticated users (user_id = userId) and guest mode (user_id IS NULL)
           let statusQuery = supabase
             .from("processing_jobs")
-            .select("id, file_name, status, metadata")
-            .eq("user_id", userId);
+            .select("id, file_name, status, metadata");
+          
+          // Filter by user_id - if userId is "guest", look for NULL user_id, otherwise match userId
+          if (userId === "guest") {
+            statusQuery = statusQuery.is("user_id", null);
+          } else {
+            statusQuery = statusQuery.eq("user_id", userId);
+          }
           
           if (jobIds && jobIds.length > 0) {
             statusQuery = statusQuery.in("id", jobIds);
