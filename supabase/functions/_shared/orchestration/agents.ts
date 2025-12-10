@@ -338,23 +338,25 @@ export function createOrchestratorAgent(
     instructions:
       "Your primary goal is to route requests to the appropriate specialized agent or tool. " +
       "\n" +
-      "🚨 CRITICAL ROUTING ORDER - CHECK IN THIS EXACT ORDER:\n" +
-      "1. RESELLING ANALYSIS (check FIRST before anything else)\n" +
-      "2. DOCUMENT REQUESTS (RAG)\n" +
-      "3. MEMORY REQUESTS\n" +
-      "4. DEFAULT (Command Discovery)\n" +
+      "🚨🚨🚨 CRITICAL ROUTING ORDER - CHECK IN THIS EXACT ORDER 🚨🚨🚨:\n" +
+      "1. RESELLING ANALYSIS (check FIRST before anything else) - USE TOOL DIRECTLY\n" +
+      "2. DOCUMENT REQUESTS (RAG) - USE TOOL DIRECTLY\n" +
+      "3. MEMORY REQUESTS - USE TOOL DIRECTLY\n" +
+      "4. DEFAULT (Command Discovery) - ONLY if none of the above apply\n" +
       "\n" +
-      "FOR RESELLING/MARKET ANALYSIS REQUESTS - CHECK THIS FIRST, HIGHEST PRIORITY:\n" +
-      "- 🚨 BEFORE routing anywhere else, check if the user wants to SCRAPE listings, COMPARE prices, or find RESELLING OPPORTUNITIES\n" +
-      "- If the query contains ANY of these keywords: 'scrape', 'Craigslist', 'OfferUp', 'eBay', 'Amazon', 'price comparison', 'reselling', 'resell', 'price discrepancies', 'compare prices'\n" +
-      "- AND the query mentions products/items (headphones, laptops, etc.)\n" +
-      "- THEN you MUST use the `analyze_reselling_opportunities` tool DIRECTLY - do NOT route to command discovery\n" +
+      "🚨🚨🚨 FOR RESELLING/MARKET ANALYSIS REQUESTS - HIGHEST PRIORITY 🚨🚨🚨:\n" +
+      "- If you see ANY message mentioning 'scrape', 'Craigslist', 'OfferUp', 'eBay', 'Amazon', 'price comparison', 'reselling', 'compare prices', 'email report', 'links'\n" +
+      "- AND the message mentions a product (headphones, laptop, etc.)\n" +
+      "- THEN YOU MUST IMMEDIATELY use the `analyze_reselling_opportunities` tool - DO NOT route to command discovery\n" +
+      "- DO NOT use playwright-wrapper, DO NOT use search-mcp, DO NOT handoff to command discovery\n" +
+      "- The `analyze_reselling_opportunities` tool is available in your tools list - use it directly\n" +
       "- Examples that REQUIRE direct tool use:\n" +
-      "  * 'Scrape headphones from Craigslist and OfferUp' → USE analyze_reselling_opportunities\n" +
-      "  * 'Compare prices for headphones on Craigslist vs eBay' → USE analyze_reselling_opportunities\n" +
-      "  * 'Find reselling opportunities for laptops' → USE analyze_reselling_opportunities\n" +
-      "  * 'Email me a report with listings and price comparisons' → USE analyze_reselling_opportunities\n" +
+      "  * 'Scrape headphones from Craigslist and OfferUp' → USE analyze_reselling_opportunities NOW\n" +
+      "  * 'Compare prices for headphones on Craigslist vs eBay' → USE analyze_reselling_opportunities NOW\n" +
+      "  * 'Find reselling opportunities for laptops' → USE analyze_reselling_opportunities NOW\n" +
+      "  * 'Email me a report with listings and price comparisons' → USE analyze_reselling_opportunities NOW\n" +
       "- The tool automatically scrapes, compares prices, and generates reports - you don't need to route to MCP tools\n" +
+      "- If you see instructions telling you this is a reselling request, FOLLOW THEM IMMEDIATELY\n" +
       "\n" +
       "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation) - SECOND PRIORITY:\n" +
       "- CRITICAL: If the user mentions ANY of the following, you MUST use `search_documents` tool:\n" +
