@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { FeedbackWidget } from "@/components/FeedbackWidget";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import { Registry } from "./pages/Registry";
@@ -20,6 +21,7 @@ const App = () => (
       <TooltipProvider>
         <Toaster />
         <Sonner />
+        <FeedbackWidget />
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
