@@ -196,9 +196,10 @@ async function executeOrchestration(
       (queryLower.includes("scrape") || queryLower.includes("craigslist") || queryLower.includes("offerup") || 
        queryLower.includes("ebay") || queryLower.includes("amazon") || queryLower.includes("price comparison") ||
        queryLower.includes("reselling") || queryLower.includes("resell") || queryLower.includes("price discrepancies") ||
-       queryLower.includes("compare prices") || queryLower.includes("find deals")) &&
+       queryLower.includes("compare prices") || queryLower.includes("find deals") || queryLower.includes("compare to")) &&
       (queryLower.includes("headphones") || queryLower.includes("laptop") || queryLower.includes("product") || 
-       queryLower.includes("item") || queryLower.includes("listing") || queryLower.includes("deal"));
+       queryLower.includes("item") || queryLower.includes("listing") || queryLower.includes("deal") ||
+       queryLower.includes("report") || queryLower.includes("email") || queryLower.includes("links"));
     
     // Enhance orchestrator instructions with document context
     // CRITICAL: Always prioritize RAG when documents exist, regardless of query classification
