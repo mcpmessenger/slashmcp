@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabaseClient } from '../lib/supabaseClient';
 
 export default function OAuthCallback() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<string>('Processing OAuth callback...');
+  const hasCheckedRef = useRef(false);
 
   useEffect(() => {
+    // Prevent multiple checks
+    if (hasCheckedRef.current) return;
+    hasCheckedRef.current = true;
     // DON'T clear the hash yet - Supabase needs it with detectSessionInUrl: true
     // We'll clear it after the session is established
     const hasHash = typeof window !== 'undefined' && window.location.hash && window.location.hash.includes('access_token');
@@ -24,9 +28,12 @@ export default function OAuthCallback() {
     let subscription: { unsubscribe: () => void } | null = null;
 
     const handleSessionEstablished = async () => {
-      if (isHandled) return;
+      if (isHandled) {
+        console.log('[OAuthCallback] handleSessionEstablished called but already handled, skipping');
+        return;
+      }
       
-      console.log('[OAuthCallback] Session establishment detected, verifying persistence...');
+      console.log('[OAuthCallback] ✅ Session establishment detected, verifying persistence...');
       setStatus('Verifying session...');
 
       // Wait longer to ensure session is fully persisted to localStorage
@@ -82,11 +89,20 @@ export default function OAuthCallback() {
       }
 
       if (!sessionPersisted) {
-        console.error('[OAuthCallback] Session not persisted after multiple attempts');
+        console.error('[OAuthCallback] ❌ Session not persisted after multiple attempts');
+        console.error('[OAuthCallback] This might indicate:');
+        console.error('  1. Supabase failed to process the OAuth hash');
+        console.error('  2. localStorage is blocked or full');
+        console.error('  3. Session expired before it could be saved');
         setStatus('Session verification failed. Redirecting...');
+        // Still set the flag so main page can try to restore
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('oauth_just_completed', 'true');
+          sessionStorage.setItem('oauth_completed_at', Date.now().toString());
+        }
         setTimeout(() => {
           window.location.href = '/';
-        }, 1000);
+        }, 2000);
         return;
       }
 
@@ -184,11 +200,18 @@ export default function OAuthCallback() {
               const storedSession = localStorage.getItem(storageKey);
               
               if (storedSession) {
-                console.log('[OAuthCallback] Final session check passed (both Supabase and localStorage), redirecting...');
+                console.log('[OAuthCallback] ✅ Final session check passed (both Supabase and localStorage), redirecting...');
+                // Clear any stale flags that might cause issues
+                if (typeof window !== 'undefined') {
+                  // Ensure oauth_just_completed flag is set
+                  sessionStorage.setItem('oauth_just_completed', 'true');
+                  sessionStorage.setItem('oauth_completed_at', Date.now().toString());
+                }
                 // Add a small delay before redirect to ensure everything is fully written
                 setTimeout(() => {
+                  console.log('[OAuthCallback] 🔄 Redirecting to home page...');
                   window.location.href = '/';
-                }, 300);
+                }, 500);
               } else {
                 console.warn('[OAuthCallback] Session exists in Supabase but not in localStorage yet, waiting...');
                 // Wait a bit more and check again
@@ -223,71 +246,228 @@ export default function OAuthCallback() {
 
     // Listen for auth state changes
     const { data: authData } = supabaseClient.auth.onAuthStateChange(async (event, session) => {
-      console.log('[OAuthCallback] Auth state change:', event, session ? 'has session' : 'no session');
+      console.log('[OAuthCallback] 🔔 Auth state change:', event, session ? 'has session' : 'no session');
       
-      if (isHandled) return;
+      if (isHandled) {
+        console.log('[OAuthCallback] Already handled, ignoring auth state change');
+        return;
+      }
       
       if (session && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
+        console.log('[OAuthCallback] ✅ SIGNED_IN or TOKEN_REFRESHED event detected');
         setStatus('Session established, verifying...');
         await handleSessionEstablished();
       } else if (event === 'SIGNED_OUT') {
         if (isHandled) return;
         isHandled = true;
-        console.log('[OAuthCallback] Signed out event');
+        console.log('[OAuthCallback] ❌ Signed out event - this shouldn\'t happen during OAuth');
         setStatus('Signed out. Redirecting...');
         setTimeout(() => {
           window.location.href = '/';
         }, 500);
+      } else {
+        console.log('[OAuthCallback] ⚠️ Other auth event:', event, session ? 'has session' : 'no session');
       }
     });
     
     subscription = authData?.subscription || null;
 
-    // Don't check for existing session immediately - wait for onAuthStateChange to fire
-    // This prevents race conditions where we check before Supabase has processed the hash
-    console.log('[OAuthCallback] Waiting for Supabase to process OAuth hash...');
-    setStatus('Waiting for OAuth response...');
-
-    // Fallback timeout - if nothing happens in 15 seconds, check session and navigate
-    const fallbackTimeout = setTimeout(() => {
+    // Also manually check for session after a short delay (in case onAuthStateChange doesn't fire)
+    // This helps with cases where Supabase processes the hash but the event doesn't trigger
+    const manualCheckTimeout = setTimeout(async () => {
       if (!isHandled) {
-        console.warn('[OAuthCallback] Timeout waiting for auth state change, checking session...');
+        console.log('[OAuthCallback] 🔍 Manual session check (5s delay)...');
+        setStatus('Checking session...');
+        try {
+          const getSessionPromise = supabaseClient.auth.getSession();
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('getSession timeout')), 5000)
+          );
+          const result = await Promise.race([getSessionPromise, timeoutPromise]) as any;
+          const manualSession = result.data?.session;
+          if (manualSession && manualSession.user && !isHandled) {
+            console.log('[OAuthCallback] ✅ Manual check found session, handling...');
+            setStatus('Session found, verifying...');
+            await handleSessionEstablished();
+          } else if (result.error) {
+            console.warn('[OAuthCallback] ⚠️ Manual check error:', result.error);
+          } else {
+            console.log('[OAuthCallback] ⚠️ Manual check: No session found yet');
+          }
+        } catch (error) {
+          console.warn('[OAuthCallback] ⚠️ Manual check exception:', error);
+        }
+      }
+    }, 5000); // Check after 5 seconds
+
+    // Try immediate session check AND manual hash processing
+    // Supabase might not be processing the hash automatically, so we'll do it manually
+    const immediateCheck = async () => {
+      try {
+        console.log('[OAuthCallback] 🔍 Immediate session check...');
+        const { data: { session: immediateSession }, error } = await supabaseClient.auth.getSession();
+        if (immediateSession && immediateSession.user && !isHandled) {
+          console.log('[OAuthCallback] ✅ Session found immediately, handling...');
+          setStatus('Session found, verifying...');
+          await handleSessionEstablished();
+          return true;
+        } else if (error) {
+          console.log('[OAuthCallback] Immediate check: No session yet, trying manual hash processing...');
+          
+          // Try to manually process the hash if Supabase didn't
+          const hash = window.location.hash;
+          if (hash && hash.includes('access_token')) {
+            console.log('[OAuthCallback] 🔧 Hash present but no session - attempting manual processing...');
+            const hashParams = new URLSearchParams(hash.substring(1));
+            const accessToken = hashParams.get('access_token');
+            const refreshToken = hashParams.get('refresh_token');
+            
+            if (accessToken) {
+              try {
+                console.log('[OAuthCallback] Manually setting session from hash...');
+                const { data: setSessionData, error: setError } = await supabaseClient.auth.setSession({
+                  access_token: accessToken,
+                  refresh_token: refreshToken || '',
+                });
+                
+                if (setSessionData.session && !setError) {
+                  console.log('[OAuthCallback] ✅ Manual session set successful!');
+                  // Wait for session to persist
+                  await new Promise(resolve => setTimeout(resolve, 500));
+                  await handleSessionEstablished();
+                  return true;
+                } else {
+                  console.warn('[OAuthCallback] Manual setSession failed:', setError);
+                }
+              } catch (setError) {
+                console.warn('[OAuthCallback] Manual setSession exception:', setError);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.log('[OAuthCallback] Immediate check exception:', error);
+      }
+      return false;
+    };
+    
+    // Run immediate check
+    immediateCheck().then((found) => {
+      if (!found) {
+        console.log('[OAuthCallback] Waiting for Supabase to process OAuth hash or auth state change...');
+        setStatus('Waiting for OAuth response...');
+      }
+    });
+
+    // Fallback timeout - if nothing happens in 20 seconds, check session and navigate
+    const fallbackTimeout = setTimeout(async () => {
+      if (!isHandled) {
+        console.warn('[OAuthCallback] ⚠️ Timeout waiting for auth state change (20s), checking session...');
+        setStatus('Checking session...');
         const getSessionPromise = supabaseClient.auth.getSession();
         const timeoutPromise = new Promise((_, reject) => 
           setTimeout(() => reject(new Error('getSession timeout')), 5000)
         );
-        Promise.race([getSessionPromise, timeoutPromise]).then((result: any) => {
+        try {
+          const result: any = await Promise.race([getSessionPromise, timeoutPromise]);
           const session = result.data?.session;
           if (session && session.user) {
-            console.log('[OAuthCallback] Session found on timeout, handling...');
-            handleSessionEstablished();
+            console.log('[OAuthCallback] ✅ Session found on timeout, handling...');
+            await handleSessionEstablished();
           } else {
-            console.warn('[OAuthCallback] No session found on timeout, redirecting...');
+            console.warn('[OAuthCallback] ❌ No session found on timeout');
+            console.warn('[OAuthCallback] Attempting to manually process hash...');
+            
+            // Try to manually extract and set session from hash as last resort
+            // This is a fallback if Supabase's detectSessionInUrl didn't work
+            try {
+              const hash = window.location.hash;
+              if (hash && hash.includes('access_token')) {
+                console.log('[OAuthCallback] 🔧 Hash still present, trying manual session extraction...');
+                // Parse hash parameters
+                const hashParams = new URLSearchParams(hash.substring(1));
+                const accessToken = hashParams.get('access_token');
+                const refreshToken = hashParams.get('refresh_token');
+                const expiresIn = hashParams.get('expires_in');
+                const tokenType = hashParams.get('token_type') || 'bearer';
+                const providerToken = hashParams.get('provider_token');
+                const providerRefreshToken = hashParams.get('provider_refresh_token');
+                
+                if (accessToken) {
+                  console.log('[OAuthCallback] Found access_token in hash, attempting manual session set...');
+                  try {
+                    // Use setSession to manually establish the session
+                    const { data: setSessionData, error: setError } = await supabaseClient.auth.setSession({
+                      access_token: accessToken,
+                      refresh_token: refreshToken || '',
+                    });
+                    
+                    if (setSessionData.session && !setError) {
+                      console.log('[OAuthCallback] ✅ Manually set session successful!');
+                      // Wait a moment for session to persist to localStorage
+                      await new Promise(resolve => setTimeout(resolve, 1000));
+                      // Verify it's persisted
+                      const { data: { session: verifySession } } = await supabaseClient.auth.getSession();
+                      if (verifySession && verifySession.user) {
+                        console.log('[OAuthCallback] ✅ Verified session after manual set');
+                        await handleSessionEstablished();
+                        return;
+                      } else {
+                        console.warn('[OAuthCallback] Session not found after manual set');
+                      }
+                    } else {
+                      console.warn('[OAuthCallback] ❌ Manual setSession failed:', setError);
+                      console.warn('[OAuthCallback] Error details:', JSON.stringify(setError, null, 2));
+                    }
+                  } catch (setSessionError) {
+                    console.warn('[OAuthCallback] ❌ Manual setSession exception:', setSessionError);
+                  }
+                } else {
+                  console.warn('[OAuthCallback] No access_token found in hash');
+                }
+              } else {
+                console.warn('[OAuthCallback] Hash no longer contains access_token (might have been cleared)');
+              }
+            } catch (manualError) {
+              console.warn('[OAuthCallback] ❌ Manual session processing failed:', manualError);
+            }
+            
+            console.warn('[OAuthCallback] This might indicate:');
+            console.warn('  1. OAuth hash was invalid or expired');
+            console.warn('  2. Supabase failed to process the session');
+            console.warn('  3. Network/CORS issue preventing session establishment');
             isHandled = true;
-            setStatus('Timeout. Redirecting...');
-            window.location.href = '/';
+            setStatus('No session found. Redirecting...');
+            // Don't set oauth_just_completed flag if session wasn't found
+            // This prevents the main page from thinking OAuth succeeded
+            setTimeout(() => {
+              window.location.href = '/';
+            }, 1000);
           }
-        }).catch((error) => {
-          console.error('[OAuthCallback] Error checking session on timeout:', error);
+        } catch (error: any) {
+          console.error('[OAuthCallback] ❌ Error checking session on timeout:', error);
           isHandled = true;
           if (error?.message?.includes('timeout')) {
-            console.warn('[OAuthCallback] getSession timed out, redirecting anyway');
-            setStatus('Session check timed out. Redirecting...');
+            console.warn('[OAuthCallback] getSession timed out - session might still be processing');
+            setStatus('Session check timed out. Redirecting anyway...');
+            // Set flag so main page can try to restore session
+            if (typeof window !== 'undefined') {
+              sessionStorage.setItem('oauth_just_completed', 'true');
+              sessionStorage.setItem('oauth_completed_at', Date.now().toString());
+            }
           } else {
-            setStatus('Timeout. Redirecting...');
+            setStatus('Error verifying session. Redirecting...');
           }
-          // Set flag so main page knows OAuth was attempted
-          if (typeof window !== 'undefined') {
-            sessionStorage.setItem('oauth_just_completed', 'true');
-            sessionStorage.setItem('oauth_completed_at', Date.now().toString());
-          }
-          window.location.href = '/';
-        });
+          setTimeout(() => {
+            window.location.href = '/';
+          }, 1000);
+        }
       }
-    }, 15000); // Increased to 15 seconds to give more time
+    }, 20000); // Increased to 20 seconds to give more time for slow networks
 
     return () => {
       clearTimeout(fallbackTimeout);
+      clearTimeout(manualCheckTimeout);
       if (subscription) {
         subscription.unsubscribe();
       }

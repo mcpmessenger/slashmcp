@@ -599,10 +599,6 @@ serve(async (req) => {
     let rawResponse: unknown = null;
 
     const isPdf = job.file_type === "application/pdf";
-    const isCsv = job.file_type === "text/csv" || 
-                  job.file_type === "application/vnd.ms-excel" ||
-                  job.file_name?.toLowerCase().endsWith(".csv") ||
-                  job.file_name?.toLowerCase().endsWith(".tsv");
 
     // Handle CSV/TSV files - read directly from S3
     if (isCsv) {

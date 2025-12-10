@@ -495,10 +495,15 @@ export function createResellingAnalysisTool(resellingAnalysisUrl: string): Tool 
   return {
     name: "analyze_reselling_opportunities",
     description:
-      "Analyzes reselling opportunities for products (e.g., headphones) by scraping listings from Craigslist and OfferUp, " +
-      "comparing prices to eBay Sold listings and Amazon, and identifying profitable opportunities. " +
-      "Returns both structured data and a voice-transcription-friendly summary. " +
-      "Use this when users ask about reselling, finding deals, price comparisons, or analyzing market opportunities.",
+      "COMPLETE RESELLING ANALYSIS TOOL: Scrapes listings from Craigslist and OfferUp with links, compares to eBay Sold listings and Amazon prices, " +
+      "identifies profitable reselling opportunities, and can email detailed reports. " +
+      "This tool AUTOMATICALLY handles: (1) Scraping Craigslist and OfferUp for product listings with full URLs, " +
+      "(2) Fetching eBay Sold listing prices for comparison, (3) Getting Amazon current prices, " +
+      "(4) Analyzing price discrepancies and calculating profit margins, (5) Generating detailed reports with all links. " +
+      "Use this IMMEDIATELY when users ask to: scrape [product] from Craigslist/OfferUp, compare prices, find reselling opportunities, " +
+      "identify price discrepancies, get deals on [product], or email a report about listings. " +
+      "Examples: 'Scrape headphones from Craigslist and compare to eBay', 'Find reselling opportunities for laptops', " +
+      "'Email me a report with links to headphone listings and price comparisons'.",
     parameters: {
       type: "object",
       properties: {
@@ -540,12 +545,21 @@ export function createResellingAnalysisTool(resellingAnalysisUrl: string): Tool 
 
         const result = await response.json();
         
-        // Return the summary if available, otherwise return the full data
-        if (result.summary) {
-          return result.summary;
+        // If email report is available, include it in the response
+        const data = result.data || result;
+        let responseText = "";
+        
+        if (data.emailReport) {
+          responseText = `RESELLING ANALYSIS COMPLETE\n\n${data.summary || ""}\n\n`;
+          responseText += `DETAILED EMAIL REPORT:\n${data.emailReport}\n\n`;
+          responseText += `Full data with ${data.totalListings || 0} listings and ${data.strongOpportunities || 0} strong opportunities available.`;
+        } else if (result.summary) {
+          responseText = result.summary;
+        } else {
+          responseText = JSON.stringify(data, null, 2);
         }
         
-        return JSON.stringify(result.data || result, null, 2);
+        return responseText;
       } catch (error) {
         return `Error analyzing reselling opportunities: ${error instanceof Error ? error.message : "Unknown error"}`;
       }

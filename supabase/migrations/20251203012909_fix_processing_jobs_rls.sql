@@ -11,11 +11,12 @@ DROP POLICY IF EXISTS "Users can update their own processing jobs" ON processing
 DROP POLICY IF EXISTS "Users can delete their own processing jobs" ON processing_jobs;
 
 -- Create proper RLS policy for SELECT
+-- Allow users to see their own jobs OR jobs with NULL user_id (for backward compatibility)
 CREATE POLICY "Users can select their own processing jobs"
   ON processing_jobs
   FOR SELECT
   TO authenticated
-  USING (auth.uid() = user_id);
+  USING (auth.uid() = user_id OR user_id IS NULL);
 
 -- Add policy for INSERT (users can create jobs for themselves)
 CREATE POLICY "Users can insert their own processing jobs"

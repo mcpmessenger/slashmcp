@@ -374,13 +374,15 @@ function analyzeResellingOpportunities(
 }
 
 /**
- * Convert analysis results to voice-transcription-friendly text
+ * Convert analysis results to voice-transcription-friendly text and detailed email report
  */
-function generateVoiceSummary(opportunities: Opportunity[]): string {
+function generateVoiceSummary(opportunities: Opportunity[]): { summary: string; emailReport: string } {
   const strongOpportunities = opportunities.filter(opp => opp.isStrongOpportunity);
   const otherOpportunities = opportunities.filter(opp => !opp.isStrongOpportunity);
 
   let summary = "";
+  let emailReport = "RESELLING OPPORTUNITIES ANALYSIS REPORT\n";
+  emailReport += "=" .repeat(50) + "\n\n";
 
   if (strongOpportunities.length > 0) {
     summary += `A strong reselling opportunity was identified for ${strongOpportunities[0].listing.title} on ${strongOpportunities[0].listing.url.includes("craigslist") ? "Craigslist" : "OfferUp"}. `;
@@ -392,6 +394,27 @@ function generateVoiceSummary(opportunities: Opportunity[]): string {
     
     summary += `The direct link to the listing is: ${strongOpportunities[0].listing.url}. `;
     summary += `We recommend checking the item's condition immediately. `;
+
+    // Email report section for strong opportunities
+    emailReport += "STRONG RESELLING OPPORTUNITIES:\n";
+    emailReport += "-".repeat(50) + "\n";
+    for (const opp of strongOpportunities) {
+      emailReport += `\nProduct: ${opp.listing.title}\n`;
+      emailReport += `Listing Price: $${opp.listing.price.toFixed(2)}\n`;
+      emailReport += `Listing URL: ${opp.listing.url}\n`;
+      if (opp.listing.location) {
+        emailReport += `Location: ${opp.listing.location}\n`;
+      }
+      if (opp.marketData.ebayUsedRange) {
+        emailReport += `eBay Sold Price Range: $${opp.marketData.ebayUsedRange.min.toFixed(2)} - $${opp.marketData.ebayUsedRange.max.toFixed(2)}\n`;
+      }
+      if (opp.marketData.amazonNewPrice) {
+        emailReport += `Amazon New Price: $${opp.marketData.amazonNewPrice.toFixed(2)}\n`;
+      }
+      emailReport += `Potential Profit: $${opp.potentialProfit.toFixed(2)}\n`;
+      emailReport += `Profit Margin: ${opp.profitMargin.toFixed(1)}%\n`;
+      emailReport += "\n";
+    }
   }
 
   if (otherOpportunities.length > 0) {
@@ -401,11 +424,28 @@ function generateVoiceSummary(opportunities: Opportunity[]): string {
       .join(", ");
     
     summary += `Other listings for ${productNames} were analyzed but were priced too high for a profitable reselling margin. `;
+
+    // Email report section for other listings
+    emailReport += "\nOTHER LISTINGS ANALYZED:\n";
+    emailReport += "-".repeat(50) + "\n";
+    for (const opp of otherOpportunities.slice(0, 10)) {
+      emailReport += `\nProduct: ${opp.listing.title}\n`;
+      emailReport += `Listing Price: $${opp.listing.price.toFixed(2)}\n`;
+      emailReport += `Listing URL: ${opp.listing.url}\n`;
+      if (opp.marketData.ebayUsedRange) {
+        emailReport += `eBay Sold Price Range: $${opp.marketData.ebayUsedRange.min.toFixed(2)} - $${opp.marketData.ebayUsedRange.max.toFixed(2)}\n`;
+      }
+      emailReport += `Status: Priced too high for profitable reselling\n`;
+      emailReport += "\n";
+    }
   }
 
   summary += `A full, detailed report with all data points and links has been saved to your project files.`;
+  emailReport += "\n" + "=".repeat(50) + "\n";
+  emailReport += `Total Listings Analyzed: ${opportunities.length}\n`;
+  emailReport += `Strong Opportunities: ${strongOpportunities.length}\n`;
 
-  return summary;
+  return { summary, emailReport };
 }
 
 serve(async (req) => {
@@ -442,8 +482,8 @@ serve(async (req) => {
       // Step 3: Analyze opportunities
       const opportunities = analyzeResellingOpportunities(allListings, marketDataMap);
 
-      // Step 4: Generate voice-friendly summary
-      const summary = generateVoiceSummary(opportunities);
+      // Step 4: Generate voice-friendly summary and email report
+      const { summary, emailReport } = generateVoiceSummary(opportunities);
 
       // Return both JSON data and summary
       return new Response(
@@ -452,6 +492,7 @@ serve(async (req) => {
           data: {
             opportunities,
             summary,
+            emailReport,
             totalListings: allListings.length,
             strongOpportunities: opportunities.filter(opp => opp.isStrongOpportunity).length,
           },

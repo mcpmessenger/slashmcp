@@ -6,6 +6,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, PATCH, DELETE, OPTIONS",
+  "Access-Control-Max-Age": "86400", // Cache preflight for 24 hours
 };
 
 type AnalysisTarget = "document-analysis" | "image-ocr" | "image-generation" | "audio-transcription";
@@ -225,8 +226,12 @@ serve(async (req) => {
   
   try {
     if (req.method === "OPTIONS") {
-      console.log("OPTIONS request - returning CORS headers");
-      return new Response(null, { headers: corsHeaders });
+      console.log("OPTIONS request (CORS preflight) - returning CORS headers");
+      // Return 204 No Content for OPTIONS preflight (standard for CORS)
+      return new Response(null, { 
+        status: 204,
+        headers: corsHeaders 
+      });
     }
 
     if (req.method !== "POST" && req.method !== "PATCH" && req.method !== "DELETE") {
@@ -323,6 +328,15 @@ serve(async (req) => {
 
     const storagePath = `incoming/${crypto.randomUUID()}-${body.fileName}`;
     console.log("Creating presigned URL for storage path:", storagePath);
+    console.log("Presigned URL generation details:", {
+      bucket: AWS_S3_BUCKET,
+      region: AWS_REGION,
+      contentType: body.fileType || "(empty - will not sign Content-Type)",
+      hasAccessKeyId: !!AWS_ACCESS_KEY_ID,
+      hasSecretAccessKey: !!AWS_SECRET_ACCESS_KEY,
+      hasSessionToken: !!AWS_SESSION_TOKEN,
+      accessKeyIdPrefix: AWS_ACCESS_KEY_ID ? AWS_ACCESS_KEY_ID.substring(0, 8) + "..." : "MISSING",
+    });
     const presignedUrlStartTime = Date.now();
     
     const uploadUrl = await createPresignedPutUrl({
@@ -333,6 +347,16 @@ serve(async (req) => {
       secretAccessKey: AWS_SECRET_ACCESS_KEY,
       sessionToken: AWS_SESSION_TOKEN ?? undefined,
       contentType: body.fileType,
+    });
+    
+    console.log("Presigned URL generated:", {
+      urlLength: uploadUrl.length,
+      urlDomain: new URL(uploadUrl).hostname,
+      urlPath: new URL(uploadUrl).pathname.substring(0, 100) + "...",
+      hasSignature: uploadUrl.includes("X-Amz-Signature"),
+      signedHeaders: uploadUrl.includes("X-Amz-SignedHeaders=host") ? "host only" : 
+                     uploadUrl.includes("X-Amz-SignedHeaders=content-type%3Bhost") ? "content-type;host" : "unknown",
+      duration: `${Date.now() - presignedUrlStartTime}ms`,
     });
     
     const presignedUrlDuration = Date.now() - presignedUrlStartTime;

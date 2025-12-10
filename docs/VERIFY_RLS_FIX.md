@@ -115,3 +115,99 @@ If query still times out:
 3. Check if session token is expired
 4. Try logging out and back in
 
+---
+
+## Verification for `analysis_results` Table
+
+### Step 1: Check RLS is Enabled for analysis_results
+
+```sql
+SELECT tablename, rowsecurity 
+FROM pg_tables 
+WHERE tablename = 'analysis_results';
+```
+
+**Expected:** `rowsecurity` should be `true`
+
+### Step 2: Check RLS Policies Exist for analysis_results
+
+```sql
+SELECT 
+  schemaname,
+  tablename,
+  policyname,
+  permissive,
+  roles,
+  cmd,
+  qual,
+  with_check
+FROM pg_policies 
+WHERE tablename = 'analysis_results'
+ORDER BY cmd, policyname;
+```
+
+**Expected:** Should see 5 policies:
+- `Users can view their own analysis results` (cmd = SELECT)
+- `Authenticated users can view NULL user_id results` (cmd = SELECT)
+- `Users can insert their own analysis results` (cmd = INSERT)
+- `Users can update their own analysis results` (cmd = UPDATE)
+- `Users can delete their own analysis results` (cmd = DELETE)
+
+### Step 3: Verify SELECT Policy Details for analysis_results
+
+```sql
+SELECT 
+  policyname,
+  cmd,
+  qual,
+  with_check
+FROM pg_policies 
+WHERE tablename = 'analysis_results' 
+  AND cmd = 'SELECT'
+ORDER BY policyname;
+```
+
+**Expected:** Should see 2 SELECT policies:
+- `Users can view their own analysis results` - qual should contain `EXISTS` and reference `processing_jobs.user_id = auth.uid()`
+- `Authenticated users can view NULL user_id results` - qual should contain `EXISTS` and reference `processing_jobs.user_id IS NULL`
+
+### Step 4: Test Security - Unauthenticated Access Should Fail
+
+```sql
+-- This should fail if RLS is working correctly
+-- Run this as an unauthenticated/anonymous user (or with service role disabled)
+SELECT COUNT(*) FROM analysis_results;
+```
+
+**Expected:** Should return 0 rows or error (if RLS is properly configured, unauthenticated users cannot access the table)
+
+### Step 5: Test Authenticated Access
+
+```sql
+-- Replace USER_ID with actual user ID from auth.users
+-- This should only return results for jobs owned by that user
+SELECT 
+  ar.id,
+  ar.job_id,
+  pj.user_id,
+  pj.file_name,
+  LEFT(ar.ocr_text, 50) as ocr_preview
+FROM analysis_results ar
+JOIN processing_jobs pj ON pj.id = ar.job_id
+WHERE pj.user_id = 'USER_ID'
+LIMIT 10;
+```
+
+**Expected:** Should return only analysis results for jobs owned by the specified user
+
+### Troubleshooting for analysis_results
+
+If RLS policies don't exist:
+1. Re-run the migration: `20251207000000_fix_analysis_results_rls.sql`
+2. Check for errors in the migration execution
+
+If unauthenticated users can still access data:
+1. Verify RLS is enabled: `SELECT tablename, rowsecurity FROM pg_tables WHERE tablename = 'analysis_results';`
+2. Check that policies exist and are correctly configured
+3. Ensure policies use `TO authenticated` (not `TO public` or `TO anon`)
+
