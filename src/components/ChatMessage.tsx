@@ -57,11 +57,11 @@ export const ChatMessage = memo(({ message }: ChatMessageProps) => {
       )}
       <div
         className={cn(
-          "max-w-[80%] rounded-2xl",
-            isStock || isImage ? "p-0 overflow-hidden" : "px-4 py-3",
+          "max-w-[80%] rounded-2xl chat-bar-sunrise",
+          isStock || isImage ? "p-0 overflow-hidden" : "px-4 py-3",
           isUser
             ? "bg-primary/10 backdrop-blur-xl border border-primary/20 text-foreground"
-            : "bg-gradient-glass backdrop-blur-xl border border-glass-border/30 text-foreground/90",
+            : "backdrop-blur-xl border border-glass-border/30 text-foreground/90",
         )}
       >
         {isStock && message.type === "stock" ? (

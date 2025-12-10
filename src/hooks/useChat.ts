@@ -47,6 +47,17 @@ const SUPABASE_PROJECT_REF =
   SUPABASE_URL?.replace("https://", "")?.split(".supabase.co")?.[0]?.split(".")[0] ?? null;
 const SUPABASE_STORAGE_KEY = SUPABASE_PROJECT_REF ? `sb-${SUPABASE_PROJECT_REF}-auth-token` : null;
 const CUSTOM_SUPABASE_SESSION_KEY = SUPABASE_PROJECT_REF ? `slashmcp-session-${SUPABASE_PROJECT_REF}` : null;
+const CHAT_STATE_KEY = SUPABASE_PROJECT_REF ? `slashmcp-chat-${SUPABASE_PROJECT_REF}` : "slashmcp-chat";
+
+type PersistedChatState = {
+  messages: Message[];
+  mcpEvents: McpEvent[];
+  guestMode: boolean;
+  savedAt: number;
+};
+
+// In-memory fallback in case storage writes are blocked (e.g., third-party or CSP)
+let inMemoryChatState: PersistedChatState | null = null;
 
 const persistSessionToStorage = (session: Session | null) => {
   if (typeof window === "undefined" || !CUSTOM_SUPABASE_SESSION_KEY) return;
@@ -979,6 +990,10 @@ export function useChat() {
   const resetChat = useCallback(() => {
     setMessages([]);
     setMcpEvents([]);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(CHAT_STATE_KEY);
+      window.localStorage.removeItem(CHAT_STATE_KEY);
+    }
   }, []);
   const [isLoading, setIsLoading] = useState(false);
   const [provider, setProvider] = useState<Provider>("openai");
@@ -993,6 +1008,57 @@ export function useChat() {
   const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [guestMode, setGuestMode] = useState(false);
   const { toast } = useToast();
+
+  // Restore chat state (messages, events, guest flag) on first mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw =
+        window.sessionStorage.getItem(CHAT_STATE_KEY) ||
+        window.localStorage.getItem(CHAT_STATE_KEY) ||
+        null;
+      const parsed: PersistedChatState | null = raw ? JSON.parse(raw) : inMemoryChatState;
+      if (!parsed) return;
+      if (Array.isArray(parsed.messages)) {
+        setMessages(parsed.messages);
+      }
+      if (Array.isArray(parsed.mcpEvents)) {
+        setMcpEvents(parsed.mcpEvents);
+      }
+      if (parsed.guestMode === true) {
+        setGuestMode(true);
+      }
+    } catch (error) {
+      console.warn("[ChatState] Failed to restore chat state", error);
+    }
+  }, []);
+
+  // Persist chat state so navigation between routes doesn't reset guest sessions
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const payload: PersistedChatState = {
+        messages,
+        mcpEvents,
+        guestMode,
+        savedAt: Date.now(),
+      };
+      // SessionStorage preferred to keep scope to the tab; also mirror to localStorage for hard reloads
+      const serialized = JSON.stringify(payload);
+      window.sessionStorage.setItem(CHAT_STATE_KEY, serialized);
+      window.localStorage.setItem(CHAT_STATE_KEY, serialized);
+      inMemoryChatState = payload;
+    } catch (error) {
+      console.warn("[ChatState] Failed to persist chat state", error);
+      // Last resort: keep it in memory so route changes in this tab don't drop state
+      inMemoryChatState = {
+        messages,
+        mcpEvents,
+        guestMode,
+        savedAt: Date.now(),
+      };
+    }
+  }, [messages, mcpEvents, guestMode]);
   
   // Safety mechanism: Reset isLoading if it's been stuck for too long
   useEffect(() => {
@@ -1528,6 +1594,11 @@ export function useChat() {
       setGuestMode(false);
       setRegistry([]);
       setLoginPrompt(false);
+      // Clear persisted chat state so next session starts clean
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(CHAT_STATE_KEY);
+        window.localStorage.removeItem(CHAT_STATE_KEY);
+      }
       
       // 2. Clear custom local storage session
       persistSessionToStorage(null);
@@ -1594,6 +1665,10 @@ export function useChat() {
       setRegistry([]);
       setLoginPrompt(false);
       persistSessionToStorage(null);
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(CHAT_STATE_KEY);
+        window.localStorage.removeItem(CHAT_STATE_KEY);
+      }
       if (typeof window !== "undefined") {
         // Clear all Supabase-related storage
         Object.keys(localStorage).forEach(key => {

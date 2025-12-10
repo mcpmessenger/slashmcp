@@ -68,8 +68,15 @@ async function scrapeListings(
     let url = "";
     if (source === "craigslist") {
       // Format: https://[city].craigslist.org/search/ela?query=[query]
-      const cityCode = location.toLowerCase().replace(/\s+/g, "").replace(/[^a-z]/g, "");
+      // Clean location: remove "craigslist" prefix, spaces, and non-letters
+      let cityCode = location.toLowerCase().replace(/^craigslist\s+/i, "").trim();
+      cityCode = cityCode.replace(/\s+/g, "").replace(/[^a-z]/g, "");
+      // Handle common city name variations
+      if (cityCode === "desmoines" || cityCode === "desmoine") {
+        cityCode = "desmoines";
+      }
       url = `https://${cityCode}.craigslist.org/search/ela?query=${encodeURIComponent(query)}`;
+      console.log(`[scrapeListings] Constructed Craigslist URL: ${url} (from location: "${location}")`);
     } else if (source === "offerup") {
       // Format: https://www.offerup.com/search?q=[query]&lat=[lat]&lon=[lon]
       // For simplicity, we'll use a general search
@@ -87,12 +94,14 @@ async function scrapeListings(
         const playwrightUrl = `${FUNCTIONS_BASE}/playwright-wrapper`;
         console.log(`[scrapeListings] Attempting playwright-wrapper at: ${playwrightUrl}`);
         
+        // Use SERVICE_ROLE_KEY for internal function-to-function calls (bypasses RLS)
+        const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY") || "";
         const response = await fetch(playwrightUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY") || ""}`,
-            apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
+            Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+            apikey: SERVICE_ROLE_KEY,
           },
           body: JSON.stringify({
             command: "browser_extract_text",
@@ -102,11 +111,35 @@ async function scrapeListings(
 
         if (response.ok) {
           const result = await response.json();
-          // Parse the extracted text for listings
-          const text = typeof result === "string" ? result : JSON.stringify(result);
+          console.log(`[scrapeListings] Playwright response received, parsing...`);
+          
+          // Handle different response formats
+          let text = "";
+          if (typeof result === "string") {
+            text = result;
+          } else if (result.content) {
+            text = result.content;
+          } else if (result.text) {
+            text = result.text;
+          } else if (result.result?.content) {
+            text = result.result.content;
+          } else {
+            text = JSON.stringify(result);
+          }
+          
+          console.log(`[scrapeListings] Extracted text length: ${text.length} characters`);
           const parsed = parseListingsFromText(text, source, url);
           console.log(`[scrapeListings] Playwright extracted ${parsed.length} listings from ${source}`);
-          listings.push(...parsed);
+          
+          if (parsed.length === 0 && text.length > 100) {
+            // Try HTML parsing as fallback if text parsing failed
+            console.log(`[scrapeListings] Text parsing found 0 listings, trying HTML parsing...`);
+            const htmlParsed = parseListingsFromHTML(text, source, url);
+            console.log(`[scrapeListings] HTML parsing found ${htmlParsed.length} listings`);
+            listings.push(...htmlParsed);
+          } else {
+            listings.push(...parsed);
+          }
         } else {
           const errorText = await response.text().catch(() => "");
           console.warn(`[scrapeListings] Playwright-wrapper returned ${response.status}: ${errorText.slice(0, 200)}`);
@@ -118,13 +151,26 @@ async function scrapeListings(
 
     // Fallback to direct HTTP fetch
     if (listings.length === 0) {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        },
-      });
-      const html = await response.text();
-      listings.push(...parseListingsFromHTML(html, source, url));
+      console.log(`[scrapeListings] No listings from playwright, trying direct HTTP fetch: ${url}`);
+      try {
+        const response = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+          },
+        });
+        
+        if (response.ok) {
+          const html = await response.text();
+          console.log(`[scrapeListings] HTTP fetch successful, HTML length: ${html.length}`);
+          const htmlParsed = parseListingsFromHTML(html, source, url);
+          console.log(`[scrapeListings] HTML parsing found ${htmlParsed.length} listings`);
+          listings.push(...htmlParsed);
+        } else {
+          console.warn(`[scrapeListings] HTTP fetch failed: ${response.status} ${response.statusText}`);
+        }
+      } catch (httpError) {
+        console.error(`[scrapeListings] HTTP fetch error:`, httpError);
+      }
     }
   } catch (error) {
     console.error(`Error scraping ${source}:`, error);
@@ -339,12 +385,14 @@ async function getMarketData(productName: string): Promise<MarketData> {
         const playwrightUrl = `${FUNCTIONS_BASE}/playwright-wrapper`;
         console.log(`[getMarketData] Searching eBay via playwright-wrapper: ${ebayUrl}`);
         
+        // Use SERVICE_ROLE_KEY for internal function-to-function calls (bypasses RLS)
+        const SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || Deno.env.get("SUPABASE_ANON_KEY") || "";
         const response = await fetch(playwrightUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY") || ""}`,
-            apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
+            Authorization: `Bearer ${SERVICE_ROLE_KEY}`,
+            apikey: SERVICE_ROLE_KEY,
           },
           body: JSON.stringify({
             command: "browser_extract_text",
@@ -572,7 +620,17 @@ function generateVoiceSummary(opportunities: Opportunity[]): { summary: string; 
 
   let summary = "";
   let emailReport = "RESELLING OPPORTUNITIES ANALYSIS REPORT\n";
-  emailReport += "=" .repeat(50) + "\n\n";
+  emailReport += "=".repeat(50) + "\n\n";
+  
+  // Handle empty opportunities case first
+  if (opportunities.length === 0) {
+    summary = "I searched for listings but couldn't find any reselling opportunities. This could mean:\n\n1. No active listings match your search criteria\n2. All listings found were priced too high for profitable reselling\n3. The websites may have changed their structure, making scraping difficult\n\nTry using a more general search term or checking a different location.";
+    emailReport += "No reselling opportunities found.\n";
+    emailReport += "\n" + "=".repeat(50) + "\n";
+    emailReport += `Total Listings Analyzed: 0\n`;
+    emailReport += `Strong Opportunities: 0\n`;
+    return { summary, emailReport };
+  }
 
   if (strongOpportunities.length > 0) {
     summary += `A strong reselling opportunity was identified for ${strongOpportunities[0].listing.title} on ${strongOpportunities[0].listing.url.includes("craigslist") ? "Craigslist" : "OfferUp"}. `;
@@ -630,7 +688,19 @@ function generateVoiceSummary(opportunities: Opportunity[]): { summary: string; 
     }
   }
 
-  summary += `A full, detailed report with all data points and links has been saved to your project files.`;
+  // If summary is still empty after processing (shouldn't happen, but safety check)
+  if (summary === "" || summary.trim() === "") {
+    if (strongOpportunities.length > 0) {
+      summary = `Found ${strongOpportunities.length} strong reselling opportunity${strongOpportunities.length > 1 ? 'ies' : 'y'}. Check the email report for details.`;
+    } else if (otherOpportunities.length > 0) {
+      summary = `Analyzed ${opportunities.length} listings but found no strong reselling opportunities. All listings were priced too high for profitable reselling.`;
+    } else {
+      summary = `No reselling opportunities found after analyzing ${opportunities.length} listings.`;
+    }
+  } else {
+    summary += `\n\nA full, detailed report with all data points and links is available in the email report.`;
+  }
+  
   emailReport += "\n" + "=".repeat(50) + "\n";
   emailReport += `Total Listings Analyzed: ${opportunities.length}\n`;
   emailReport += `Strong Opportunities: ${strongOpportunities.length}\n`;
@@ -650,7 +720,9 @@ serve(async (req) => {
 
     // Support both "analyze_headphones" (legacy) and "analyze_reselling_opportunities" (new)
     if (command === "analyze_headphones" || command === "analyze_reselling_opportunities" || !command) {
-      const location = args.location || "des moines";
+      // Clean location - remove "craigslist" prefix if present
+      let location = (args.location || "des moines").toLowerCase();
+      location = location.replace(/^craigslist\s+/i, "").trim();
       const query = args.query || args.product || "headphones";
       const sources = (args.sources || "craigslist,offerup").split(",").map(s => s.trim()) as Array<"craigslist" | "offerup">;
       
@@ -711,18 +783,39 @@ serve(async (req) => {
       const opportunities = analyzeResellingOpportunities(allListings, marketDataMap);
 
       // Step 4: Generate AI-powered conversational summary and email report
-      const { emailReport } = generateVoiceSummary(opportunities);
-      const summary = await generateAISummary(opportunities);
+      const { emailReport, summary: voiceSummary } = generateVoiceSummary(opportunities);
+      const aiSummary = await generateAISummary(opportunities);
+      const summary = aiSummary || voiceSummary || "Analysis completed.";
       
       // Log results for debugging
-      console.log(`[reselling-analysis] Analysis complete: ${allListings.length} listings, ${opportunities.length} opportunities, ${opportunities.filter(opp => opp.isStrongOpportunity).length} strong`);
+      console.log(`[reselling-analysis] Analysis complete:`, {
+        totalListings: allListings.length,
+        opportunities: opportunities.length,
+        strongOpportunities: opportunities.filter(opp => opp.isStrongOpportunity).length,
+        summaryLength: summary.length,
+        hasEmailReport: !!emailReport,
+      });
 
       // Return both JSON data and summary
       // IMPORTANT: Return the actual data, not just a summary
       const responseData = {
         type: "json" as const,
         data: {
-          opportunities,
+          opportunities: opportunities.map(opp => ({
+            listing: {
+              title: opp.listing.title,
+              price: opp.listing.price,
+              url: opp.listing.url,
+              location: opp.listing.location,
+            },
+            marketData: {
+              ebayUsedRange: opp.marketData.ebayUsedRange,
+              amazonNewPrice: opp.marketData.amazonNewPrice,
+            },
+            potentialProfit: opp.potentialProfit,
+            profitMargin: opp.profitMargin,
+            isStrongOpportunity: opp.isStrongOpportunity,
+          })),
           summary,
           emailReport,
           totalListings: allListings.length,
@@ -732,7 +825,13 @@ serve(async (req) => {
             price: l.price,
             url: l.url,
             location: l.location
-          }))
+          })),
+          // Include raw data for debugging
+          debug: {
+            listingsFound: allListings.length > 0,
+            opportunitiesFound: opportunities.length > 0,
+            strongOpportunitiesFound: opportunities.filter(opp => opp.isStrongOpportunity).length > 0,
+          }
         },
         summary,
       };

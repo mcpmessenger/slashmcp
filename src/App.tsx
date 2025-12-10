@@ -12,6 +12,7 @@ import { WorkflowBuilder } from "./pages/WorkflowBuilder";
 import { Workflows } from "./pages/Workflows";
 import { PrivacyPolicy } from "./pages/PrivacyPolicy";
 import OAuthCallback from "./pages/OAuthCallback";
+import { ChatProvider } from "./context/ChatContext";
 
 const queryClient = new QueryClient();
 
@@ -23,17 +24,19 @@ const App = () => (
         <Sonner />
         <FeedbackWidget />
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/auth/callback" element={<OAuthCallback />} />
-            <Route path="/registry" element={<Registry />} />
-            <Route path="/workflows" element={<Workflows />} />
-            <Route path="/workflows/new" element={<WorkflowBuilder />} />
-            <Route path="/workflows/:id" element={<WorkflowBuilder />} />
-            <Route path="/privacy" element={<PrivacyPolicy />} />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <ChatProvider>
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="/auth/callback" element={<OAuthCallback />} />
+              <Route path="/registry" element={<Registry />} />
+              <Route path="/workflows" element={<Workflows />} />
+              <Route path="/workflows/new" element={<WorkflowBuilder />} />
+              <Route path="/workflows/:id" element={<WorkflowBuilder />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
+              {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </ChatProvider>
         </BrowserRouter>
       </TooltipProvider>
     </QueryClientProvider>

@@ -46,6 +46,12 @@ All colors MUST be HSL.
     --gradient-frost: linear-gradient(180deg, hsl(210 25% 98% / 0.5), hsl(200 20% 96% / 0.3));
     --glow-ice: 0 0 30px hsl(200 25% 75% / 0.2);
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Sunrise glow accents for light mode chat surfaces */
+    --sunrise-amber-1: 26 92% 97%;
+    --sunrise-amber-2: 30 96% 94%;
+    --sunrise-amber-3: 28 95% 88%;
+    --sunrise-amber-4: 20 100% 95%;
   }
 
   .dark {
@@ -129,4 +135,46 @@ All colors MUST be HSL.
   width: 100%;
   height: 100%;
   animation: thinking-runner 0.9s ease-in-out infinite;
+}
+
+/* Gentle orange glow behind chat bars (light mode only) */
+.chat-bar-sunrise {
+  background-image:
+    radial-gradient(circle at 18% 18%, hsl(var(--sunrise-amber-3) / 0.35), transparent 45%),
+    radial-gradient(circle at 82% 0%, hsl(var(--sunrise-amber-4) / 0.4), transparent 50%),
+    var(--gradient-glass);
+  box-shadow:
+    0 12px 42px hsl(var(--sunrise-amber-3) / 0.18),
+    0 4px 18px hsl(var(--sunrise-amber-2) / 0.12);
+  transition: var(--transition-smooth);
+}
+
+.chat-bar-sunrise--input {
+  background-image:
+    radial-gradient(circle at 15% 30%, hsl(var(--sunrise-amber-3) / 0.3), transparent 48%),
+    radial-gradient(circle at 85% 8%, hsl(var(--sunrise-amber-4) / 0.3), transparent 45%),
+    linear-gradient(135deg, hsl(var(--sunrise-amber-1) / 0.9), hsl(var(--sunrise-amber-2) / 0.9));
+  box-shadow:
+    0 14px 46px hsl(var(--sunrise-amber-3) / 0.22),
+    0 6px 18px hsl(var(--sunrise-amber-2) / 0.12);
+}
+
+.dark .chat-bar-sunrise,
+.dark .chat-bar-sunrise--input {
+  background-image: var(--gradient-glass);
+  box-shadow: var(--glow-ice);
+}
+
+/* Subtle page-wide sunrise backdrop for light mode */
+.page-sunrise {
+  background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(1200px 800px at 15% 15%, hsl(var(--sunrise-amber-3) / 0.22), transparent 55%),
+    radial-gradient(1000px 700px at 85% 0%, hsl(var(--sunrise-amber-4) / 0.18), transparent 60%),
+    linear-gradient(180deg, hsl(var(--sunrise-amber-1) / 0.65), hsl(var(--background) / 0.85));
+}
+
+.dark .page-sunrise {
+  background-image: none;
+  background-color: hsl(var(--background));
 }

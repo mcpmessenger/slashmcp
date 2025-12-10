@@ -170,21 +170,54 @@ async function handleResellingRequestInChat(
     // If user asked for email report, automatically send it
     const wantsEmail = query.toLowerCase().includes("email") || query.toLowerCase().includes("report");
     if (wantsEmail && data.emailReport) {
-      eventStream.sendContent("\n\n📧 Sending detailed email report...");
-      
-      try {
-        // Send email using email-mcp
-        const emailCommand = `/email-mcp send_test_email subject="Reselling Opportunities Analysis Report" body="${data.emailReport.replace(/"/g, '\\"')}"`;
-        const emailResult = await executeMcpCommand(emailCommand, MCP_GATEWAY_URL, authHeader);
+      // Check if user is authenticated before attempting to send
+      if (!authHeader) {
+        eventStream.sendContent("\n\n📧 **Email Report (Guest Mode):**\nTo receive the detailed email report, please:\n1. Sign in with Google (enables email sending via Gmail)\n2. Or copy the report content from the analysis results above\n\nNote: Email sending requires authentication.");
+      } else {
+        eventStream.sendContent("\n\n📧 Sending detailed email report...");
         
-        if (emailResult && !emailResult.includes("Error")) {
-          eventStream.sendContent("\n\n✅ Email report sent successfully! Check your inbox.");
-        } else {
-          eventStream.sendContent("\n\n⚠️ Email report generated but could not be sent automatically. The report is available in the analysis results.");
+        try {
+          // Send email using email-mcp
+          const emailCommand = `/email-mcp send_test_email subject="Reselling Opportunities Analysis Report" body="${data.emailReport.replace(/"/g, '\\"')}"`;
+          const emailResult = await executeMcpCommand(emailCommand, MCP_GATEWAY_URL, authHeader);
+          
+          // Parse the result to check if it's an error
+          let parsedResult;
+          try {
+            parsedResult = JSON.parse(emailResult);
+          } catch {
+            // If not JSON, treat as plain text
+            parsedResult = { result: { type: "text", content: emailResult } };
+          }
+          
+          // Check if the result indicates an error
+          if (parsedResult.result?.type === "error") {
+            const errorMsg = parsedResult.result.message || parsedResult.result.content || "Email sending failed";
+            const errorDetails = parsedResult.result.details;
+            
+            let errorMessage = `\n\n**❌ Email sending failed:** ${errorMsg}\n\n`;
+            if (errorDetails?.explanation) {
+              errorMessage += `**Why:** ${errorDetails.explanation}\n\n`;
+            }
+            if (errorDetails?.steps && Array.isArray(errorDetails.steps)) {
+              errorMessage += `**How to fix:**\n${errorDetails.steps.map((s: string) => `- ${s}`).join('\n')}\n\n`;
+            }
+            if (errorDetails?.alternative) {
+              errorMessage += `**Alternative:** ${errorDetails.alternative}\n`;
+            }
+            
+            eventStream.sendContent(errorMessage);
+          } else if (parsedResult.result?.content && parsedResult.result.content.includes("✅")) {
+            // Success - result contains success indicator
+            eventStream.sendContent(`\n\n${parsedResult.result.content}`);
+          } else {
+            // Unknown response format - be cautious
+            eventStream.sendContent("\n\n⚠️ Email report generated but could not be sent automatically. The report is available in the analysis results above.");
+          }
+        } catch (emailError) {
+          console.error("Failed to send email report:", emailError);
+          eventStream.sendContent("\n\n⚠️ Email report generated but could not be sent automatically. The report is available in the analysis results above.");
         }
-      } catch (emailError) {
-        console.error("Failed to send email report:", emailError);
-        eventStream.sendContent("\n\n⚠️ Email report generated but could not be sent automatically. The report is available in the analysis results.");
       }
     }
     

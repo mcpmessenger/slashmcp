@@ -4,7 +4,7 @@ import { FileUploadStatus } from "@/components/FileUploadStatus";
 import { DocumentsSidebar } from "@/components/DocumentsSidebar";
 import { DocumentsSidebarTest } from "@/components/DocumentsSidebar.test";
 import { DocumentsSidebarMinimalTest } from "@/components/DocumentsSidebarMinimalTest";
-import { useChat } from "@/hooks/useChat";
+import { useChatContext } from "@/context/ChatContext";
 import { fetchJobStatus } from "@/lib/api";
 import { supabaseClient } from "@/lib/supabaseClient";
 import { useEffect, useRef, useCallback, useMemo, useState } from "react";
@@ -68,7 +68,7 @@ const Index = () => {
     mcpEvents,
     resetChat,
     addEvent,
-  } = useChat();
+  } = useChatContext();
   const { toast } = useToast();
   const hasChatHistory = (!!session || guestMode) && (messages.length > 0 || mcpEvents.length > 0);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState<Set<string>>(new Set()); // Track documents dropped into chat
@@ -630,7 +630,7 @@ const Index = () => {
   })();
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="min-h-screen bg-background flex flex-col page-sunrise">
       {/* Header with logo and navigation */}
       <PageHeader>
         {authReady && (

@@ -290,8 +290,33 @@ export function ChatInput({
   const [jobs, setJobs] = useState<UploadJob[]>([]);
   const [isRegisteringUpload, setIsRegisteringUpload] = useState(false);
   const [visionProvider, setVisionProvider] = useState<"gpt4o" | "gemini">("gpt4o");
-  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  // Load history from localStorage on mount
+  const [inputHistory, setInputHistory] = useState<string[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("chat-input-history");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          return Array.isArray(parsed) ? parsed.slice(-50) : []; // Keep last 50 items
+        }
+      } catch (e) {
+        console.warn("Failed to load chat history from localStorage:", e);
+      }
+    }
+    return [];
+  });
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  
+  // Save history to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== "undefined" && inputHistory.length > 0) {
+      try {
+        localStorage.setItem("chat-input-history", JSON.stringify(inputHistory.slice(-50))); // Keep last 50 items
+      } catch (e) {
+        console.warn("Failed to save chat history to localStorage:", e);
+      }
+    }
+  }, [inputHistory]);
   const [isSlashMenuOpen, setIsSlashMenuOpen] = useState(false);
   const [filteredSlashCommands, setFilteredSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
   const [slashActiveIndex, setSlashActiveIndex] = useState(0);
@@ -648,31 +673,30 @@ export function ChatInput({
       const textarea = textareaRef.current;
       if (!textarea) return;
 
-      const atStart = textarea.selectionStart === 0 && textarea.selectionEnd === 0;
-      const atEnd =
-        textarea.selectionStart === textarea.value.length &&
-        textarea.selectionEnd === textarea.value.length;
-
-      if (direction === "prev" && !atStart) return;
-      if (direction === "next" && !atEnd) return;
-
+      // Save current value when starting to navigate (if not already navigating)
       if (historyIndex === null) {
         nextHistoryValue.current = value;
       }
 
       if (direction === "prev") {
+        // Go to previous command in history
         const currentIndex = historyIndex ?? inputHistory.length;
         const newIndex = currentIndex - 1;
-        if (newIndex < 0) return;
+        if (newIndex < 0) {
+          // Already at the oldest command, stay there
+          return;
+        }
         setHistoryIndex(newIndex);
         setValue(inputHistory[newIndex]);
         requestAnimationFrame(() => {
           textarea.selectionStart = textarea.selectionEnd = inputHistory[newIndex].length;
         });
       } else {
+        // Go to next command in history (or back to current input)
         const currentIndex = historyIndex ?? inputHistory.length;
         const newIndex = currentIndex + 1;
         if (newIndex >= inputHistory.length) {
+          // Reached the end, restore the original value
           setHistoryIndex(null);
           setValue(nextHistoryValue.current);
           requestAnimationFrame(() => {
@@ -769,19 +793,16 @@ export function ChatInput({
         submitValue();
         return;
       }
-      if (e.key === "ArrowUp") {
-        if (historyIndex !== null || textareaRef.current?.selectionStart === 0) {
+      // Arrow key navigation for command history (only when slash menu is closed)
+      if (e.key === "ArrowUp" && !isSlashMenuOpen) {
+        if (inputHistory.length > 0) {
           e.preventDefault();
           navigateHistory("prev");
         }
         return;
       }
-      if (e.key === "ArrowDown") {
-        if (
-          historyIndex !== null ||
-          textareaRef.current?.selectionEnd ===
-            (textareaRef.current?.value.length ?? 0)
-        ) {
+      if (e.key === "ArrowDown" && !isSlashMenuOpen) {
+        if (inputHistory.length > 0 && (historyIndex !== null || textareaRef.current?.selectionEnd === (textareaRef.current?.value.length ?? 0))) {
           e.preventDefault();
           navigateHistory("next");
         }
@@ -1393,7 +1414,7 @@ export function ChatInput({
         className
       )}
     >
-      <div className="relative flex flex-col w-full min-h-full bg-gradient-glass backdrop-blur-xl shadow-glow-ice rounded-2xl border border-glass-border/30 group hover:border-glass-border/50 hover:shadow-xl transition-all duration-300">
+      <div className="relative flex flex-col w-full min-h-full chat-bar-sunrise chat-bar-sunrise--input backdrop-blur-xl shadow-glow-ice rounded-2xl border border-glass-border/30 group hover:border-glass-border/50 hover:shadow-xl transition-all duration-300">
         {/* Frost overlay */}
         <div className="absolute inset-0 bg-gradient-frost rounded-2xl pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
         
