@@ -146,12 +146,20 @@ async function executeOrchestration(
       try {
         const resellingTool = createResellingAnalysisTool(RESELLING_ANALYSIS_URL);
         tools.push(resellingTool);
-        console.log("Added reselling analysis tool to orchestrator");
+        console.log("✅ [DEBUG] Added reselling analysis tool to orchestrator");
+        console.log(`✅ [DEBUG] Tool name: ${resellingTool.name}`);
+        console.log(`✅ [DEBUG] Tool description: ${resellingTool.description?.substring(0, 100)}...`);
       } catch (error) {
-        console.error("Failed to create reselling analysis tool:", error);
+        console.error("❌ [DEBUG] Failed to create reselling analysis tool:", error);
         // Continue without reselling tool if there's an error
       }
     }
+    
+    // DEBUG: Log all tools available to orchestrator
+    console.log(`🔍 [DEBUG] Total tools available: ${tools.length}`);
+    console.log(`🔍 [DEBUG] Tool names: ${tools.map(t => t.name).join(", ")}`);
+    const hasResellingTool = tools.some(t => t.name === "analyze_reselling_opportunities");
+    console.log(`🔍 [DEBUG] analyze_reselling_opportunities tool present: ${hasResellingTool}`);
 
     // Create agents
     const mcpToolAgent = createMcpToolAgent(tools);
@@ -192,14 +200,42 @@ async function executeOrchestration(
     
     // Check for reselling analysis requests FIRST (before document context)
     const queryLower = input.message.toLowerCase();
-    const isResellingRequest = 
-      (queryLower.includes("scrape") || queryLower.includes("craigslist") || queryLower.includes("offerup") || 
-       queryLower.includes("ebay") || queryLower.includes("amazon") || queryLower.includes("price comparison") ||
-       queryLower.includes("reselling") || queryLower.includes("resell") || queryLower.includes("price discrepancies") ||
-       queryLower.includes("compare prices") || queryLower.includes("find deals") || queryLower.includes("compare to")) &&
-      (queryLower.includes("headphones") || queryLower.includes("laptop") || queryLower.includes("product") || 
-       queryLower.includes("item") || queryLower.includes("listing") || queryLower.includes("deal") ||
-       queryLower.includes("report") || queryLower.includes("email") || queryLower.includes("links"));
+    console.log(`🔍 [DEBUG] Checking for reselling request in query: "${input.message}"`);
+    
+    // Check each keyword category
+    const category1Matches = [
+      queryLower.includes("scrape"),
+      queryLower.includes("craigslist"),
+      queryLower.includes("offerup"),
+      queryLower.includes("ebay"),
+      queryLower.includes("amazon"),
+      queryLower.includes("price comparison"),
+      queryLower.includes("reselling"),
+      queryLower.includes("resell"),
+      queryLower.includes("price discrepancies"),
+      queryLower.includes("compare prices"),
+      queryLower.includes("find deals"),
+      queryLower.includes("compare to"),
+    ];
+    const category2Matches = [
+      queryLower.includes("headphones"),
+      queryLower.includes("laptop"),
+      queryLower.includes("product"),
+      queryLower.includes("item"),
+      queryLower.includes("listing"),
+      queryLower.includes("deal"),
+      queryLower.includes("report"),
+      queryLower.includes("email"),
+      queryLower.includes("links"),
+    ];
+    
+    const category1Match = category1Matches.some(m => m);
+    const category2Match = category2Matches.some(m => m);
+    const isResellingRequest = category1Match && category2Match;
+    
+    console.log(`🔍 [DEBUG] Category 1 matches (scrape/market keywords): ${category1Match}`);
+    console.log(`🔍 [DEBUG] Category 2 matches (product/action keywords): ${category2Match}`);
+    console.log(`🔍 [DEBUG] isResellingRequest: ${isResellingRequest}`);
     
     // Enhance orchestrator instructions with document context
     // CRITICAL: Always prioritize RAG when documents exist, regardless of query classification
@@ -207,6 +243,7 @@ async function executeOrchestration(
     
     // CRITICAL: Add reselling analysis detection FIRST
     if (isResellingRequest) {
+      console.log(`🚨 [DEBUG] RESELLING REQUEST DETECTED - Injecting critical instructions`);
       enhancedInstructions += `\n\n🚨🚨🚨 CRITICAL: RESELLING ANALYSIS REQUEST DETECTED 🚨🚨🚨\n`;
       enhancedInstructions += `- User query: "${input.message}"\n`;
       enhancedInstructions += `- This is a RESELLING ANALYSIS request - you MUST use analyze_reselling_opportunities tool DIRECTLY\n`;
@@ -219,6 +256,9 @@ async function executeOrchestration(
       enhancedInstructions += `  * sources: "craigslist,offerup" (default)\n`;
       enhancedInstructions += `- The tool will automatically scrape, compare prices, and generate a concise summary\n`;
       enhancedInstructions += `- After getting results, if user asked for email, use email-mcp to send the detailed report\n\n`;
+      console.log(`🚨 [DEBUG] Enhanced instructions length: ${enhancedInstructions.length} chars`);
+    } else {
+      console.log(`ℹ️ [DEBUG] Not a reselling request - continuing with normal flow`);
     }
     if (documentContext && documentContext.availableDocuments.length > 0) {
       enhancedInstructions = `\n\n=== CURRENT USER CONTEXT ===\n${formatDocumentContext(documentContext)}\n\n`;
@@ -293,16 +333,21 @@ async function executeOrchestration(
         role: "assistant",
         content: contextMessage,
       });
+      console.log(`📝 [DEBUG] Injected instructions into conversation (${contextMessage.length} chars)`);
+      console.log(`📝 [DEBUG] Instructions preview: ${contextMessage.substring(0, 200)}...`);
     }
     
     // Add user message
     conversation.push({ role: "user", content: input.message });
     
     // Log for debugging
+    console.log(`📝 [DEBUG] Final conversation length: ${conversation.length} messages`);
+    console.log(`📝 [DEBUG] Conversation structure: ${conversation.map(m => `${m.role}: ${m.content.substring(0, 50)}...`).join(" | ")}`);
+    
     if (isResellingRequest) {
-      console.log(`Reselling analysis request detected - injecting critical instructions`);
+      console.log(`🚨 [DEBUG] Reselling analysis request detected - injecting critical instructions`);
     } else if (classification.intent === "document") {
-      console.log(`Document query detected - injecting context and routing to search_documents`);
+      console.log(`📄 [DEBUG] Document query detected - injecting context and routing to search_documents`);
     }
 
     // Convert to AgentInputItem format
@@ -312,6 +357,11 @@ async function executeOrchestration(
     }));
 
     // Execute orchestration
+    console.log(`🚀 [DEBUG] Starting orchestrator execution with ${agentInput.length} input messages`);
+    if (isResellingRequest) {
+      console.log(`🚨 [DEBUG] EXPECTED: Agent should use analyze_reselling_opportunities tool`);
+    }
+    
     const events = await runner.run(
       orchestratorAgent,
       agentInput.length > 0 ? agentInput : [{ role: "user", content: input.message }],
@@ -324,10 +374,15 @@ async function executeOrchestration(
     // Collect output from events
     let finalResponse = "";
     const toolCalls: Array<{ tool: string; command?: string; result?: unknown }> = [];
+    let eventCount = 0;
 
     for await (const event of events) {
+      eventCount++;
+      console.log(`📊 [DEBUG] Event #${eventCount}: type=${event.type}`);
+      
       if (event.type === "finalOutput" && event.output) {
         finalResponse = typeof event.output === "string" ? event.output : String(event.output);
+        console.log(`📊 [DEBUG] Final output received: ${finalResponse.substring(0, 100)}...`);
       } else if (event.type === "content" || event.type === "text") {
         const content = (event as any).content || (event as any).text;
         if (content) {
@@ -336,14 +391,32 @@ async function executeOrchestration(
       } else if (event.type === "toolCall" || event.type === "toolResult") {
         const toolEvent = event as any;
         if (toolEvent.toolCall) {
+          const toolName = toolEvent.toolCall.name || toolEvent.toolCall.tool || "";
+          console.log(`🔧 [DEBUG] Tool called: ${toolName}`);
+          if (isResellingRequest && toolName !== "analyze_reselling_opportunities") {
+            console.log(`⚠️ [DEBUG] WARNING: Reselling request but tool called is ${toolName}, not analyze_reselling_opportunities!`);
+          }
+          if (toolName === "analyze_reselling_opportunities") {
+            console.log(`✅ [DEBUG] SUCCESS: analyze_reselling_opportunities tool was called!`);
+          }
           toolCalls.push({
-            tool: toolEvent.toolCall.name || toolEvent.toolCall.tool || "",
+            tool: toolName,
             command: toolEvent.toolCall.input?.command || toolEvent.toolCall.arguments?.command,
             result: toolEvent.toolCall.result,
           });
         }
+      } else if (event.type === "handoff") {
+        const handoffEvent = event as any;
+        console.log(`🔄 [DEBUG] Handoff detected: ${handoffEvent.target || "unknown"}`);
+        if (isResellingRequest) {
+          console.log(`⚠️ [DEBUG] WARNING: Reselling request but handoff occurred! This should not happen.`);
+        }
       }
     }
+    
+    console.log(`📊 [DEBUG] Total events processed: ${eventCount}`);
+    console.log(`📊 [DEBUG] Tool calls made: ${toolCalls.length}`);
+    console.log(`📊 [DEBUG] Tools used: ${toolCalls.map(t => t.tool).join(", ") || "none"}`);
 
     return {
       finalResponse: finalResponse.trim() || "I was unable to generate a response. Please try again.",
