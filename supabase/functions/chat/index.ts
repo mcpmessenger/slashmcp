@@ -112,6 +112,7 @@ async function handleResellingRequestInChat(
   query: string,
   eventStream: ReturnType<typeof createEventStream>,
   corsHeaders: Record<string, string>,
+  authHeader?: string | null,
 ): Promise<Response | null> {
   console.log(`🚨 [BYPASS] Reselling request detected in chat - calling tool directly`);
   
@@ -166,10 +167,25 @@ async function handleResellingRequestInChat(
     // Send summary to chat
     eventStream.sendContent(summary);
     
-    // If user asked for email report, mention it
+    // If user asked for email report, automatically send it
     const wantsEmail = query.toLowerCase().includes("email") || query.toLowerCase().includes("report");
     if (wantsEmail && data.emailReport) {
-      eventStream.sendContent("\n\n📧 A detailed email report is available. I can send it to you via email if you'd like.");
+      eventStream.sendContent("\n\n📧 Sending detailed email report...");
+      
+      try {
+        // Send email using email-mcp
+        const emailCommand = `/email-mcp send_test_email subject="Reselling Opportunities Analysis Report" body="${data.emailReport.replace(/"/g, '\\"')}"`;
+        const emailResult = await executeMcpCommand(emailCommand, MCP_GATEWAY_URL, authHeader);
+        
+        if (emailResult && !emailResult.includes("Error")) {
+          eventStream.sendContent("\n\n✅ Email report sent successfully! Check your inbox.");
+        } else {
+          eventStream.sendContent("\n\n⚠️ Email report generated but could not be sent automatically. The report is available in the analysis results.");
+        }
+      } catch (emailError) {
+        console.error("Failed to send email report:", emailError);
+        eventStream.sendContent("\n\n⚠️ Email report generated but could not be sent automatically. The report is available in the analysis results.");
+      }
     }
     
     console.log(`✅ [BYPASS] Reselling analysis completed successfully`);
@@ -776,7 +792,7 @@ serve(async (req) => {
       
       if (lastUserMessage && isResellingRequest(lastUserMessage)) {
         console.log(`🚨 [BYPASS] Reselling request detected in chat - calling tool directly`);
-        const result = await handleResellingRequestInChat(lastUserMessage, eventStream, corsHeaders);
+        const result = await handleResellingRequestInChat(lastUserMessage, eventStream, corsHeaders, authHeader);
         if (result) {
           return result;
         }
