@@ -138,6 +138,10 @@ async function handleResellingRequestInChat(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        // Add authentication - use service role key for function-to-function calls
+        ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
+        // Also include anon key as fallback
+        ...(SUPABASE_ANON_KEY ? { "apikey": SUPABASE_ANON_KEY } : {}),
       },
       body: JSON.stringify({
         command: "analyze_headphones",
