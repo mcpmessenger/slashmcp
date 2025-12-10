@@ -283,11 +283,14 @@ async function executeOrchestration(
     
     // Inject context into conversation if available
     // IMPORTANT: Add context BEFORE user message so orchestrator sees it first
-    if (enhancedInstructions && documentContext) {
+    if (enhancedInstructions) {
       // Add context as assistant message with clear instructions
+      const contextMessage = isResellingRequest
+        ? enhancedInstructions + "\n\n🚨 USE analyze_reselling_opportunities tool NOW - do not route elsewhere."
+        : enhancedInstructions + "\n\nBased on this context, route the user's query appropriately.";
       conversation.push({
         role: "assistant",
-        content: enhancedInstructions + "\n\nBased on this context, route the user's query appropriately.",
+        content: contextMessage,
       });
     }
     
@@ -295,7 +298,9 @@ async function executeOrchestration(
     conversation.push({ role: "user", content: input.message });
     
     // Log for debugging
-    if (classification.intent === "document") {
+    if (isResellingRequest) {
+      console.log(`Reselling analysis request detected - injecting critical instructions`);
+    } else if (classification.intent === "document") {
       console.log(`Document query detected - injecting context and routing to search_documents`);
     }
 
