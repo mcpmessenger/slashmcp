@@ -96,8 +96,11 @@ export function classifyQuery(
     // Check if query mentions any document filename
     for (const doc of availableDocuments) {
       const fileNameLower = doc.fileName.toLowerCase();
-      const fileNameBase = fileNameLower.replace(/\.(pdf|docx?|txt|csv)/, "");
-      const fileNameWords = fileNameBase.split(/[\s_-]+/);
+      // Remove file extension and parenthetical content (like "(34)" or "(12)")
+      const fileNameBase = fileNameLower
+        .replace(/\.(pdf|docx?|txt|csv|png|jpg|jpeg|gif|webp)/, "")
+        .replace(/\s*\([^)]*\)\s*/g, ""); // Remove parenthetical content
+      const fileNameWords = fileNameBase.split(/[\s_-]+/).filter(w => w.length > 0);
       
       // Check if query contains the full filename (with or without extension)
       if (lowerQuery.includes(fileNameBase) || lowerQuery.includes(fileNameLower)) {
@@ -120,11 +123,27 @@ export function classifyQuery(
         documentName = doc.fileName;
         // Higher confidence boost for better matches
         if (matchingWords.length >= 2) {
-          confidence += 0.4; // Strong match
+          confidence += 0.5; // Very strong match (e.g., "untitled design" matches "Untitled design (34).png")
         } else {
           confidence += 0.3; // Single word match (like "UAOL")
         }
         break;
+      }
+      
+      // Additional check: if query contains multiple words that appear together in filename
+      // This catches cases like "untitled design" matching "Untitled design (34).png"
+      const queryWords = lowerQuery.split(/\s+/).filter(w => w.length >= 3);
+      if (queryWords.length >= 2) {
+        const consecutiveMatches = fileNameWords.filter((word, idx) => {
+          const wordLower = word.toLowerCase();
+          // Check if this word and the next word in filename both appear in query
+          return queryWords.some(qw => qw.includes(wordLower) || wordLower.includes(qw));
+        });
+        if (consecutiveMatches.length >= 2) {
+          documentName = doc.fileName;
+          confidence += 0.5; // Strong match for multiple consecutive words
+          break;
+        }
       }
     }
   }
@@ -242,22 +261,28 @@ export function getMatchingDocumentIds(
   
   for (const doc of availableDocuments) {
     const fileNameLower = doc.fileName.toLowerCase();
+    // Remove file extension and parenthetical content (like "(34)" or "(12)")
+    const fileNameBase = fileNameLower
+      .replace(/\.(pdf|docx?|txt|csv|png|jpg|jpeg|gif|webp)/, "")
+      .replace(/\s*\([^)]*\)\s*/g, ""); // Remove parenthetical content
     
-    // Exact filename match
-    if (lowerQuery.includes(fileNameLower) || fileNameLower.includes(lowerQuery)) {
+    // Exact filename match (with or without extension/parentheses)
+    if (lowerQuery.includes(fileNameBase) || fileNameBase.includes(lowerQuery) || 
+        lowerQuery.includes(fileNameLower) || fileNameLower.includes(lowerQuery)) {
       matchingIds.push(doc.id);
       continue;
     }
     
     // Word-based matching
-    const fileNameWords = fileNameLower.replace(/\.(pdf|docx?|txt|csv)/, "").split(/[\s_-]+/);
-    const queryWords = lowerQuery.split(/\s+/);
+    const fileNameWords = fileNameBase.split(/[\s_-]+/).filter(w => w.length > 0);
+    const queryWords = lowerQuery.split(/\s+/).filter(w => w.length >= 3);
     
     const matchingWords = fileNameWords.filter(word =>
-      word.length > 3 && queryWords.some(qw => qw.includes(word) || word.includes(qw))
+      word.length >= 3 && queryWords.some(qw => qw.includes(word) || word.includes(qw))
     );
     
-    if (matchingWords.length >= 2) {
+    // Match if 2+ words match, or if 1 word matches and it's a significant word (4+ chars)
+    if (matchingWords.length >= 2 || (matchingWords.length >= 1 && matchingWords.some(w => w.length >= 4))) {
       matchingIds.push(doc.id);
     }
   }
