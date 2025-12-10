@@ -39,6 +39,152 @@ const NORMALIZED_PROJECT_URL = PROJECT_URL ? PROJECT_URL.replace(/\/+$/, "") : "
 const MCP_GATEWAY_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/mcp` : "";
 const DOC_CONTEXT_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/doc-context` : "";
 
+/**
+ * Check if query is a reselling analysis request
+ */
+function isResellingRequest(query: string): boolean {
+  const queryLower = query.toLowerCase();
+  const category1Matches = [
+    queryLower.includes("scrape"),
+    queryLower.includes("craigslist"),
+    queryLower.includes("offerup"),
+    queryLower.includes("ebay"),
+    queryLower.includes("amazon"),
+    queryLower.includes("price comparison"),
+    queryLower.includes("reselling"),
+    queryLower.includes("resell"),
+    queryLower.includes("price discrepancies"),
+    queryLower.includes("compare prices"),
+    queryLower.includes("find deals"),
+    queryLower.includes("compare to"),
+  ];
+  const category2Matches = [
+    queryLower.includes("headphones"),
+    queryLower.includes("laptop"),
+    queryLower.includes("product"),
+    queryLower.includes("item"),
+    queryLower.includes("listing"),
+    queryLower.includes("deal"),
+    queryLower.includes("report"),
+    queryLower.includes("email"),
+    queryLower.includes("links"),
+  ];
+  return category1Matches.some(m => m) && category2Matches.some(m => m);
+}
+
+/**
+ * Extract product and location from query for reselling analysis
+ */
+function extractResellingParams(query: string): { query: string; location: string } {
+  const queryLower = query.toLowerCase();
+  
+  // Extract location (common patterns)
+  let location = "des moines"; // default
+  const locationPatterns = [
+    /(?:in|from|at)\s+([a-z\s]+(?:moines|chicago|new york|los angeles|san francisco|seattle|boston|philadelphia|phoenix|houston|dallas|austin|denver|portland|minneapolis|detroit|miami|atlanta|baltimore|kansas city|columbus|indianapolis|nashville|raleigh|memphis|oklahoma city|milwaukee|louisville|las vegas|albuquerque|tucson|fresno|sacramento|long beach|kansas city|mesa|virginia beach|atlanta|oakland|minneapolis|tulsa|cleveland|wichita|arlington))/i,
+    /(des\s+moines|chicago|new\s+york|los\s+angeles)/i,
+  ];
+  for (const pattern of locationPatterns) {
+    const match = query.match(pattern);
+    if (match) {
+      location = match[1].toLowerCase();
+      break;
+    }
+  }
+  
+  // Extract product query
+  let productQuery = "headphones"; // default
+  const productKeywords = ["headphones", "laptop", "bicycle", "phone", "tablet", "camera", "tv", "monitor"];
+  for (const keyword of productKeywords) {
+    if (queryLower.includes(keyword)) {
+      productQuery = keyword;
+      break;
+    }
+  }
+  
+  return { query: productQuery, location };
+}
+
+/**
+ * Handle reselling request directly in chat function (bypass orchestrator)
+ */
+async function handleResellingRequestInChat(
+  query: string,
+  eventStream: ReturnType<typeof createEventStream>,
+  corsHeaders: Record<string, string>,
+): Promise<Response | null> {
+  console.log(`🚨 [BYPASS] Reselling request detected in chat - calling tool directly`);
+  
+  const RESELLING_ANALYSIS_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/reselling-analysis` : "";
+  if (!RESELLING_ANALYSIS_URL) {
+    eventStream.sendContent("Reselling analysis service is not configured.");
+    eventStream.close();
+    return new Response(eventStream.stream, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    });
+  }
+  
+  const { query: productQuery, location } = extractResellingParams(query);
+  console.log(`🚨 [BYPASS] Extracted params: query="${productQuery}", location="${location}"`);
+  
+  try {
+    eventStream.sendEvent({
+      type: "system",
+      timestamp: Date.now(),
+      metadata: { message: "Analyzing reselling opportunities..." },
+    });
+    
+    const response = await fetch(RESELLING_ANALYSIS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "analyze_headphones",
+        args: {
+          location,
+          query: productQuery,
+          sources: "craigslist,offerup",
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Reselling analysis failed: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    const data = result.data || result;
+    
+    // Get concise summary
+    let summary = data.summary || "Reselling analysis completed.";
+    
+    // Send summary to chat
+    eventStream.sendContent(summary);
+    
+    // If user asked for email report, mention it
+    const wantsEmail = query.toLowerCase().includes("email") || query.toLowerCase().includes("report");
+    if (wantsEmail && data.emailReport) {
+      eventStream.sendContent("\n\n📧 A detailed email report is available. I can send it to you via email if you'd like.");
+    }
+    
+    console.log(`✅ [BYPASS] Reselling analysis completed successfully`);
+    
+    eventStream.close();
+    return new Response(eventStream.stream, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    });
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`❌ [BYPASS] Reselling analysis error:`, error);
+    eventStream.sendContent(`Error performing reselling analysis: ${errorMessage}`);
+    eventStream.close();
+    return new Response(eventStream.stream, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    });
+  }
+}
+
 function getCorsHeaders(origin: string | null): Record<string, string> {
   const isAllowed = !origin || allowedOrigins.includes("*") || allowedOrigins.includes(origin);
   return {
@@ -615,6 +761,22 @@ serve(async (req) => {
         return new Response(eventStream.stream, {
           headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
         });
+      }
+
+      // BYPASS: Check for reselling requests FIRST and handle directly
+      const lastUserMessage = messages.length > 0 && messages[messages.length - 1]?.role === "user"
+        ? (typeof messages[messages.length - 1].content === "string" 
+            ? messages[messages.length - 1].content 
+            : String(messages[messages.length - 1].content ?? ""))
+        : "";
+      
+      if (lastUserMessage && isResellingRequest(lastUserMessage)) {
+        console.log(`🚨 [BYPASS] Reselling request detected in chat - calling tool directly`);
+        const result = await handleResellingRequestInChat(lastUserMessage, eventStream, corsHeaders);
+        if (result) {
+          return result;
+        }
+        // If handleResellingRequestInChat returns null, continue with normal flow
       }
 
       // NOTE: Agents SDK v0.3.2 doesn't support hosted_tool (async run functions)
