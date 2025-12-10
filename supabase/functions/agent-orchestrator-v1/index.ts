@@ -18,6 +18,7 @@ import {
   createMemoryTools,
   createMcpProxyTool,
   createRagTools,
+  createResellingAnalysisTool,
   helpTool,
   listCommandsTool,
   classifyQuery,
@@ -136,6 +137,19 @@ async function executeOrchestration(
       } catch (error) {
         console.error("Failed to create RAG tools:", error);
         // Continue without RAG tools if there's an error
+      }
+    }
+
+    // Add reselling analysis tool
+    const RESELLING_ANALYSIS_URL = PROJECT_URL ? `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1/reselling-analysis` : "";
+    if (RESELLING_ANALYSIS_URL) {
+      try {
+        const resellingTool = createResellingAnalysisTool(RESELLING_ANALYSIS_URL);
+        tools.push(resellingTool);
+        console.log("Added reselling analysis tool to orchestrator");
+      } catch (error) {
+        console.error("Failed to create reselling analysis tool:", error);
+        // Continue without reselling tool if there's an error
       }
     }
 

@@ -489,6 +489,71 @@ export function createRagTools(
 }
 
 /**
+ * Create reselling analysis tool
+ */
+export function createResellingAnalysisTool(resellingAnalysisUrl: string): Tool {
+  return {
+    name: "analyze_reselling_opportunities",
+    description:
+      "Analyzes reselling opportunities for products (e.g., headphones) by scraping listings from Craigslist and OfferUp, " +
+      "comparing prices to eBay Sold listings and Amazon, and identifying profitable opportunities. " +
+      "Returns both structured data and a voice-transcription-friendly summary. " +
+      "Use this when users ask about reselling, finding deals, price comparisons, or analyzing market opportunities.",
+    parameters: {
+      type: "object",
+      properties: {
+        location: {
+          type: "string",
+          description: "Location for local marketplace searches (e.g., 'des moines', 'chicago')",
+        },
+        query: {
+          type: "string",
+          description: "Product search query (e.g., 'headphones', 'laptop', 'bicycle')",
+        },
+        sources: {
+          type: "string",
+          description: "Comma-separated list of sources to scrape (default: 'craigslist,offerup')",
+        },
+      },
+      required: ["query"],
+    },
+    async run({ location, query, sources }: { location?: string; query: string; sources?: string }) {
+      try {
+        const response = await fetch(resellingAnalysisUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            command: "analyze_headphones",
+            args: {
+              location: location || "des moines",
+              query: query || "headphones",
+              sources: sources || "craigslist,offerup",
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Reselling analysis failed: ${response.statusText}`);
+        }
+
+        const result = await response.json();
+        
+        // Return the summary if available, otherwise return the full data
+        if (result.summary) {
+          return result.summary;
+        }
+        
+        return JSON.stringify(result.data || result, null, 2);
+      } catch (error) {
+        return `Error analyzing reselling opportunities: ${error instanceof Error ? error.message : "Unknown error"}`;
+      }
+    },
+  };
+}
+
+/**
  * Tool to list available MCP commands and RAG operations
  */
 export const listCommandsTool: Tool = {

@@ -362,6 +362,15 @@ export function createOrchestratorAgent(
       "- DO NOT use web search for document queries - ALWAYS use `search_documents` first\n" +
       "- If documents are still processing, inform user and check status with `get_document_status`\n" +
       "- The orchestrator MUST proactively search documents when users ask questions that might be answered by uploaded content\n" +
+      "\n" +
+      "FOR RESELLING/MARKET ANALYSIS REQUESTS:\n" +
+      "- CRITICAL: If the user asks about reselling opportunities, price comparisons, finding deals, or analyzing market opportunities, use `analyze_reselling_opportunities` tool:\n" +
+      "  * 'find reselling opportunities', 'analyze headphone deals', 'compare prices', 'find deals on [product]'\n" +
+      "  * 'what are good reselling opportunities', 'scrape [product] listings', 'analyze market for [product]'\n" +
+      "  * 'find profitable reselling deals', 'compare Craigslist to eBay prices', 'analyze reselling market'\n" +
+      "- The tool automatically scrapes Craigslist and OfferUp, compares to eBay Sold listings and Amazon, and identifies profitable opportunities\n" +
+      "- Returns both structured data and a voice-transcription-friendly summary\n" +
+      "- Examples: 'Analyze headphone reselling opportunities in Des Moines', 'Find deals on laptops', 'Compare prices for bicycles'\n" +
       "- If the user asks to list their documents (e.g., 'What documents do I have?', 'Show my documents'), " +
       "  use the `list_documents` tool directly.\n" +
       "- If the user asks about document status, use the `get_document_status` tool.\n" +

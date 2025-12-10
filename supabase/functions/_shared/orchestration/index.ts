@@ -8,5 +8,5 @@ export * from "./queryClassifier.ts";
 export * from "./contextManager.ts";
 
 // Re-export specific tools for convenience
-export { listCommandsTool, helpTool, createRagTools } from "./tools.ts";
+export { listCommandsTool, helpTool, createRagTools, createResellingAnalysisTool } from "./tools.ts";
 
