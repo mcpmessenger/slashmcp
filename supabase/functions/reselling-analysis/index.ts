@@ -77,18 +77,22 @@ async function scrapeListings(
     }
 
     // Use playwright-wrapper if available, otherwise fallback to HTTP fetch
-    if (MCP_GATEWAY_URL) {
+    // Try to get PROJECT_URL first, then fallback to MCP_GATEWAY_URL
+    const PROJECT_URL = Deno.env.get("PROJECT_URL") || Deno.env.get("SUPABASE_URL") || "";
+    const FUNCTIONS_BASE = PROJECT_URL ? `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1` : "";
+    
+    if (FUNCTIONS_BASE) {
       try {
-        // Construct the playwright-wrapper URL correctly
-        const playwrightUrl = MCP_GATEWAY_URL.includes("/mcp") 
-          ? MCP_GATEWAY_URL.replace("/mcp", "/playwright-wrapper")
-          : `${MCP_GATEWAY_URL}/playwright-wrapper`;
+        // Construct the playwright-wrapper URL using Supabase functions
+        const playwrightUrl = `${FUNCTIONS_BASE}/playwright-wrapper`;
+        console.log(`[scrapeListings] Attempting playwright-wrapper at: ${playwrightUrl}`);
         
         const response = await fetch(playwrightUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY") || ""}`,
+            apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
           },
           body: JSON.stringify({
             command: "browser_extract_text",
@@ -99,12 +103,16 @@ async function scrapeListings(
         if (response.ok) {
           const result = await response.json();
           // Parse the extracted text for listings
-          // This is a simplified parser - in production, you'd want more robust parsing
           const text = typeof result === "string" ? result : JSON.stringify(result);
-          listings.push(...parseListingsFromText(text, source, url));
+          const parsed = parseListingsFromText(text, source, url);
+          console.log(`[scrapeListings] Playwright extracted ${parsed.length} listings from ${source}`);
+          listings.push(...parsed);
+        } else {
+          const errorText = await response.text().catch(() => "");
+          console.warn(`[scrapeListings] Playwright-wrapper returned ${response.status}: ${errorText.slice(0, 200)}`);
         }
       } catch (error) {
-        console.warn("Failed to use playwright-wrapper, falling back to HTTP:", error);
+        console.warn(`[scrapeListings] Failed to use playwright-wrapper, falling back to HTTP:`, error);
       }
     }
 
@@ -321,21 +329,22 @@ async function getMarketData(productName: string): Promise<MarketData> {
 
   try {
     // Search eBay Sold listings
-    if (MCP_GATEWAY_URL) {
+    const PROJECT_URL = Deno.env.get("PROJECT_URL") || Deno.env.get("SUPABASE_URL") || "";
+    const FUNCTIONS_BASE = PROJECT_URL ? `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1` : "";
+    
+    if (FUNCTIONS_BASE) {
       try {
         // Use playwright-wrapper to search eBay
         const ebayUrl = `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(productName)}&_sop=13&LH_Sold=1&LH_Complete=1`;
-        
-        // Construct the playwright-wrapper URL correctly
-        const playwrightUrl = MCP_GATEWAY_URL.includes("/mcp") 
-          ? MCP_GATEWAY_URL.replace("/mcp", "/playwright-wrapper")
-          : `${MCP_GATEWAY_URL}/playwright-wrapper`;
+        const playwrightUrl = `${FUNCTIONS_BASE}/playwright-wrapper`;
+        console.log(`[getMarketData] Searching eBay via playwright-wrapper: ${ebayUrl}`);
         
         const response = await fetch(playwrightUrl, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY") || ""}`,
+            apikey: Deno.env.get("SUPABASE_ANON_KEY") || "",
           },
           body: JSON.stringify({
             command: "browser_extract_text",
@@ -639,16 +648,54 @@ serve(async (req) => {
     const invocation: Invocation = await req.json();
     const { command, args = {} } = invocation;
 
-    if (command === "analyze_headphones") {
+    // Support both "analyze_headphones" (legacy) and "analyze_reselling_opportunities" (new)
+    if (command === "analyze_headphones" || command === "analyze_reselling_opportunities" || !command) {
       const location = args.location || "des moines";
-      const query = args.query || "headphones";
+      const query = args.query || args.product || "headphones";
       const sources = (args.sources || "craigslist,offerup").split(",").map(s => s.trim()) as Array<"craigslist" | "offerup">;
+      
+      console.log(`[reselling-analysis] Starting analysis: query="${query}", location="${location}", sources=${sources.join(",")}`);
 
       // Step 1: Scrape listings from all sources
       const allListings: Listing[] = [];
       for (const source of sources) {
+        console.log(`[reselling-analysis] Scraping ${source} for "${query}" in ${location}...`);
         const listings = await scrapeListings(source, location, query);
+        console.log(`[reselling-analysis] Found ${listings.length} listings from ${source}`);
         allListings.push(...listings);
+      }
+      
+      if (allListings.length === 0) {
+        console.warn(`[reselling-analysis] No listings found for "${query}" in ${location}`);
+        // Return detailed error with debugging info
+        const errorDetails = {
+          type: "error",
+          message: `No listings found for "${query}" in ${location}`,
+          details: {
+            query,
+            location,
+            sources: sources.join(", "),
+            possibleReasons: [
+              "Web scraping may have failed (websites may block automated access)",
+              "The parsing logic may not match the current website structure",
+              "No active listings match your search criteria",
+              "Location-specific results may be limited"
+            ],
+            suggestions: [
+              "Try a more general search term",
+              "Check a different location",
+              "Verify playwright-wrapper function is deployed and working",
+              "Check Supabase function logs for detailed error messages"
+            ]
+          }
+        };
+        
+        return new Response(
+          JSON.stringify(errorDetails as AnalysisResult),
+          {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
       }
 
       // Step 2: Get market data for each unique product
@@ -666,20 +713,32 @@ serve(async (req) => {
       // Step 4: Generate AI-powered conversational summary and email report
       const { emailReport } = generateVoiceSummary(opportunities);
       const summary = await generateAISummary(opportunities);
+      
+      // Log results for debugging
+      console.log(`[reselling-analysis] Analysis complete: ${allListings.length} listings, ${opportunities.length} opportunities, ${opportunities.filter(opp => opp.isStrongOpportunity).length} strong`);
 
       // Return both JSON data and summary
-      return new Response(
-        JSON.stringify({
-          type: "json",
-          data: {
-            opportunities,
-            summary,
-            emailReport,
-            totalListings: allListings.length,
-            strongOpportunities: opportunities.filter(opp => opp.isStrongOpportunity).length,
-          },
+      // IMPORTANT: Return the actual data, not just a summary
+      const responseData = {
+        type: "json" as const,
+        data: {
+          opportunities,
           summary,
-        } as AnalysisResult),
+          emailReport,
+          totalListings: allListings.length,
+          strongOpportunities: opportunities.filter(opp => opp.isStrongOpportunity).length,
+          allListings: allListings.map(l => ({
+            title: l.title,
+            price: l.price,
+            url: l.url,
+            location: l.location
+          }))
+        },
+        summary,
+      };
+      
+      return new Response(
+        JSON.stringify(responseData as AnalysisResult),
         {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
@@ -688,7 +747,7 @@ serve(async (req) => {
       return new Response(
         JSON.stringify({
           type: "error",
-          message: `Unknown command: ${command}`,
+          message: `Unknown command: ${command}. Supported commands: analyze_headphones, analyze_reselling_opportunities`,
         } as AnalysisResult),
         {
           status: 400,

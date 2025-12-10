@@ -256,78 +256,59 @@ export const DocumentsSidebar: React.FC<{
         // Split into two queries instead of .or() for better index performance
         console.log("[DocumentsSidebar] Querying jobs for user_id:", userId);
         
-        // Query 1: Get jobs with matching user_id (uses index efficiently)
-        // Include both "document-analysis" and "image-ocr" since both can produce documents
-        // NOTE: Using REST API directly as fallback if Supabase client times out
-        const userJobsQuery = supabaseClient
+        // OPTIMIZED: Single query with OR condition (simpler, faster)
+        // Use .or() with proper RLS policy support
+        const jobsQuery = supabaseClient
           .from("processing_jobs")
           .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
-          .eq("user_id", userId)
-          .in("analysis_target", ["document-analysis", "image-ocr"])
-          .order("created_at", { ascending: false })
-          .limit(50)
-          .abortSignal(AbortSignal.timeout(8000)); // 8 second timeout
-        
-        // Query 2: Get jobs with NULL user_id (for backward compatibility)
-        const nullUserJobsQuery = supabaseClient
-          .from("processing_jobs")
-          .select("id, file_name, file_type, file_size, status, metadata, created_at, updated_at, analysis_target")
-          .is("user_id", null)
+          .or(`user_id.eq.${userId},user_id.is.null`)
           .in("analysis_target", ["document-analysis", "image-ocr"])
           .order("created_at", { ascending: false })
           .limit(50);
         
-        // Execute both queries in parallel with timeout (10 seconds each - increased from 3s)
-        // Note: If still timing out, check:
-        // 1. Indexes exist: SELECT indexname FROM pg_indexes WHERE tablename = 'processing_jobs';
-        // 2. RLS policy allows NULL: auth.uid() = user_id OR user_id IS NULL
+        // Reduced timeout to 5 seconds - fail fast and use fallback
         const queryTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
-          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 10 seconds" } }), 10000)
+          setTimeout(() => resolve({ data: null, error: { message: "Query timeout after 5 seconds" } }), 5000)
         );
         
-        const [userJobsResult, nullJobsResult] = await Promise.all([
-          Promise.race([
-            userJobsQuery.then(r => ({ data: r.data, error: r.error })),
-            queryTimeout,
-          ]),
-          Promise.race([
-            nullUserJobsQuery.then(r => ({ data: r.data, error: r.error })),
-            queryTimeout,
-          ]),
+        const jobsResult = await Promise.race([
+          jobsQuery.then(r => ({ data: r.data, error: r.error })),
+          queryTimeout,
         ]);
         
-        // Combine results
-        let jobsResult: { data: any[] | null; error: any } = { data: [], error: null };
-        
-        if (userJobsResult.error && nullJobsResult.error) {
-          // Both queries failed
-          jobsResult = { data: null, error: userJobsResult.error };
-          console.error("[DocumentsSidebar] Both queries failed:", userJobsResult.error, nullJobsResult.error);
-        } else {
-          // Combine successful results
-          const userJobs = userJobsResult.data || [];
-          const nullJobs = nullJobsResult.data || [];
-          const combined = [...userJobs, ...nullJobs];
-          
-          // Sort by created_at and limit to 50
-          combined.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-          jobsResult = { data: combined.slice(0, 50), error: null };
-          
-          console.log(`[DocumentsSidebar] ✅ Loaded ${userJobs.length} user jobs + ${nullJobs.length} NULL user_id jobs = ${jobsResult.data.length} total`);
-        }
-        
         if (jobsResult.error) {
+          // On error, use fallbackJobs if available instead of showing error
+          if (fallbackJobs && fallbackJobs.length > 0) {
+            console.warn("[DocumentsSidebar] ⚠️ Database query failed, using fallbackJobs:", jobsResult.error.message);
+            const completedFallbackJobs = fallbackJobs.filter(job => job.status === "completed");
+            if (completedFallbackJobs.length > 0) {
+              const fallbackDocs = completedFallbackJobs.map(job => ({
+                jobId: job.id,
+                fileName: job.fileName,
+                fileType: job.fileName.split('.').pop() || 'unknown',
+                fileSize: job.contentLength || 0,
+                status: job.status,
+                stage: job.stage || "unknown",
+                createdAt: job.updatedAt || new Date().toISOString(),
+                updatedAt: job.updatedAt || new Date().toISOString(),
+                summary: job.visionSummary || (job.resultText ? job.resultText.substring(0, 200) + "..." : null),
+                visionSummary: job.visionSummary || null,
+                ocrText: job.resultText || null,
+              }));
+              setDocuments(fallbackDocs);
+              setIsLoading(false);
+              setIsLoadingRef(false);
+              setHasError(false);
+              onDocumentsChange?.(fallbackDocs.length);
+              console.log(`[DocumentsSidebar] ✅ Using ${fallbackDocs.length} documents from fallbackJobs (database query failed)`);
+              return;
+            }
+          }
+          // No fallback available - show error
           data = null;
           error = jobsResult.error;
           console.error("[DocumentsSidebar] ❌ Jobs query failed:", jobsResult.error);
-          console.error("[DocumentsSidebar] This might indicate:");
-          console.error("  1. RLS policies blocking the query - check: auth.uid() = user_id OR user_id IS NULL");
-          console.error("  2. Missing database indexes - run: 20251203012910_add_processing_jobs_indexes.sql");
-          console.error("  3. Database connection issue");
-          console.error("  4. Query timeout - queries took > 10 seconds");
-          console.error("  5. Missing database indexes - run this in Supabase SQL Editor:");
-          console.error("     SELECT indexname FROM pg_indexes WHERE tablename = 'processing_jobs';");
-          console.error("     If missing, run: supabase/migrations/20251203012910_add_processing_jobs_indexes.sql");
+          console.error("[DocumentsSidebar] 💡 Tip: Check RLS policies and database indexes");
         } else if (jobsResult.data) {
           data = jobsResult.data;
           error = null;
@@ -349,8 +330,9 @@ export const DocumentsSidebar: React.FC<{
               .select("job_id, vision_summary, ocr_text")
               .in("job_id", jobIds);
             
+              // Reduced timeout for analysis query (3 seconds)
               const analysisTimeout = new Promise<{ data: null; error: { message: string } }>((resolve) => 
-                setTimeout(() => resolve({ data: null, error: { message: "Analysis query timeout after 10 seconds" } }), 10000)
+                setTimeout(() => resolve({ data: null, error: { message: "Analysis query timeout after 3 seconds" } }), 3000)
               );
               
               const analysisResult = await Promise.race([

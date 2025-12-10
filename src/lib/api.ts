@@ -80,9 +80,35 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   if (session?.access_token) {
     const sessionDuration = Date.now() - sessionStartTime;
     console.log(`[getAuthHeaders] Session retrieved from localStorage in ${sessionDuration}ms`);
-  } else {
-    // Fallback to getSession() if localStorage doesn't have it
-    console.log("[getAuthHeaders] No session in localStorage, trying getSession()...");
+    
+    // Check if session is expired and try to refresh
+    const expiresAt = (session as any).expires_at;
+    if (expiresAt && typeof expiresAt === 'number') {
+      const now = Math.floor(Date.now() / 1000);
+      const expiresIn = expiresAt - now;
+      
+      // If expires in less than 5 minutes, try to refresh
+      if (expiresIn < 300 && expiresIn > 0) {
+        console.log(`[getAuthHeaders] Session expires in ${expiresIn}s, attempting refresh...`);
+        try {
+          const refreshResult = await supabaseClient.auth.refreshSession();
+          if (refreshResult.data?.session) {
+            session = refreshResult.data.session;
+            console.log("[getAuthHeaders] ✅ Session refreshed successfully");
+          }
+        } catch (refreshError) {
+          console.warn("[getAuthHeaders] Session refresh failed, using existing session:", refreshError);
+        }
+      } else if (expiresIn <= 0) {
+        console.warn("[getAuthHeaders] Session expired, trying getSession() to get fresh session...");
+        session = null; // Force fallback to getSession()
+      }
+    }
+  }
+  
+  if (!session?.access_token) {
+    // Fallback to getSession() if localStorage doesn't have it or session expired
+    console.log("[getAuthHeaders] No valid session in localStorage, trying getSession()...");
     try {
       const sessionPromise = supabaseClient.auth.getSession();
       
@@ -483,45 +509,79 @@ export async function triggerTextractJob(jobId: string): Promise<void> {
     });
     
     // Wrap fetch in try-catch to catch network errors
-    let response: Response;
-    try {
-      // First, try OPTIONS preflight to check CORS
-      console.log(`[triggerTextractJob] Testing OPTIONS preflight to: ${url}`);
-      const preflightResponse = await fetch(url, {
-        method: "OPTIONS",
-        headers: {
-          "Origin": window.location.origin,
-          "Access-Control-Request-Method": "POST",
-          "Access-Control-Request-Headers": "authorization,apikey,content-type",
-        },
-      });
-      console.log(`[triggerTextractJob] OPTIONS preflight response:`, {
-        status: preflightResponse.status,
-        headers: Object.fromEntries(preflightResponse.headers.entries()),
-      });
-      
-      response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ jobId }),
-        signal: abortController.signal,
-      });
-    } catch (fetchError) {
+    // Retry logic: Try up to 2 times if first attempt fails
+    let response: Response | null = null;
+    let lastError: Error | null = null;
+    const maxRetries = 2;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.log(`[triggerTextractJob] Retry attempt ${attempt}/${maxRetries}...`);
+          // Wait 1 second before retry
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        // Skip OPTIONS preflight on retry (already checked)
+        if (attempt === 1) {
+          console.log(`[triggerTextractJob] Testing OPTIONS preflight to: ${url}`);
+          const preflightResponse = await fetch(url, {
+            method: "OPTIONS",
+            headers: {
+              "Origin": window.location.origin,
+              "Access-Control-Request-Method": "POST",
+              "Access-Control-Request-Headers": "authorization,apikey,content-type",
+            },
+          });
+          console.log(`[triggerTextractJob] OPTIONS preflight response:`, {
+            status: preflightResponse.status,
+            headers: Object.fromEntries(preflightResponse.headers.entries()),
+          });
+        }
+        
+        response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ jobId }),
+          signal: abortController.signal,
+        });
+        
+        // If we got a response (even if not ok), break retry loop
+        lastError = null;
+        break;
+      } catch (fetchError) {
+        lastError = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
+        
+        // If it's the last attempt, handle the error
+        if (attempt === maxRetries) {
+          clearTimeout(timeoutId);
+          // Will be handled below
+          break;
+        }
+        
+        // Log retry attempt
+        console.warn(`[triggerTextractJob] Attempt ${attempt} failed, will retry:`, lastError.message);
+      }
+    }
+    
+    // If we still have an error after retries, handle it
+    if (lastError || !response) {
       clearTimeout(timeoutId);
-      console.error(`[triggerTextractJob] Fetch error:`, fetchError);
-      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+      const errorToHandle = lastError || new Error("Unknown fetch error");
+      console.error(`[triggerTextractJob] Fetch error after ${maxRetries} attempts:`, errorToHandle);
+      if (errorToHandle instanceof Error && errorToHandle.name === 'AbortError') {
         throw new Error(`Textract job trigger timed out after ${TRIGGER_TEXTRACT_TIMEOUT_MS}ms`);
       }
       // Network error, CORS, or other fetch failures
-      if (fetchError instanceof TypeError) {
+      if (errorToHandle instanceof TypeError) {
         throw new Error(
-          `Failed to trigger Textract job: Network error - ${fetchError.message}. ` +
+          `Failed to trigger Textract job: Network error - ${errorToHandle.message}. ` +
           "This may indicate a CORS problem, network connectivity issue, or the textract-worker function is unavailable. " +
           "Check Supabase Edge Function logs and browser console for more details."
         );
       }
       throw new Error(
-        `Failed to trigger Textract job: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}. ` +
+        `Failed to trigger Textract job: ${errorToHandle instanceof Error ? errorToHandle.message : String(errorToHandle)}. ` +
         "This may indicate a network issue, CORS problem, or the textract-worker function is unavailable. " +
         "Check Supabase Edge Function logs for more details."
       );

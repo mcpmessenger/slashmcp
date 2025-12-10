@@ -33,7 +33,9 @@ $functions = @(
     "textract-worker",
     "uploads",
     "agent-orchestrator-v1",
-    "playwright-wrapper"
+    "playwright-wrapper",
+    "reselling-analysis",
+    "mcp"
 )
 
 foreach ($function in $functions) {
@@ -50,5 +52,5 @@ foreach ($function in $functions) {
     Write-Host ""
 }
 
-Write-Host "✨ Deployment complete!" -ForegroundColor Green
+Write-Host "Deployment complete!" -ForegroundColor Green
 

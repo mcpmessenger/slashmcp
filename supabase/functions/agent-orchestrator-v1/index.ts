@@ -167,7 +167,7 @@ async function handleResellingRequestDirectly(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        command: "analyze_headphones",
+        command: "analyze_reselling_opportunities",
         args: {
           location,
           query: productQuery,
@@ -189,7 +189,14 @@ async function handleResellingRequestDirectly(
     // If user asked for email report, prepare it
     const wantsEmail = input.message.toLowerCase().includes("email") || input.message.toLowerCase().includes("report");
     if (wantsEmail && data.emailReport) {
-      summary += `\n\n📧 Detailed email report is available. Use the email-mcp tool to send it.`;
+      // Check if user is authenticated (has userId)
+      if (input.userId) {
+        summary += `\n\n📧 Sending detailed email report...`;
+        // The orchestrator will automatically call email-mcp tool if available
+      } else {
+        // Guest mode - provide instructions
+        summary += `\n\n📧 Email Report (Guest Mode):\nTo receive the detailed email report, please:\n1. Sign in with Google (enables email sending via Gmail)\n2. Or copy the report content below:\n\n${data.emailReport.substring(0, 500)}${data.emailReport.length > 500 ? '...' : ''}`;
+      }
     }
     
     console.log(`✅ [BYPASS] Reselling analysis completed successfully`);

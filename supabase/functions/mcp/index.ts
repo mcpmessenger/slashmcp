@@ -2813,21 +2813,27 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
   const rawCommand = invocation.command ?? "send_test_email";
   const normalizedCommand = rawCommand.trim().toLowerCase();
 
-  // Require authentication for email sending
-  if (!userId || !userEmail) {
+  // For guest mode, allow email address to be provided as a parameter
+  const recipientEmail = args.to || args.email || userEmail;
+  
+  // Require either authentication OR an email address parameter
+  if (!recipientEmail) {
     return {
       invocation,
       result: {
         type: "error",
-        message: "Authentication required",
+        message: "Email address required",
         details: {
-          explanation: "You must be logged in to send emails. Please sign in to continue.",
+          explanation: "You must either be logged in or provide an email address. For guest mode, use: /email-mcp send_test_email to=your@email.com subject=\"...\" body=\"...\"",
         },
       },
       timestamp: new Date().toISOString(),
       latencyMs: Math.round(performance.now() - startedAt),
     };
   }
+  
+  // In guest mode (no userId), we'll use Supabase email service as fallback
+  const isGuestMode = !userId || !userEmail;
 
   try {
     if (normalizedCommand === "send_test_email") {
@@ -2858,7 +2864,8 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
       });
 
       // Try to use provider-specific API based on provider parameter
-      if (provider === "gmail") {
+      // In guest mode, skip OAuth and use Supabase email service directly
+      if (provider === "gmail" && !isGuestMode) {
         // Try to get Google OAuth token if auth header is available
         let googleToken = null;
         if (authHeader) {
@@ -2907,7 +2914,7 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
           try {
             // Create email message in RFC 2822 format
             const emailContent = [
-              `To: ${userEmail}`,
+              `To: ${recipientEmail}`,
               `Subject: ${subject}`,
               `Content-Type: text/plain; charset=utf-8`,
               ``,
@@ -2934,12 +2941,12 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
 
             if (gmailResponse.ok) {
               const gmailData = await gmailResponse.json().catch(() => ({}));
-              console.log("Gmail API success:", { messageId: gmailData.id, userEmail });
+              console.log("Gmail API success:", { messageId: gmailData.id, recipientEmail });
               return {
                 invocation,
                 result: {
                   type: "text",
-                  content: `✅ Test email sent successfully via Gmail to ${userEmail}!\n\nSubject: ${subject}\nBody: ${body.substring(0, 200)}${body.length > 200 ? '...' : ''}\n\nCheck your inbox!`,
+                  content: `✅ Test email sent successfully via Gmail to ${recipientEmail}!\n\nSubject: ${subject}\nBody: ${body.substring(0, 200)}${body.length > 200 ? '...' : ''}\n\nCheck your inbox!`,
                 },
                 timestamp: new Date().toISOString(),
                 latencyMs: Math.round(performance.now() - startedAt),
@@ -3001,31 +3008,36 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
             };
           }
         } else {
-          console.log("No Google OAuth token available for Gmail API", { userEmail, hasAuthHeader: !!authHeader });
-          // If we get here, Gmail API is not available
-          // Return helpful error with setup instructions for Gmail OAuth
-          return {
-            invocation,
-            result: {
-              type: "error",
-              message: "Gmail OAuth tokens not available",
-              details: {
-                explanation: "To send emails via Gmail API, you need to sign in with Google OAuth and grant Gmail permissions.",
-                steps: [
-                  "1. Sign out completely from the app",
-                  "2. Sign back in using 'Sign in with Google' (not email/password)",
-                  "3. When Google asks for permissions, grant Gmail permissions",
-                  "4. The system will automatically capture and store your OAuth tokens",
-                  "5. Try sending email again",
-                ],
-                userEmail: userEmail,
-                currentStatus: "Gmail API: Not available (no OAuth token stored)\n\nNote: After signing in with Google OAuth, tokens are automatically captured and stored.",
-                troubleshooting: "If you've already signed in with Google but still see this error:\n- Make sure you granted Gmail permissions during sign-in\n- Check Supabase Edge Function logs for token capture errors\n- Try signing out and signing back in again",
+          console.log("No Google OAuth token available for Gmail API", { userEmail: recipientEmail, hasAuthHeader: !!authHeader, isGuestMode });
+          // In guest mode or when OAuth is not available, fall through to Supabase email service
+          if (isGuestMode) {
+            console.log("Guest mode: Will use Supabase email service as fallback");
+            // Fall through to Supabase email service below
+          } else {
+            // For authenticated users without OAuth, return helpful error
+            return {
+              invocation,
+              result: {
+                type: "error",
+                message: "Gmail OAuth tokens not available",
+                details: {
+                  explanation: "To send emails via Gmail API, you need to sign in with Google OAuth and grant Gmail permissions.",
+                  steps: [
+                    "1. Sign out completely from the app",
+                    "2. Sign back in using 'Sign in with Google' (not email/password)",
+                    "3. When Google asks for permissions, grant Gmail permissions",
+                    "4. The system will automatically capture and store your OAuth tokens",
+                    "5. Try sending email again",
+                  ],
+                  userEmail: recipientEmail,
+                  currentStatus: "Gmail API: Not available (no OAuth token stored)\n\nNote: After signing in with Google OAuth, tokens are automatically captured and stored.",
+                  troubleshooting: "If you've already signed in with Google but still see this error:\n- Make sure you granted Gmail permissions during sign-in\n- Check Supabase Edge Function logs for token capture errors\n- Try signing out and signing back in again",
+                },
               },
-            },
-            timestamp: new Date().toISOString(),
-            latencyMs: Math.round(performance.now() - startedAt),
-          };
+              timestamp: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - startedAt),
+            };
+          }
         }
       } else if (provider === "outlook") {
         // Try to get Microsoft OAuth token
@@ -3171,21 +3183,87 @@ async function handleEmail(invocation: McpInvocation, userId?: string, userEmail
           latencyMs: Math.round(performance.now() - startedAt),
         };
       } else {
-        // Unknown provider
-        return {
-          invocation,
-          result: {
-            type: "error",
-            message: `Unknown email provider: ${provider}`,
-            details: {
-              explanation: `The provider "${provider}" is not supported.`,
-              supportedProviders: ["gmail", "outlook", "icloud"],
-              userEmail: userEmail,
+        // Unknown provider or fallback to Supabase email service
+        // For guest mode or when OAuth providers aren't available, use Supabase email service
+        if (isGuestMode || provider === "supabase" || !provider) {
+          console.log("Using Supabase email service fallback", { isGuestMode, recipientEmail });
+          
+          // Use Supabase's built-in email service (requires SMTP configuration)
+          // Note: This requires SMTP to be configured in Supabase Dashboard
+          try {
+            // For guest mode, we can't use Supabase Auth email directly
+            // Instead, return a helpful message about signing in or using a different method
+            if (isGuestMode) {
+              return {
+                invocation,
+                result: {
+                  type: "error",
+                  message: "Email sending requires authentication",
+                  details: {
+                    explanation: "To send emails, you need to either:\n\n1. Sign in with Google (recommended) - allows sending via Gmail API\n2. Provide your email address in the command: /email-mcp send_test_email to=your@email.com subject=\"...\" body=\"...\"\n\nNote: Guest mode email sending is limited. For full email functionality, please sign in.",
+                    recipientEmail: recipientEmail || "not provided",
+                    isGuestMode: true,
+                    alternative: "You can copy the report content and send it manually, or sign in to enable email sending.",
+                  },
+                },
+                timestamp: new Date().toISOString(),
+                latencyMs: Math.round(performance.now() - startedAt),
+              };
+            }
+            
+            // For authenticated users, try Supabase email service
+            // This would require SMTP configuration in Supabase
+            return {
+              invocation,
+              result: {
+                type: "error",
+                message: "Supabase email service requires SMTP configuration",
+                details: {
+                  explanation: "To use Supabase email service, SMTP must be configured in Supabase Dashboard.",
+                  steps: [
+                    "1. Go to Supabase Dashboard → Project Settings → Auth → SMTP Settings",
+                    "2. Configure your SMTP provider (Gmail, SendGrid, etc.)",
+                    "3. Or sign in with Google OAuth to use Gmail API directly",
+                  ],
+                  recipientEmail: recipientEmail,
+                },
+              },
+              timestamp: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - startedAt),
+            };
+          } catch (emailError) {
+            console.error("Supabase email service error:", emailError);
+            return {
+              invocation,
+              result: {
+                type: "error",
+                message: `Email service error: ${emailError instanceof Error ? emailError.message : String(emailError)}`,
+                details: {
+                  explanation: "Failed to send email via Supabase email service.",
+                  recipientEmail: recipientEmail,
+                },
+              },
+              timestamp: new Date().toISOString(),
+              latencyMs: Math.round(performance.now() - startedAt),
+            };
+          }
+        } else {
+          // Unknown provider
+          return {
+            invocation,
+            result: {
+              type: "error",
+              message: `Unknown email provider: ${provider}`,
+              details: {
+                explanation: `The provider "${provider}" is not supported.`,
+                supportedProviders: ["gmail", "outlook", "icloud", "supabase"],
+                recipientEmail: recipientEmail,
+              },
             },
-          },
-          timestamp: new Date().toISOString(),
-          latencyMs: Math.round(performance.now() - startedAt),
-        };
+            timestamp: new Date().toISOString(),
+            latencyMs: Math.round(performance.now() - startedAt),
+          };
+        }
       }
     }
 
