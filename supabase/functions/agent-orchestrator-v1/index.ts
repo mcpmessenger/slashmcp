@@ -76,12 +76,154 @@ function getCorsHeaders(origin: string | null): Record<string, string> {
 }
 
 /**
+ * Check if query is a reselling analysis request
+ */
+function isResellingRequest(query: string): boolean {
+  const queryLower = query.toLowerCase();
+  const category1Matches = [
+    queryLower.includes("scrape"),
+    queryLower.includes("craigslist"),
+    queryLower.includes("offerup"),
+    queryLower.includes("ebay"),
+    queryLower.includes("amazon"),
+    queryLower.includes("price comparison"),
+    queryLower.includes("reselling"),
+    queryLower.includes("resell"),
+    queryLower.includes("price discrepancies"),
+    queryLower.includes("compare prices"),
+    queryLower.includes("find deals"),
+    queryLower.includes("compare to"),
+  ];
+  const category2Matches = [
+    queryLower.includes("headphones"),
+    queryLower.includes("laptop"),
+    queryLower.includes("product"),
+    queryLower.includes("item"),
+    queryLower.includes("listing"),
+    queryLower.includes("deal"),
+    queryLower.includes("report"),
+    queryLower.includes("email"),
+    queryLower.includes("links"),
+  ];
+  return category1Matches.some(m => m) && category2Matches.some(m => m);
+}
+
+/**
+ * Extract product and location from query for reselling analysis
+ */
+function extractResellingParams(query: string): { query: string; location: string } {
+  const queryLower = query.toLowerCase();
+  
+  // Extract location (common patterns)
+  let location = "des moines"; // default
+  const locationPatterns = [
+    /(?:in|from|at)\s+([a-z\s]+(?:moines|chicago|new york|los angeles|san francisco|seattle|boston|philadelphia|phoenix|houston|dallas|austin|denver|portland|minneapolis|detroit|miami|atlanta|baltimore|kansas city|columbus|indianapolis|nashville|raleigh|memphis|oklahoma city|milwaukee|louisville|las vegas|albuquerque|tucson|fresno|sacramento|long beach|kansas city|mesa|virginia beach|atlanta|oakland|minneapolis|tulsa|cleveland|wichita|arlington))/i,
+    /(des\s+moines|chicago|new\s+york|los\s+angeles)/i,
+  ];
+  for (const pattern of locationPatterns) {
+    const match = query.match(pattern);
+    if (match) {
+      location = match[1].toLowerCase();
+      break;
+    }
+  }
+  
+  // Extract product query
+  let productQuery = "headphones"; // default
+  const productKeywords = ["headphones", "laptop", "bicycle", "phone", "tablet", "camera", "tv", "monitor"];
+  for (const keyword of productKeywords) {
+    if (queryLower.includes(keyword)) {
+      productQuery = keyword;
+      break;
+    }
+  }
+  
+  return { query: productQuery, location };
+}
+
+/**
+ * Call reselling analysis tool directly (bypass orchestrator)
+ */
+async function handleResellingRequestDirectly(
+  input: OrchestratorInput,
+): Promise<OrchestratorOutput> {
+  console.log(`🚨 [BYPASS] Reselling request detected - calling tool directly`);
+  
+  const RESELLING_ANALYSIS_URL = PROJECT_URL ? `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1/reselling-analysis` : "";
+  if (!RESELLING_ANALYSIS_URL) {
+    return {
+      finalResponse: "Reselling analysis service is not configured.",
+      error: "RESELLING_ANALYSIS_URL not configured",
+    };
+  }
+  
+  const { query: productQuery, location } = extractResellingParams(input.message);
+  console.log(`🚨 [BYPASS] Extracted params: query="${productQuery}", location="${location}"`);
+  
+  try {
+    const response = await fetch(RESELLING_ANALYSIS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        command: "analyze_headphones",
+        args: {
+          location,
+          query: productQuery,
+          sources: "craigslist,offerup",
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Reselling analysis failed: ${response.statusText}`);
+    }
+
+    const result = await response.json();
+    const data = result.data || result;
+    
+    // Get concise summary
+    let summary = data.summary || "Reselling analysis completed.";
+    
+    // If user asked for email report, prepare it
+    const wantsEmail = input.message.toLowerCase().includes("email") || input.message.toLowerCase().includes("report");
+    if (wantsEmail && data.emailReport) {
+      summary += `\n\n📧 Detailed email report is available. Use the email-mcp tool to send it.`;
+    }
+    
+    console.log(`✅ [BYPASS] Reselling analysis completed successfully`);
+    
+    return {
+      finalResponse: summary,
+      toolCalls: [{
+        tool: "analyze_reselling_opportunities",
+        result: data,
+      }],
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error(`❌ [BYPASS] Reselling analysis error:`, error);
+    return {
+      finalResponse: `Error performing reselling analysis: ${errorMessage}`,
+      error: errorMessage,
+    };
+  }
+}
+
+/**
  * Execute agent orchestration based on input
  */
 async function executeOrchestration(
   input: OrchestratorInput,
   authHeader?: string | null,
 ): Promise<OrchestratorOutput> {
+  // BYPASS: Check for reselling requests FIRST and handle directly
+  if (isResellingRequest(input.message)) {
+    console.log(`🚨 [BYPASS] Reselling request detected - bypassing orchestrator`);
+    return await handleResellingRequestDirectly(input);
+  }
+  
   if (!OPENAI_API_KEY) {
     return {
       finalResponse: "",
@@ -198,44 +340,10 @@ async function executeOrchestration(
     );
     console.log(`Query classification: intent=${classification.intent}, confidence=${classification.confidence}, tool=${classification.suggestedTool}`);
     
-    // Check for reselling analysis requests FIRST (before document context)
-    const queryLower = input.message.toLowerCase();
-    console.log(`🔍 [DEBUG] Checking for reselling request in query: "${input.message}"`);
-    
-    // Check each keyword category
-    const category1Matches = [
-      queryLower.includes("scrape"),
-      queryLower.includes("craigslist"),
-      queryLower.includes("offerup"),
-      queryLower.includes("ebay"),
-      queryLower.includes("amazon"),
-      queryLower.includes("price comparison"),
-      queryLower.includes("reselling"),
-      queryLower.includes("resell"),
-      queryLower.includes("price discrepancies"),
-      queryLower.includes("compare prices"),
-      queryLower.includes("find deals"),
-      queryLower.includes("compare to"),
-    ];
-    const category2Matches = [
-      queryLower.includes("headphones"),
-      queryLower.includes("laptop"),
-      queryLower.includes("product"),
-      queryLower.includes("item"),
-      queryLower.includes("listing"),
-      queryLower.includes("deal"),
-      queryLower.includes("report"),
-      queryLower.includes("email"),
-      queryLower.includes("links"),
-    ];
-    
-    const category1Match = category1Matches.some(m => m);
-    const category2Match = category2Matches.some(m => m);
-    const isResellingRequest = category1Match && category2Match;
-    
-    console.log(`🔍 [DEBUG] Category 1 matches (scrape/market keywords): ${category1Match}`);
-    console.log(`🔍 [DEBUG] Category 2 matches (product/action keywords): ${category2Match}`);
-    console.log(`🔍 [DEBUG] isResellingRequest: ${isResellingRequest}`);
+    // Note: Reselling requests are now handled by bypass above, so this code path won't execute for them
+    // But we keep the detection logic for logging/documentation
+    const isResellingRequestFlag = isResellingRequest(input.message);
+    console.log(`🔍 [DEBUG] Reselling request check (should be false after bypass): ${isResellingRequestFlag}`);
     
     // Enhance orchestrator instructions with document context
     // CRITICAL: Always prioritize RAG when documents exist, regardless of query classification
