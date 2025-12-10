@@ -338,11 +338,25 @@ export function createOrchestratorAgent(
     instructions:
       "Your primary goal is to route requests to the appropriate specialized agent or tool. " +
       "\n" +
-      "DEFAULT BEHAVIOR - Route to Command Discovery Agent:\n" +
-      "- For greetings, initial questions, or general 'what can you do?' queries, use `handoff_to_command_discovery` so the Command_Discovery_Agent can greet and help the user.\n" +
-      "- The Command_Discovery_Agent is the default agent and should handle most user interactions.\n" +
+      "🚨 CRITICAL ROUTING ORDER - CHECK IN THIS EXACT ORDER:\n" +
+      "1. RESELLING ANALYSIS (check FIRST before anything else)\n" +
+      "2. DOCUMENT REQUESTS (RAG)\n" +
+      "3. MEMORY REQUESTS\n" +
+      "4. DEFAULT (Command Discovery)\n" +
       "\n" +
-      "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation) - HIGHEST PRIORITY:\n" +
+      "FOR RESELLING/MARKET ANALYSIS REQUESTS - CHECK THIS FIRST, HIGHEST PRIORITY:\n" +
+      "- 🚨 BEFORE routing anywhere else, check if the user wants to SCRAPE listings, COMPARE prices, or find RESELLING OPPORTUNITIES\n" +
+      "- If the query contains ANY of these keywords: 'scrape', 'Craigslist', 'OfferUp', 'eBay', 'Amazon', 'price comparison', 'reselling', 'resell', 'price discrepancies', 'compare prices'\n" +
+      "- AND the query mentions products/items (headphones, laptops, etc.)\n" +
+      "- THEN you MUST use the `analyze_reselling_opportunities` tool DIRECTLY - do NOT route to command discovery\n" +
+      "- Examples that REQUIRE direct tool use:\n" +
+      "  * 'Scrape headphones from Craigslist and OfferUp' → USE analyze_reselling_opportunities\n" +
+      "  * 'Compare prices for headphones on Craigslist vs eBay' → USE analyze_reselling_opportunities\n" +
+      "  * 'Find reselling opportunities for laptops' → USE analyze_reselling_opportunities\n" +
+      "  * 'Email me a report with listings and price comparisons' → USE analyze_reselling_opportunities\n" +
+      "- The tool automatically scrapes, compares prices, and generates reports - you don't need to route to MCP tools\n" +
+      "\n" +
+      "FOR DOCUMENT/知识 REQUESTS (RAG - Retrieval Augmented Generation) - SECOND PRIORITY:\n" +
       "- CRITICAL: If the user mentions ANY of the following, you MUST use `search_documents` tool:\n" +
       "  * 'document', 'documents', 'file', 'files', 'PDF', 'uploaded', 'my document', 'my file'\n" +
       "  * 'what I uploaded', 'the document', 'that file', 'my PDF'\n" +

@@ -190,9 +190,35 @@ async function executeOrchestration(
     );
     console.log(`Query classification: intent=${classification.intent}, confidence=${classification.confidence}, tool=${classification.suggestedTool}`);
     
+    // Check for reselling analysis requests FIRST (before document context)
+    const queryLower = input.message.toLowerCase();
+    const isResellingRequest = 
+      (queryLower.includes("scrape") || queryLower.includes("craigslist") || queryLower.includes("offerup") || 
+       queryLower.includes("ebay") || queryLower.includes("amazon") || queryLower.includes("price comparison") ||
+       queryLower.includes("reselling") || queryLower.includes("resell") || queryLower.includes("price discrepancies") ||
+       queryLower.includes("compare prices") || queryLower.includes("find deals")) &&
+      (queryLower.includes("headphones") || queryLower.includes("laptop") || queryLower.includes("product") || 
+       queryLower.includes("item") || queryLower.includes("listing") || queryLower.includes("deal"));
+    
     // Enhance orchestrator instructions with document context
     // CRITICAL: Always prioritize RAG when documents exist, regardless of query classification
     let enhancedInstructions = "";
+    
+    // CRITICAL: Add reselling analysis detection FIRST
+    if (isResellingRequest) {
+      enhancedInstructions += `\n\n🚨🚨🚨 CRITICAL: RESELLING ANALYSIS REQUEST DETECTED 🚨🚨🚨\n`;
+      enhancedInstructions += `- User query: "${input.message}"\n`;
+      enhancedInstructions += `- This is a RESELLING ANALYSIS request - you MUST use analyze_reselling_opportunities tool DIRECTLY\n`;
+      enhancedInstructions += `- DO NOT route to command discovery\n`;
+      enhancedInstructions += `- DO NOT use playwright-wrapper manually\n`;
+      enhancedInstructions += `- DO NOT use search-mcp for price comparisons\n`;
+      enhancedInstructions += `- USE analyze_reselling_opportunities tool IMMEDIATELY with:\n`;
+      enhancedInstructions += `  * query: Extract product name from query (e.g., "headphones", "laptops")\n`;
+      enhancedInstructions += `  * location: Extract location if mentioned (e.g., "des moines", "chicago"), default: "des moines"\n`;
+      enhancedInstructions += `  * sources: "craigslist,offerup" (default)\n`;
+      enhancedInstructions += `- The tool will automatically scrape, compare prices, and generate a concise summary\n`;
+      enhancedInstructions += `- After getting results, if user asked for email, use email-mcp to send the detailed report\n\n`;
+    }
     if (documentContext && documentContext.availableDocuments.length > 0) {
       enhancedInstructions = `\n\n=== CURRENT USER CONTEXT ===\n${formatDocumentContext(documentContext)}\n\n`;
       
