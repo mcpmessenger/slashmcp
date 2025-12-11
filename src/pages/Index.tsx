@@ -14,6 +14,8 @@ import {
   LogIn,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Server,
   Workflow,
   AlertCircle,
@@ -75,12 +77,15 @@ const Index = () => {
 
   const handleRefreshChat = useCallback(() => {
     if (!session && !guestMode) return;
+    // Clear chat state but keep uploaded documents intact
     resetChat();
+    setSelectedDocumentIds(new Set());
+    setUploadJobs([]);
     toast({
       title: "Chat refreshed",
       description: "Start a new request whenever you're ready.",
     });
-  }, [resetChat, session, toast]);
+  }, [guestMode, resetChat, session, setSelectedDocumentIds, toast]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastSpokenRef = useRef<string>("");
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
@@ -88,6 +93,7 @@ const Index = () => {
   const [documentsSidebarRefreshTrigger, setDocumentsSidebarRefreshTrigger] = useState(0);
   const [documentCount, setDocumentCount] = useState(0); // Track document count for conditional rendering
   const [panelsVisible, setPanelsVisible] = useState(true); // Track visibility of documents/logs panels
+  const [logsVisible, setLogsVisible] = useState(false); // Track visibility of logs panel
   const previousDocumentCountRef = useRef<number>(0); // Track previous count to detect new uploads
   const previousMcpEventsCountRef = useRef<number>(0); // Track previous MCP events count
   const isInitialMountRef = useRef<boolean>(true); // Track if this is the first render
@@ -311,9 +317,14 @@ const Index = () => {
     const previousCount = previousMcpEventsCountRef.current;
     const hasNewEvents = mcpEvents.length > previousCount;
     
-    if (hasNewEvents && !panelsVisible && mcpEvents.length > 0) {
-      console.log(`[Index] New MCP events detected (${previousCount} -> ${mcpEvents.length}), auto-showing panels`);
+    if (mcpEvents.length === 0 && logsVisible) {
+      setLogsVisible(false);
+    }
+
+    if (hasNewEvents && mcpEvents.length > 0) {
+      console.log(`[Index] New MCP events detected (${previousCount} -> ${mcpEvents.length}), showing logs`);
       setPanelsVisible(true);
+      setLogsVisible(true);
       
       // Show a toast to notify user (only if significant number of events)
       if (mcpEvents.length - previousCount >= 3) {
@@ -639,12 +650,12 @@ const Index = () => {
               <button
                 type="button"
                 onClick={handleRefreshChat}
-                disabled={!hasChatHistory || isLoading}
+                disabled={isLoading}
                 className={cn(
                   "flex-shrink-0 cursor-pointer rounded-full border border-border/50 bg-muted/40 p-1.5 text-foreground/80 transition-opacity hover:bg-muted/60",
-                  (!hasChatHistory || isLoading) && "opacity-60 cursor-not-allowed",
+                  isLoading && "opacity-60 cursor-not-allowed",
                 )}
-                title={hasChatHistory ? "Refresh chat" : "Nothing to refresh yet"}
+                title="Refresh chat"
               >
                 <RefreshCw className="h-4 w-4" aria-hidden="true" />
                 <span className="sr-only">Refresh chat</span>
@@ -1243,9 +1254,9 @@ const Index = () => {
         {/* Documents and Logs Panels - Below Chat Input */}
         {authReady && (session || guestMode) && 
           ((documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) || mcpEvents.length > 0) ? (
-            <div className="border-t">
+            <div className="relative">
               {/* Toggle Button */}
-              <div className="flex items-center justify-center py-2 border-b bg-muted/30">
+              <div className="flex items-center justify-center py-2 bg-muted/30">
                 <button
                   type="button"
                   onClick={() => setPanelsVisible(!panelsVisible)}
@@ -1274,18 +1285,82 @@ const Index = () => {
                 </button>
               </div>
               {panelsVisible && (
-                <ResizablePanelGroup direction="horizontal" className="h-[300px] min-h-[200px] max-h-[400px]">
-                {/* Documents Panel */}
-                {(documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) && (
-                  <>
-                    <ResizablePanel defaultSize={50} minSize={30} maxSize={70} className="min-w-0">
-                      <div className="h-full p-4 overflow-y-auto">
+                <div className="relative">
+                  {/* Logs toggle on the right */}
+                  {mcpEvents.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setLogsVisible(!logsVisible)}
+                      className="absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-full bg-muted/70 px-3 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors shadow-sm"
+                    >
+                      <span>{logsVisible ? "Hide Logs" : "Show Logs"}</span>
+                      {logsVisible ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+                    </button>
+                  )}
+
+                  <ResizablePanelGroup direction="horizontal" className="h-[300px] min-h-[200px] max-h-[400px]">
+                    {/* Documents Panel */}
+                    {(documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) && (
+                      <>
+                        <ResizablePanel
+                          defaultSize={logsVisible && mcpEvents.length > 0 ? 55 : 100}
+                          minSize={30}
+                          maxSize={logsVisible && mcpEvents.length > 0 ? 70 : 100}
+                          className="min-w-0"
+                        >
+                          <div className="h-full p-4 overflow-y-auto">
+                            <DocumentsSidebar
+                              refreshTrigger={documentsSidebarRefreshTrigger}
+                              userId={session?.user?.id}
+                              fallbackJobs={(() => {
+                                const completed = uploadJobs.filter(job => job.status === "completed");
+                                console.log(`[Index] Passing fallbackJobs to DocumentsSidebar: ${completed.length} completed jobs out of ${uploadJobs.length} total`);
+                                return completed.map(job => ({
+                                  id: job.id,
+                                  fileName: job.fileName,
+                                  status: job.status,
+                                  visionSummary: job.visionSummary,
+                                  resultText: job.resultText,
+                                  updatedAt: job.updatedAt,
+                                  stage: job.stage,
+                                  contentLength: job.contentLength, // Include file size
+                                }));
+                              })()}
+                              onDocumentClick={(jobId) => {
+                                // When document is clicked, could trigger a search or show details
+                                console.log("Document clicked:", jobId);
+                              }}
+                              onDocumentsChange={(count) => {
+                                console.log("[Index] DocumentsSidebar reported document count:", count);
+                                const previousCount = documentCount;
+                                setDocumentCount(count);
+                                
+                                // Auto-show panels if new documents are detected
+                                if (count > previousCount && !panelsVisible) {
+                                  console.log(`[Index] New documents detected via sidebar (${previousCount} -> ${count}), auto-showing panels`);
+                                  setPanelsVisible(true);
+                                  toast({
+                                    title: "Documents available",
+                                    description: `${count - previousCount} new document(s) detected. Panels shown below.`,
+                                    duration: 3000,
+                                  });
+                                }
+                              }}
+                            />
+                          </div>
+                        </ResizablePanel>
+                        {logsVisible && mcpEvents.length > 0 && <ResizableHandle withHandle />}
+                      </>
+                    )}
+                    {/* Hidden DocumentsSidebar to load documents even when panel is hidden */}
+                    {documentCount === 0 && uploadJobs.filter(job => job.status === "completed").length === 0 && (
+                      <div className="hidden" aria-hidden="true">
                         <DocumentsSidebar
                           refreshTrigger={documentsSidebarRefreshTrigger}
                           userId={session?.user?.id}
                           fallbackJobs={(() => {
                             const completed = uploadJobs.filter(job => job.status === "completed");
-                            console.log(`[Index] Passing fallbackJobs to DocumentsSidebar: ${completed.length} completed jobs out of ${uploadJobs.length} total`);
+                            console.log(`[Index] Passing fallbackJobs to hidden DocumentsSidebar: ${completed.length} completed jobs`);
                             return completed.map(job => ({
                               id: job.id,
                               fileName: job.fileName,
@@ -1294,21 +1369,19 @@ const Index = () => {
                               resultText: job.resultText,
                               updatedAt: job.updatedAt,
                               stage: job.stage,
-                              contentLength: job.contentLength, // Include file size
                             }));
                           })()}
                           onDocumentClick={(jobId) => {
-                            // When document is clicked, could trigger a search or show details
                             console.log("Document clicked:", jobId);
                           }}
                           onDocumentsChange={(count) => {
-                            console.log("[Index] DocumentsSidebar reported document count:", count);
+                            console.log("[Index] Hidden DocumentsSidebar reported document count:", count);
                             const previousCount = documentCount;
                             setDocumentCount(count);
                             
                             // Auto-show panels if new documents are detected
                             if (count > previousCount && !panelsVisible) {
-                              console.log(`[Index] New documents detected via sidebar (${previousCount} -> ${count}), auto-showing panels`);
+                              console.log(`[Index] New documents detected via hidden sidebar (${previousCount} -> ${count}), auto-showing panels`);
                               setPanelsVisible(true);
                               toast({
                                 title: "Documents available",
@@ -1319,69 +1392,20 @@ const Index = () => {
                           }}
                         />
                       </div>
-                    </ResizablePanel>
-                    {mcpEvents.length > 0 && (
-                      <ResizableHandle withHandle />
                     )}
-                  </>
-                )}
-                {/* Hidden DocumentsSidebar to load documents even when panel is hidden */}
-                {/* This runs in background to detect when documents are uploaded and trigger panel to appear */}
-                {/* Only show hidden sidebar if we have no visible sidebar AND no completed jobs in uploadJobs */}
-                {documentCount === 0 && uploadJobs.filter(job => job.status === "completed").length === 0 && (
-                  <div className="hidden" aria-hidden="true">
-                    <DocumentsSidebar
-                      refreshTrigger={documentsSidebarRefreshTrigger}
-                      userId={session?.user?.id}
-                      fallbackJobs={(() => {
-                        const completed = uploadJobs.filter(job => job.status === "completed");
-                        console.log(`[Index] Passing fallbackJobs to hidden DocumentsSidebar: ${completed.length} completed jobs`);
-                        return completed.map(job => ({
-                          id: job.id,
-                          fileName: job.fileName,
-                          status: job.status,
-                          visionSummary: job.visionSummary,
-                          resultText: job.resultText,
-                          updatedAt: job.updatedAt,
-                          stage: job.stage,
-                        }));
-                      })()}
-                      onDocumentClick={(jobId) => {
-                        console.log("Document clicked:", jobId);
-                      }}
-                      onDocumentsChange={(count) => {
-                        console.log("[Index] Hidden DocumentsSidebar reported document count:", count);
-                        const previousCount = documentCount;
-                        setDocumentCount(count);
-                        
-                        // Auto-show panels if new documents are detected
-                        if (count > previousCount && !panelsVisible) {
-                          console.log(`[Index] New documents detected via hidden sidebar (${previousCount} -> ${count}), auto-showing panels`);
-                          setPanelsVisible(true);
-                          toast({
-                            title: "Documents available",
-                            description: `${count - previousCount} new document(s) detected. Panels shown below.`,
-                            duration: 3000,
-                          });
-                        }
-                      }}
-                    />
-                  </div>
-                )}
-                {/* MCP Event Log Panel */}
-                {mcpEvents.length > 0 && (
-                  <ResizablePanel 
-                    defaultSize={
-                      (documentCount > 0 || uploadJobs.filter(job => job.status === "completed").length > 0) ? 50 : 100
-                    } 
-                    minSize={30} 
-                    maxSize={70} 
-                    className="min-w-0"
-                  >
-                    <McpEventLog events={mcpEvents} className="h-full border-l" />
-                  </ResizablePanel>
-                )}
-                </ResizablePanelGroup>
+                    {/* MCP Event Log Panel */}
+                    {logsVisible && mcpEvents.length > 0 && (
+                      <ResizablePanel 
+                        defaultSize={45}
+                        minSize={25}
+                        maxSize={70}
+                        className="min-w-0"
+                      >
+                        <McpEventLog events={mcpEvents} className="h-full border-l" />
+                      </ResizablePanel>
+                    )}
+                  </ResizablePanelGroup>
+                </div>
               )}
             </div>
           ) : null

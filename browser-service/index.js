@@ -10,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'apikey']
+  allowedHeaders: ['Content-Type', 'Authorization', 'apikey', 'x-browser-auth']
 }));
 
 app.use(express.json());
@@ -109,6 +109,19 @@ app.get('/health', async (req, res) => {
 app.post('/invoke', async (req, res) => {
   let page = null;
   try {
+    // Optional bearer token auth
+    const expectedToken = process.env.BROWSER_AUTH_TOKEN;
+    if (expectedToken) {
+      const headerToken = req.headers['x-browser-auth'] || req.headers['authorization'] || '';
+      const token = Array.isArray(headerToken) ? headerToken[0] : headerToken;
+      const cleaned = token.replace(/^Bearer\s+/i, '').trim();
+      if (cleaned !== expectedToken) {
+        return res.status(401).json({
+          result: { type: 'error', message: 'Unauthorized: invalid token' }
+        });
+      }
+    }
+
     const { command, args = {}, positionalArgs = [] } = req.body;
     
     if (!command) {

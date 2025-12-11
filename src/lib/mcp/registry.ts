@@ -261,6 +261,35 @@ export const MCP_SERVER_REGISTRY: McpServerDefinition[] = [
     ],
   },
   {
+    id: "google-search-mcp",
+    label: "Google Search (CSE)",
+    description: "Google Programmable Search (CSE) with DuckDuckGo fallback when keys are missing.",
+    category: "knowledge",
+    install: "Hosted (Supabase Edge)",
+    commands: [
+      {
+        name: "web_search",
+        title: "Web Search",
+        description: "Search the web using Google CSE. Falls back to DuckDuckGo when not configured.",
+        parameters: [
+          {
+            name: "query",
+            description: "Search query string.",
+            required: true,
+            example: "Model Context Protocol",
+          },
+          {
+            name: "max_results",
+            description: "Maximum number of results to return (default: 5, max: 20).",
+            required: false,
+            example: "5",
+          },
+        ],
+        example: "/google-search-mcp web_search query=\"Model Context Protocol\" max_results=5",
+      },
+    ],
+  },
+  {
     id: "playwright-wrapper",
     label: "Playwright Browser Automation",
     description: "Browser automation wrapper for testing and crawling your dev app. Uses JSON gateway format compatible with SlashMCP.",
@@ -341,6 +370,30 @@ export const MCP_SERVER_REGISTRY: McpServerDefinition[] = [
           },
         ],
         example: "/playwright-wrapper browser_take_screenshot filename=homepage.png fullPage=true",
+      },
+    ],
+  },
+  {
+    id: "langchain-agent-mcp",
+    label: "LangChain Agent",
+    description: "Hosted LangChain agent exposed via MCP. Great for complex, multi-step reasoning tasks.",
+    category: "automation",
+    install: "Hosted (Cloud Run)",
+    docUrl: "https://github.com/mcpmessenger/LangchainMCP",
+    commands: [
+      {
+        name: "agent_executor",
+        title: "LangChain Agent Executor",
+        description: "Run the hosted LangChain ReAct agent with your query.",
+        parameters: [
+          {
+            name: "query",
+            description: "Task or question for the agent.",
+            required: true,
+            example: "Plan a 3-stop coffee crawl near the Ferry Building.",
+          },
+        ],
+        example: "/langchain-agent-mcp agent_executor query=\"Plan a quick launch checklist.\"",
       },
     ],
   },

@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+# Use npm install (no lockfile present) and omit dev deps
+RUN npm install --omit=dev --no-progress
 
 COPY . .
 

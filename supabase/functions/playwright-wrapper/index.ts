@@ -281,6 +281,10 @@ serve(async (req) => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            // Forward auth token if configured to secure browser service
+            ...(Deno.env.get("BROWSER_AUTH_TOKEN")
+              ? { "x-browser-auth": Deno.env.get("BROWSER_AUTH_TOKEN")! }
+              : {}),
           },
           body: JSON.stringify(invocation),
         });

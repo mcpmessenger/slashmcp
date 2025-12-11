@@ -2186,6 +2186,123 @@ async function handleSearch(invocation: McpInvocation): Promise<McpInvocationRes
   }
 }
 
+async function handleGoogleSearch(invocation: McpInvocation): Promise<McpInvocationResponse> {
+  const startedAt = performance.now();
+  const args = invocation.args ?? {};
+  const command = invocation.command ?? "web_search";
+  const query = args.query ?? invocation.positionalArgs?.[0];
+  const maxResultsRaw = args.max_results ?? args.maxResults;
+
+  if (command !== "web_search") {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: `Unsupported command: ${command}`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  if (!query || typeof query !== "string") {
+    return {
+      invocation,
+      result: {
+        type: "error",
+        message: "Missing required parameter: query",
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    };
+  }
+
+  let maxResults = 5;
+  if (typeof maxResultsRaw === "string") {
+    const parsed = Number(maxResultsRaw);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed <= 20) {
+      maxResults = parsed;
+    }
+  }
+
+  const apiKey = Deno.env.get("GOOGLE_SEARCH_API_KEY");
+  const cx = Deno.env.get("GOOGLE_SEARCH_CX");
+
+  // Helper to normalize the response shape
+  const buildResponse = (results: Array<{ title: string; url: string; snippet: string }>, provider: string) => {
+    const finalResults = results.slice(0, maxResults);
+    return {
+      invocation: { ...invocation, serverId: "google-search-mcp", command, args: { query, max_results: String(maxResults) } },
+      result: {
+        type: "json",
+        data: {
+          query,
+          maxResults,
+          provider,
+          results: finalResults,
+        },
+        summary:
+          finalResults.length === 0
+            ? `No results found for "${query}" (${provider}).`
+            : `${provider}: ${finalResults.length} result(s) for "${query}".`,
+      },
+      timestamp: new Date().toISOString(),
+      latencyMs: Math.round(performance.now() - startedAt),
+    } satisfies McpInvocationResponse;
+  };
+
+  // Try Google CSE first if configured
+  if (apiKey && cx) {
+    try {
+      const url = new URL("https://www.googleapis.com/customsearch/v1");
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("cx", cx);
+      url.searchParams.set("q", query);
+      url.searchParams.set("num", String(Math.min(maxResults, 10)));
+
+      const response = await fetch(url.toString());
+      if (!response.ok) {
+        throw new Error(`Google CSE request failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as { items?: Array<{ title?: string; link?: string; snippet?: string }> };
+      const items = data.items ?? [];
+      const results = items
+        .map(item => ({
+          title: (item.title || "").slice(0, 200),
+          url: item.link || "",
+          snippet: (item.snippet || "").slice(0, 300),
+        }))
+        .filter(r => r.url.startsWith("http"));
+
+      return buildResponse(results, "google_cse");
+    } catch (error) {
+      console.error("[google-search-mcp] Google CSE failed, falling back to DuckDuckGo:", error);
+      // Continue to fallback
+    }
+  } else {
+    console.warn("[google-search-mcp] GOOGLE_SEARCH_API_KEY or GOOGLE_SEARCH_CX not set; using DuckDuckGo fallback.");
+  }
+
+  // Fallback: reuse existing DuckDuckGo handler for resilience
+  const fallback = await handleSearch(invocation);
+  // Normalize invocation to this server id and add provider hint
+  return {
+    ...fallback,
+    invocation: { ...invocation, serverId: "google-search-mcp", command, args: { query, max_results: String(maxResults) } },
+    result:
+      fallback.result.type === "json"
+        ? {
+            ...fallback.result,
+            data: {
+              ...(fallback.result.data as Record<string, unknown>),
+              provider: "duckduckgo_fallback",
+            },
+          }
+        : fallback.result,
+  };
+}
+
 async function handleGrokipedia(invocation: McpInvocation): Promise<McpInvocationResponse> {
   const startedAt = performance.now();
   const args = invocation.args ?? {};
@@ -3436,12 +3553,105 @@ serve(async req => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    if (normalizedServerId === "google-search-mcp") {
+      const response = await handleGoogleSearch(invocation);
+      return new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     if (normalizedServerId === "google-places-mcp") {
       const response = await handleGooglePlaces(invocation, userId);
       return new Response(JSON.stringify(response), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+    if (normalizedServerId === "langchain-agent-mcp") {
+      // Proxy to hosted LangChain Agent MCP server (Cloud Run)
+      const LANGCHAIN_AGENT_URL =
+        Deno.env.get("LANGCHAIN_AGENT_URL") ??
+        "https://langchain-agent-mcp-server-554655392699.us-central1.run.app";
+
+      const invokeUrl = `${LANGCHAIN_AGENT_URL.replace(/\/+$/, "")}/mcp/invoke`;
+      const tool = invocation.command || "agent_executor";
+      const payload = {
+        tool,
+        arguments: invocation.args || {},
+      };
+
+      try {
+        const lcResponse = await fetch(invokeUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!lcResponse.ok) {
+          const errorText = await lcResponse.text().catch(() => "Unknown error");
+          return respondWithError(
+            lcResponse.status,
+            `LangChain agent error: ${errorText}`,
+            origin,
+          );
+        }
+
+        const langchainData = await lcResponse.json();
+
+        // If upstream signals error, surface it
+        if (langchainData?.isError || langchainData?.error) {
+          const message =
+            langchainData?.message ||
+            langchainData?.error ||
+            "LangChain agent reported an error";
+          return respondWithError(502, message, origin);
+        }
+
+        // Try to produce a friendly text/markdown result if present
+        let result: McpInvocationResult;
+        const contentArray = Array.isArray(langchainData?.content)
+          ? langchainData.content
+          : undefined;
+        const textParts =
+          contentArray
+            ?.map((c: { text?: string; type?: string }) => c?.text?.trim())
+            .filter(Boolean) ?? [];
+
+        if (textParts.length > 0) {
+          result = {
+            type: "markdown",
+            content: textParts.join("\n\n"),
+          };
+        } else {
+          result = {
+            type: "json",
+            data: langchainData,
+            summary: langchainData?.summary,
+          };
+        }
+
+        const response: McpInvocationResponse = {
+          invocation,
+          result,
+          timestamp: new Date().toISOString(),
+          raw: langchainData,
+        };
+
+        return new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } catch (error) {
+        console.error("LangChain agent proxy error:", error);
+        const message = error instanceof Error ? error.message : "Unknown error";
+        return respondWithError(
+          500,
+          `Failed to proxy to langchain-agent-mcp: ${message}`,
+          origin,
+        );
+      }
     }
     if (normalizedServerId === "email-mcp") {
       const response = await handleEmail(invocation, userId, userEmail, authHeader);
@@ -3450,15 +3660,15 @@ serve(async req => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (normalizedServerId === "playwright-wrapper") {
-      // Forward to playwright-wrapper edge function
+    if (normalizedServerId === "playwright-wrapper" || normalizedServerId === "playwright-mcp") {
+      // Forward to playwright wrapper edge function; treat playwright-mcp as an alias
       const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
       if (!PROJECT_URL) {
         return respondWithError(500, "PROJECT_URL not configured", origin);
       }
-      
+
       const playwrightUrl = `${PROJECT_URL.replace(/\/+$/, "")}/functions/v1/playwright-wrapper`;
-      
+
       try {
         const playwrightResponse = await fetch(playwrightUrl, {
           method: "POST",
@@ -3479,7 +3689,7 @@ serve(async req => {
         }
 
         const playwrightData = await playwrightResponse.json();
-        
+
         // Format response to match MCP gateway format
         const response: McpInvocationResponse = {
           invocation,
