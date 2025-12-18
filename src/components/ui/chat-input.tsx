@@ -142,11 +142,6 @@ const SLASH_COMMANDS: SlashCommand[] = [
     description: "Search Grokipedia knowledge base (e.g., query=\"Model Context Protocol\")",
   },
   {
-    value: "/canva-mcp create_design",
-    label: "/canva-mcp create_design",
-    description: "Create Canva design (e.g., template=presentation text=\"Hello\")",
-  },
-  {
     value: "/gemini-mcp generate_text",
     label: "/gemini-mcp generate_text",
     description: "Generate text with Gemini (e.g., prompt=\"Write a story\")",

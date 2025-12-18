@@ -25,7 +25,6 @@ DECLARE
   t1_merge_id uuid;
   t1_researcher_id uuid;
   t1_writer_id uuid;
-  t1_design_id uuid;
   t1_email_id uuid;
   -- Template 2 nodes
   t2_start_id uuid;
@@ -39,7 +38,6 @@ DECLARE
   t2_twitter_id uuid;
   t2_linkedin_id uuid;
   t2_instagram_id uuid;
-  t2_split3_id uuid;
   t2_twitter_design_id uuid;
   t2_linkedin_design_id uuid;
   t2_instagram_design_id uuid;
@@ -132,12 +130,8 @@ BEGIN
   VALUES (template1_id, 'agent', 'Writer Agent', 1100, 200, '{"prompt": "Create competitive analysis report: {{research_results}}", "model": "gemini-1.5-pro"}'::jsonb, 'gemini-mcp', 'generate_text', 5)
   RETURNING id INTO t1_writer_id;
 
-  -- Template 1: Design tool
-  INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, mcp_server_id, mcp_command_name, execution_order)
-  VALUES (template1_id, 'tool', 'Create Design', 1300, 200, '{"template": "presentation", "text": "{{report_summary}}"}'::jsonb, 'canva-mcp', 'create_design', 6)
-  RETURNING id INTO t1_design_id;
-
   -- Template 1: Email agent (placeholder - would need email MCP server)
+  -- Note: Canva design node removed (canva-mcp integration disabled)
   INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, execution_order)
   VALUES (template1_id, 'agent', 'Email Agent', 1500, 200, '{"requires_approval": true, "subject": "Competitive Intelligence Report: {{competitor}}"}'::jsonb, 7)
   RETURNING id INTO t1_email_id;
@@ -161,8 +155,7 @@ BEGIN
     (template1_id, t1_polymarket_id, t1_merge_id, '{}'::jsonb),
     (template1_id, t1_merge_id, t1_researcher_id, '{}'::jsonb),
     (template1_id, t1_researcher_id, t1_writer_id, '{}'::jsonb),
-    (template1_id, t1_writer_id, t1_design_id, '{}'::jsonb),
-    (template1_id, t1_design_id, t1_email_id, '{}'::jsonb),
+    (template1_id, t1_writer_id, t1_email_id, '{}'::jsonb),
     (template1_id, t1_email_id, t1_end_id, '{}'::jsonb);
 
   -- ============================================
@@ -172,7 +165,7 @@ BEGIN
   VALUES (
     system_user_id,
     'Market Research & Content Pipeline',
-    'Research a topic, generate a long-form article, create platform-specific social media posts (Twitter, LinkedIn, Instagram), design visuals for each post, and send the complete content package via email with approval.',
+    'Research a topic, generate a long-form article, create platform-specific social media posts (Twitter, LinkedIn, Instagram), and send the complete content package via email with approval.',
     true,
     'content',
     '{"demo": true, "complexity": "high", "estimated_time": "75s"}'::jsonb
@@ -229,27 +222,8 @@ BEGIN
   VALUES (template2_id, 'agent', 'Instagram Post', 1300, 500, '{"prompt": "Create Instagram caption: {{article}}", "model": "gemini-1.5-flash"}'::jsonb, 'gemini-mcp', 'generate_text', 6)
   RETURNING id INTO t2_instagram_id;
 
-  -- Template 2: Split 3 - Designs
-  INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, execution_order)
-  VALUES (template2_id, 'merge', 'Split - Create Designs', 1500, 300, '{"mode": "split"}'::jsonb, 7)
-  RETURNING id INTO t2_split3_id;
-
-  -- Template 2: Twitter Design
-  INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, mcp_server_id, mcp_command_name, execution_order)
-  VALUES (template2_id, 'tool', 'Twitter Design', 1700, 100, '{"template": "social_post", "text": "{{twitter_post}}"}'::jsonb, 'canva-mcp', 'create_design', 8)
-  RETURNING id INTO t2_twitter_design_id;
-
-  -- Template 2: LinkedIn Design
-  INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, mcp_server_id, mcp_command_name, execution_order)
-  VALUES (template2_id, 'tool', 'LinkedIn Design', 1700, 300, '{"template": "social_post", "text": "{{linkedin_post}}"}'::jsonb, 'canva-mcp', 'create_design', 8)
-  RETURNING id INTO t2_linkedin_design_id;
-
-  -- Template 2: Instagram Design
-  INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, mcp_server_id, mcp_command_name, execution_order)
-  VALUES (template2_id, 'tool', 'Instagram Design', 1700, 500, '{"template": "social_post", "text": "{{instagram_post}}"}'::jsonb, 'canva-mcp', 'create_design', 8)
-  RETURNING id INTO t2_instagram_design_id;
-
   -- Template 2: Merge 2
+  -- Note: Canva design nodes removed (canva-mcp integration disabled)
   INSERT INTO public.workflow_nodes (workflow_id, node_type, label, position_x, position_y, config, execution_order)
   VALUES (template2_id, 'merge', 'Merge - All Content', 1900, 300, '{"mode": "merge"}'::jsonb, 9)
   RETURNING id INTO t2_merge2_id;
@@ -277,15 +251,9 @@ BEGIN
     (template2_id, t2_split2_id, t2_twitter_id, '{}'::jsonb),
     (template2_id, t2_split2_id, t2_linkedin_id, '{}'::jsonb),
     (template2_id, t2_split2_id, t2_instagram_id, '{}'::jsonb),
-    (template2_id, t2_twitter_id, t2_split3_id, '{}'::jsonb),
-    (template2_id, t2_linkedin_id, t2_split3_id, '{}'::jsonb),
-    (template2_id, t2_instagram_id, t2_split3_id, '{}'::jsonb),
-    (template2_id, t2_split3_id, t2_twitter_design_id, '{}'::jsonb),
-    (template2_id, t2_split3_id, t2_linkedin_design_id, '{}'::jsonb),
-    (template2_id, t2_split3_id, t2_instagram_design_id, '{}'::jsonb),
-    (template2_id, t2_twitter_design_id, t2_merge2_id, '{}'::jsonb),
-    (template2_id, t2_linkedin_design_id, t2_merge2_id, '{}'::jsonb),
-    (template2_id, t2_instagram_design_id, t2_merge2_id, '{}'::jsonb),
+    (template2_id, t2_twitter_id, t2_merge2_id, '{}'::jsonb),
+    (template2_id, t2_linkedin_id, t2_merge2_id, '{}'::jsonb),
+    (template2_id, t2_instagram_id, t2_merge2_id, '{}'::jsonb),
     (template2_id, t2_merge2_id, t2_email_id, '{}'::jsonb),
     (template2_id, t2_email_id, t2_end_id, '{}'::jsonb);
 

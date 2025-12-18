@@ -628,13 +628,7 @@ AVAILABLE MCP COMMANDS:
      Format: /grokipedia-mcp search query="QUERY" [limit=NUMBER]
      Example: /grokipedia-mcp search query="Model Context Protocol" limit=5
 
-4. CANVA-MCP (Design Creation)
-   - create_design: Create a Canva design from template
-     Format: /canva-mcp create_design [template=TEMPLATE] [text="TEXT"]
-     Templates: presentation, doc, whiteboard (default: presentation)
-     Example: /canva-mcp create_design template=presentation text="Hello World"
-
-5. GEMINI-MCP (Text Generation)
+4. GEMINI-MCP (Text Generation)
    - generate_text: Generate text using Gemini
      Format: /gemini-mcp generate_text prompt="PROMPT" [model=MODEL] [temperature=N] [max_output_tokens=N]
 

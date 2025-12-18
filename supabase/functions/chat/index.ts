@@ -1,43 +1,91 @@
+// Workaround for MCP SDK expecting a custom() helper on globalThis in edge runtime
+if (typeof (globalThis as any).custom !== "function") {
+  (globalThis as any).custom = () => ({});
+}
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
   type AgentInputItem,
   type Tool,
-  Runner,
 } from "https://esm.sh/@openai/agents@0.3.2";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createMemoryService } from "../_shared/memory.ts";
 import type { Database } from "../_shared/database.types.ts";
-import {
-  createCommandDiscoveryAgent,
-  createMcpToolAgent,
-  createOrchestratorAgent,
-  createHandoffs,
-  createMemoryTools,
-  createMcpProxyTool,
-  createRagTools,
-  classifyQuery,
-  getDocumentContext,
-  formatDocumentContext,
-  listCommandsTool,
-  executeMcpCommand,
-} from "../_shared/orchestration/index.ts";
+
+// Lazy-loaded orchestration exports (avoid module side-effects during OPTIONS)
+let createCommandDiscoveryAgent: any;
+let createMcpToolAgent: any;
+let createOrchestratorAgent: any;
+let createHandoffs: any;
+let createMemoryTools: any;
+let createMcpProxyTool: any;
+let createRagTools: any;
+let classifyQuery: any;
+let getDocumentContext: any;
+let formatDocumentContext: any;
+let listCommandsTool: any;
+let executeMcpCommand: any;
+let Runner: any;
 
 type Provider = "openai" | "anthropic" | "gemini";
 
+// Normalize and guard critical envs early
+const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
+if (!PROJECT_URL) {
+  console.error("[chat] PROJECT_URL/SUPABASE_URL not configured. CORS/POST will fail.");
+}
 const allowedOrigins = Deno.env.get("ALLOWED_ORIGINS")?.split(",").map(origin => origin.trim()) ?? ["*"];
 const BASE_SYSTEM_PROMPT =
   "You are a helpful AI research assistant speaking aloud through text-to-speech. Respond in natural spoken sentences, avoid stage directions, asterisks, or emojis, and keep punctuation simple so it sounds good when read aloud. Provide clear answers, cite important facts conversationally, and offer actionable insight when useful.";
 
-const SUPABASE_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
+// Reuse PROJECT_URL for supabase URL to avoid divergence
+const SUPABASE_URL = PROJECT_URL;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SERVICE_ROLE_KEY") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 const encoder = new TextEncoder();
 
-const PROJECT_URL = Deno.env.get("PROJECT_URL") ?? Deno.env.get("SUPABASE_URL") ?? "";
 const NORMALIZED_PROJECT_URL = PROJECT_URL ? PROJECT_URL.replace(/\/+$/, "") : "";
 const MCP_GATEWAY_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/mcp` : "";
 const DOC_CONTEXT_URL = NORMALIZED_PROJECT_URL ? `${NORMALIZED_PROJECT_URL}/functions/v1/doc-context` : "";
+
+async function ensureOrchestrationLoaded() {
+  return; // MCP/Agents temporarily disabled to avoid SDK runtime errors
+  if (
+    createCommandDiscoveryAgent &&
+    createMcpToolAgent &&
+    createOrchestratorAgent &&
+    createHandoffs &&
+    createMemoryTools &&
+    createMcpProxyTool &&
+    createRagTools &&
+    classifyQuery &&
+    getDocumentContext &&
+    formatDocumentContext &&
+    listCommandsTool &&
+    executeMcpCommand &&
+    Runner
+  ) {
+    return;
+  }
+  const orch = await import("../_shared/orchestration/index.ts");
+  ({
+    createCommandDiscoveryAgent,
+    createMcpToolAgent,
+    createOrchestratorAgent,
+    createHandoffs,
+    createMemoryTools,
+    createMcpProxyTool,
+    createRagTools,
+    classifyQuery,
+    getDocumentContext,
+    formatDocumentContext,
+    listCommandsTool,
+    executeMcpCommand,
+  } = orch as any);
+  const agents = await import("https://esm.sh/@openai/agents@0.3.2");
+  Runner = agents.Runner;
+}
 
 /**
  * Check if query is a reselling analysis request
@@ -57,6 +105,9 @@ function isResellingRequest(query: string): boolean {
     queryLower.includes("compare prices"),
     queryLower.includes("find deals"),
     queryLower.includes("compare to"),
+    queryLower.includes("find "),
+    queryLower.includes("buy "),
+    queryLower.includes("shop"),
   ];
   const category2Matches = [
     queryLower.includes("headphones"),
@@ -68,6 +119,10 @@ function isResellingRequest(query: string): boolean {
     queryLower.includes("report"),
     queryLower.includes("email"),
     queryLower.includes("links"),
+    queryLower.includes("shoe"),
+    queryLower.includes("sneaker"),
+    queryLower.includes("jordans"),
+    queryLower.includes("air jordan"),
   ];
   return category1Matches.some(m => m) && category2Matches.some(m => m);
 }
@@ -94,7 +149,24 @@ function extractResellingParams(query: string): { query: string; location: strin
   
   // Extract product query
   let productQuery = "headphones"; // default
-  const productKeywords = ["headphones", "laptop", "bicycle", "phone", "tablet", "camera", "tv", "monitor"];
+  const productKeywords = [
+    "headphones",
+    "laptop",
+    "bicycle",
+    "phone",
+    "tablet",
+    "camera",
+    "tv",
+    "monitor",
+    "sneaker",
+    "sneakers",
+    "shoe",
+    "shoes",
+    "jordan",
+    "jordans",
+    "air jordan",
+    "air jordans",
+  ];
   for (const keyword of productKeywords) {
     if (queryLower.includes(keyword)) {
       productQuery = keyword;
@@ -127,7 +199,7 @@ async function handleResellingRequestInChat(
   
   const { query: productQuery, location } = extractResellingParams(query);
   console.log(`🚨 [BYPASS] Extracted params: query="${productQuery}", location="${location}"`);
-  
+
   try {
     eventStream.sendEvent({
       type: "system",
@@ -149,7 +221,7 @@ async function handleResellingRequestInChat(
         args: {
           location,
           query: productQuery,
-          sources: "craigslist,offerup",
+          sources: "craigslist,offerup,ebay",
         },
       }),
     });
@@ -162,10 +234,35 @@ async function handleResellingRequestInChat(
     const data = result.data || result;
     
     // Get concise summary
-    let summary = data.summary || "Reselling analysis completed.";
+    let summary = data.summary || "Listing search completed.";
     
     // Send summary to chat
     eventStream.sendContent(summary);
+
+    // If listings are present, send a compact results list
+    const listings = Array.isArray(data.allListings) ? data.allListings : Array.isArray(data.data?.allListings) ? data.data.allListings : [];
+    if (listings.length > 0) {
+      const topListings = listings.slice(0, 10).map((l: any, i: number) => {
+        const title = l.title ?? "Listing";
+        const price = typeof l.price === "number" ? `$${l.price.toFixed(2)}` : l.price ?? "n/a";
+        const location = l.location ? ` (${l.location})` : "";
+        const url = l.url ? `\n🔗 ${l.url}` : "";
+        const source = l.source ? ` [${l.source}]` : "";
+        return `${i + 1}. ${title} — ${price}${location}${source}${url}`;
+      });
+      const countsLine = `\nFound ${listings.length} listing${listings.length === 1 ? "" : "s"} across sources. Top results:\n\n`;
+      eventStream.sendContent(countsLine + topListings.join("\n\n"));
+    } else {
+      eventStream.sendContent("No listings were returned. Try a broader query or another city.");
+    }
+
+    // Emit debug info if present
+    const debug = (data.debug || data.data?.debug) as any;
+    if (debug && (debug.sourceCounts || debug.googleFallbackUsed !== undefined)) {
+      const sourceCounts = debug.sourceCounts ? JSON.stringify(debug.sourceCounts) : "{}";
+      const fallbackUsed = debug.googleFallbackUsed ? "yes" : "no";
+      eventStream.sendContent(`Debug: sources=${sourceCounts}, googleFallbackUsed=${fallbackUsed}`);
+    }
     
     // If user asked for email report, automatically send it
     const wantsEmail = query.toLowerCase().includes("email") || query.toLowerCase().includes("report");
@@ -177,9 +274,16 @@ async function handleResellingRequestInChat(
         eventStream.sendContent("\n\n📧 Sending detailed email report...");
         
         try {
-          // Send email using email-mcp
+          // Send email using email-mcp (fallback to noop if MCP disabled)
+          const execCmd =
+            typeof executeMcpCommand === "function"
+              ? executeMcpCommand
+              : async () =>
+                  JSON.stringify({
+                    result: { type: "error", message: "MCP disabled: executeMcpCommand unavailable" },
+                  });
           const emailCommand = `/email-mcp send_test_email subject="Reselling Opportunities Analysis Report" body="${data.emailReport.replace(/"/g, '\\"')}"`;
-          const emailResult = await executeMcpCommand(emailCommand, MCP_GATEWAY_URL, authHeader);
+          const emailResult = await execCmd(emailCommand, MCP_GATEWAY_URL, authHeader);
           
           // Parse the result to check if it's an error
           let parsedResult;
@@ -396,68 +500,81 @@ type DocumentContextPayload = {
 // See imports at top of file
 
 serve(async (req) => {
-  // CRITICAL: Log immediately when function is invoked (before any async operations)
+  // Log immediately when function is invoked (before any async operations)
   console.log("=== FUNCTION INVOKED ===");
   console.log("Timestamp:", new Date().toISOString());
   console.log("Method:", req.method);
   console.log("URL:", req.url);
-  
-  const origin = req.headers.get("Origin");
-  const corsHeaders = getCorsHeaders(origin);
 
-  if (req.method === "OPTIONS") {
-    console.log("OPTIONS request, returning CORS headers");
-    return new Response("ok", {
-      status: 200,
-      headers: corsHeaders,
-    });
-  }
+  let eventStream: ReturnType<typeof createEventStream> | null = null;
+  let corsHeaders: Record<string, string> = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Max-Age": "86400",
+    Vary: "Origin",
+  };
 
-  // Explicitly check for POST method
-  if (req.method !== "POST") {
-    console.error("Method not allowed:", req.method);
-    return new Response(
-      JSON.stringify({ error: `Method ${req.method} not allowed. Only POST is supported.` }),
-      {
-        status: 405,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
-    );
-  }
-
-  // Create event stream at the very start to ensure we always have one
-  console.log("Creating event stream...");
-  const eventStream = createEventStream(corsHeaders);
-  console.log("Event stream created");
-  
-  // Log request start
-  console.log("=== Chat Function Request Start ===");
-  console.log("Method:", req.method);
-  console.log("URL:", req.url);
-  console.log("Headers:", Object.fromEntries(req.headers.entries()));
-  
   try {
-    let requestData;
+    const origin = req.headers.get("Origin");
     try {
-      const requestText = await req.text();
-      console.log("Request body length:", requestText.length);
-      requestData = JSON.parse(requestText);
-      console.log("Parsed request data:", JSON.stringify(requestData).slice(0, 500));
-    } catch (parseError) {
-      console.error("JSON parse error:", parseError);
-      // If JSON parsing fails, return error stream
-      eventStream.sendEvent({
-        type: "error",
-        timestamp: Date.now(),
-        error: "Invalid JSON in request body",
-        metadata: { category: "parse_error", error: parseError instanceof Error ? parseError.message : String(parseError) },
-      });
-      eventStream.sendContent("Invalid request format. Please try again.");
-      eventStream.close();
-      return new Response(eventStream.stream, {
-        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+      corsHeaders = getCorsHeaders(origin);
+    } catch (corsError) {
+      console.error("Failed to build CORS headers, using wildcard:", corsError);
+    }
+
+    if (req.method === "OPTIONS") {
+      console.log("OPTIONS request, returning CORS headers");
+      return new Response("ok", {
+        status: 200,
+        headers: corsHeaders,
       });
     }
+
+    // Explicitly check for POST method
+    if (req.method !== "POST") {
+      console.error("Method not allowed:", req.method);
+      return new Response(
+        JSON.stringify({ error: `Method ${req.method} not allowed. Only POST is supported.` }),
+        {
+          status: 405,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // Create event stream at the very start to ensure we always have one
+    console.log("Creating event stream...");
+    eventStream = createEventStream(corsHeaders);
+    console.log("Event stream created");
+    
+    // Log request start
+    console.log("=== Chat Function Request Start ===");
+    console.log("Method:", req.method);
+    console.log("URL:", req.url);
+    console.log("Headers:", Object.fromEntries(req.headers.entries()));
+    
+  let requestData;
+  try {
+    const requestText = await req.text();
+    console.log("Request body length:", requestText.length);
+    requestData = JSON.parse(requestText);
+    console.log("Parsed request data:", JSON.stringify(requestData).slice(0, 500));
+  } catch (parseError) {
+    console.error("JSON parse error:", parseError);
+    // If JSON parsing fails, return error stream
+    eventStream.sendEvent({
+      type: "error",
+      timestamp: Date.now(),
+      error: "Invalid JSON in request body",
+      metadata: { category: "parse_error", error: parseError instanceof Error ? parseError.message : String(parseError) },
+    });
+    eventStream.sendContent("Invalid request format. Please try again.");
+    eventStream.close();
+    return new Response(eventStream.stream, {
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+    });
+  }
     
     const { messages, provider, documentContext: documentContextRefs } = requestData;
     if (!Array.isArray(messages)) {
@@ -544,8 +661,27 @@ serve(async (req) => {
       normalizedProvider === "anthropic" || normalizedProvider === "gemini" ? normalizedProvider : "openai";
     let augmentedMessages: Array<{ role: string; content: string }> = [...messages];
 
+    // Prepare document context variables
+    let docContexts: DocumentContextPayload[] = [];
+    let searchMode: "vector" | "legacy" = "legacy";
+    let docSummaryContextText = "";
+
+    // Extract user query from the last message for vector search
+    const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+    const userQuery = lastMessage && lastMessage.role === "user" 
+      ? (typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content ?? ""))
+      : "";
+
+    // Determine if we should use vector search
+    const shouldUseVectorSearch = userQuery.trim().length >= 10 && 
+      !/^(hi|hello|hey|thanks|thank you|ok|okay|yes|no)$/i.test(userQuery.trim());
+
+    // Get jobIds from provided context OR auto-query for available documents
+    let jobIds: string[] = [];
+    
+    // Step 1: Get jobIds from provided context
     if (Array.isArray(documentContextRefs) && documentContextRefs.length > 0) {
-      let jobIds = documentContextRefs
+      jobIds = documentContextRefs
         .map((doc: { jobId?: string }) => (doc && typeof doc.jobId === "string" ? doc.jobId : null))
         .filter((id): id is string => Boolean(id));
 
@@ -624,27 +760,15 @@ serve(async (req) => {
           }
         }
 
-        // Extract user query from the last message for vector search
-        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
-        const userQuery = lastMessage && lastMessage.role === "user" 
-          ? (typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content ?? ""))
-          : "";
-
-        // Determine if we should use vector search
-        // Use vector search if query is substantial (not just greetings/short messages)
-        const shouldUseVectorSearch = userQuery.trim().length >= 10 && 
-          !/^(hi|hello|hey|thanks|thank you|ok|okay|yes|no)$/i.test(userQuery.trim());
-
-        let docContexts: DocumentContextPayload[] = [];
-        let searchMode: "vector" | "legacy" = "legacy";
-        
-        try {
-          const requestBody: {
-            jobIds: string[];
-            query?: string;
-            limit?: number;
-            similarity_threshold?: number;
-          } = { jobIds };
+        // Step 2: Fetch document context using jobIds
+        if (jobIds.length > 0 && DOC_CONTEXT_URL) {
+          try {
+            const requestBody: {
+              jobIds: string[];
+              query?: string;
+              limit?: number;
+              similarity_threshold?: number;
+            } = { jobIds };
 
           // Add query for vector search if appropriate
           if (shouldUseVectorSearch) {
@@ -682,123 +806,244 @@ serve(async (req) => {
             throw fetchError;
           }
           
-          if (!response.ok) {
-            const errorText = await response.text().catch(() => "");
-            throw new Error(`doc-context responded with ${response.status} ${errorText}`);
+            if (!response.ok) {
+              const errorText = await response.text().catch(() => "");
+              throw new Error(`doc-context responded with ${response.status} ${errorText}`);
+            }
+            const parsed = await response.json().catch(() => null);
+            docContexts = Array.isArray(parsed?.contexts) ? (parsed.contexts as DocumentContextPayload[]) : [];
+            searchMode = parsed?.searchMode === "vector" ? "vector" : "legacy";
+          } catch (contextError) {
+            console.error("Failed to retrieve document contexts:", contextError);
           }
-          const parsed = await response.json().catch(() => null);
-          docContexts = Array.isArray(parsed?.contexts) ? (parsed.contexts as DocumentContextPayload[]) : [];
-          searchMode = parsed?.searchMode === "vector" ? "vector" : "legacy";
-        } catch (contextError) {
-          console.error("Failed to retrieve document contexts:", contextError);
+        } else if (!DOC_CONTEXT_URL) {
+          console.warn("Document context provided but DOC_CONTEXT_URL is not configured");
         }
+      }
+    } else {
+      // No documentContextRefs provided - auto-query for available documents
+      // Only do this if we have a user and adminClient
+      if (user?.id && adminClient && DOC_CONTEXT_URL) {
+        try {
+          console.log("No document context provided, auto-querying for available documents");
+          
+          // Query for completed, indexed documents for this user
+          const { data: availableJobs, error: jobsError } = await adminClient
+            .from("processing_jobs")
+            .select("id, file_name, metadata")
+            .eq("user_id", user.id)
+            .eq("status", "completed")
+            .in("analysis_target", ["document-analysis", "image-ocr"])
+            .order("created_at", { ascending: false })
+            .limit(20); // Limit to most recent 20 documents
 
-        if (docContexts.length > 0) {
-          const contextSections = docContexts.map((ctx) => {
-            const combinedText =
-              ctx.chunks && ctx.chunks.length > 0
-                ? ctx.chunks.map(chunk => {
-                    // Include similarity score if available (vector search mode)
-                    const similarity = (chunk as any).similarity;
-                    const content = chunk.content;
-                    return similarity !== undefined 
-                      ? `[Similarity: ${(similarity * 100).toFixed(1)}%] ${content}`
-                      : content;
-                  }).join("\n\n")
-                : ctx.summary ?? "";
-            const preview =
-              combinedText.length > 10000
-                ? `${combinedText.slice(0, 10000)}\n\n[... ${combinedText.length - 10000} more characters ...]`
-                : combinedText;
-            const parts: string[] = [`📄 Document: "${ctx.fileName}"`];
-            if (searchMode === "vector") {
-              parts.push(`\n🔍 Retrieved via semantic search (${ctx.chunks?.length || 0} relevant chunks)`);
-            }
-            if (preview) {
-              parts.push(`\n📝 ${searchMode === "vector" ? "Relevant Content" : "Extracted Text Preview"}:\n${preview}`);
-            } else if (ctx.summary) {
-              parts.push(`\n👁️ Visual Summary:\n${ctx.summary}`);
-            }
-            if (ctx.metadata?.visionMetadata) {
-              const bulletPoints = Array.isArray(ctx.metadata.visionMetadata?.bullet_points)
-                ? (ctx.metadata.visionMetadata?.bullet_points as string[])
-                : [];
-              if (bulletPoints.length > 0) {
-                parts.push(`\n🔑 Key Points:\n${bulletPoints.map(point => `- ${point}`).join("\n")}`);
-              }
-              if (ctx.metadata.visionMetadata?.chart_analysis) {
-                parts.push(`\n📊 Chart Analysis: ${ctx.metadata.visionMetadata.chart_analysis as string}`);
-              }
-            }
-            parts.push(`\n🔗 Context Token: ${ctx.token}`);
-            return parts.join("");
-          });
-
-          const contextBlock = `[AVAILABLE DOCUMENT CONTEXT]\n${contextSections.join("\n\n---\n\n")}`;
-          const lastMessageIndex = augmentedMessages.length - 1;
-          if (lastMessageIndex >= 0) {
-            const lastMessage = augmentedMessages[lastMessageIndex];
-            const lastContent =
-              typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content ?? "");
-            augmentedMessages[lastMessageIndex] = {
-              ...lastMessage,
-              content: `${contextBlock}\n\n[USER QUERY]\n${lastContent}`,
-            };
-          } else {
-            augmentedMessages.push({
-              role: "user",
-              content: `${contextBlock}\n\n[USER QUERY]\n`,
+          if (!jobsError && availableJobs && availableJobs.length > 0) {
+            // Filter for jobs that are indexed/ready (extracted, indexed, or injected stages)
+            const readyJobs = availableJobs.filter((job: any) => {
+              const metadata = job.metadata as Record<string, unknown> | null;
+              const stage = metadata?.job_stage as string | undefined;
+              return stage === "extracted" || stage === "indexed" || stage === "injected";
             });
-          }
 
-          eventStream.sendEvent({
-            type: "system",
-            timestamp: Date.now(),
-            metadata: {
-              category: "document_context",
-              searchMode: searchMode,
-              attached: docContexts.map(ctx => ({
-                jobId: ctx.jobId,
-                fileName: ctx.fileName,
-                token: ctx.token,
-                chunkCount: ctx.chunks?.length ?? 0,
-                textLength: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
-                avgSimilarity: searchMode === "vector" && ctx.chunks && ctx.chunks.length > 0
-                  ? ctx.chunks.reduce((sum: number, chunk: any) => sum + (chunk.similarity || 0), 0) / ctx.chunks.length
-                  : undefined,
-              })),
-            },
-          });
+            if (readyJobs.length > 0) {
+              jobIds = readyJobs.map((job: any) => job.id);
+              console.log(`Auto-queried ${jobIds.length} available document(s) for user ${user.id}`);
 
-          if (adminClient) {
-            const timestamp = new Date().toISOString();
-            await Promise.all(
-              docContexts.map((ctx) => {
-                const updatedMetadata = withJobStage(
-                  (ctx.rawMetadata as Record<string, unknown> | null) ?? null,
-                  "injected",
-                  {
-                    injected_at: timestamp,
-                    last_injected_text_length: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
-                  },
-                );
-                return adminClient
-                  .from("processing_jobs")
-                  .update({ metadata: updatedMetadata })
-                  .eq("id", ctx.jobId);
-              }),
-            );
-          } else {
-            console.warn("Admin client not configured; unable to update document stage to injected");
+              // Fetch document context for auto-queried documents
+              try {
+                const requestBody: {
+                  jobIds: string[];
+                  query?: string;
+                  limit?: number;
+                  similarity_threshold?: number;
+                } = { jobIds };
+
+                // Add query for vector search if appropriate
+                if (shouldUseVectorSearch) {
+                  requestBody.query = userQuery;
+                  requestBody.limit = 10;
+                  requestBody.similarity_threshold = 0.7;
+                }
+
+                const DOC_CONTEXT_TIMEOUT_MS = 30_000;
+                const docContextAbortController = new AbortController();
+                const docContextTimeoutId = setTimeout(() => {
+                  docContextAbortController.abort();
+                }, DOC_CONTEXT_TIMEOUT_MS);
+
+                let response: Response;
+                try {
+                  response = await fetch(DOC_CONTEXT_URL, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(SUPABASE_SERVICE_ROLE_KEY ? { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } : {}),
+                    },
+                    body: JSON.stringify(requestBody),
+                    signal: docContextAbortController.signal,
+                  });
+                  clearTimeout(docContextTimeoutId);
+                } catch (fetchError) {
+                  clearTimeout(docContextTimeoutId);
+                  if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+                    console.error("Document context fetch timeout after", DOC_CONTEXT_TIMEOUT_MS, "ms");
+                  } else {
+                    throw fetchError;
+                  }
+                }
+
+                if (response && response.ok) {
+                  const parsed = await response.json().catch(() => null);
+                  docContexts = Array.isArray(parsed?.contexts) ? (parsed.contexts as DocumentContextPayload[]) : [];
+                  searchMode = parsed?.searchMode === "vector" ? "vector" : "legacy";
+                  console.log(`Auto-retrieved context for ${docContexts.length} document(s)`);
+                }
+              } catch (autoContextError) {
+                console.error("Failed to auto-retrieve document contexts:", autoContextError);
+              }
+            }
           }
+        } catch (autoQueryError) {
+          console.error("Error auto-querying documents:", autoQueryError);
+          // Continue without document context
         }
       }
     }
 
-    const conversation = augmentedMessages.map((message) => ({
-      role: message.role === "assistant" ? "assistant" : "user",
-      content: typeof message.content === "string" ? message.content : String(message.content),
-    }));
+    // Format document context for inclusion in prompt (applies to both explicitly provided and auto-queried docs)
+    if (docContexts.length > 0) {
+      const contextSections = docContexts.map((ctx) => {
+        const combinedText =
+          ctx.chunks && ctx.chunks.length > 0
+            ? ctx.chunks.map(chunk => {
+                // Include similarity score if available (vector search mode)
+                const similarity = (chunk as any).similarity;
+                const content = chunk.content;
+                return similarity !== undefined 
+                  ? `[Similarity: ${(similarity * 100).toFixed(1)}%] ${content}`
+                  : content;
+              }).join("\n\n")
+            : ctx.summary ?? "";
+        const preview =
+          combinedText.length > 10000
+            ? `${combinedText.slice(0, 10000)}\n\n[... ${combinedText.length - 10000} more characters ...]`
+            : combinedText;
+        const parts: string[] = [`📄 Document: "${ctx.fileName}"`];
+        if (searchMode === "vector") {
+          parts.push(`\n🔍 Retrieved via semantic search (${ctx.chunks?.length || 0} relevant chunks)`);
+        }
+        if (preview) {
+          parts.push(`\n📝 ${searchMode === "vector" ? "Relevant Content" : "Extracted Text Preview"}:\n${preview}`);
+        }
+        // Always surface summary if present (vision summary or generated) even when chunks exist
+        if (ctx.summary) {
+          parts.push(`\n👁️ Summary:\n${ctx.summary}`);
+        }
+        if (ctx.metadata?.visionMetadata) {
+          const bulletPoints = Array.isArray(ctx.metadata.visionMetadata?.bullet_points)
+            ? (ctx.metadata.visionMetadata?.bullet_points as string[])
+            : [];
+          if (bulletPoints.length > 0) {
+            parts.push(`\n🔑 Key Points:\n${bulletPoints.map(point => `- ${point}`).join("\n")}`);
+          }
+          if (ctx.metadata.visionMetadata?.chart_analysis) {
+            parts.push(`\n📊 Chart Analysis: ${ctx.metadata.visionMetadata.chart_analysis as string}`);
+          }
+        }
+        parts.push(`\n🔗 Context Token: ${ctx.token}`);
+        return parts.join("");
+      });
+
+      const contextBlock = `[AVAILABLE DOCUMENT CONTEXT]\n${contextSections.join("\n\n---\n\n")}`;
+      docSummaryContextText = contextBlock;
+      const lastMessageIndex = augmentedMessages.length - 1;
+      if (lastMessageIndex >= 0) {
+        const lastMessage = augmentedMessages[lastMessageIndex];
+        const lastContent =
+          typeof lastMessage.content === "string" ? lastMessage.content : String(lastMessage.content ?? "");
+        augmentedMessages[lastMessageIndex] = {
+          ...lastMessage,
+          content: `${contextBlock}\n\n[USER QUERY]\n${lastContent}`,
+        };
+      } else {
+        augmentedMessages.push({
+          role: "user",
+          content: `${contextBlock}\n\n[USER QUERY]\n`,
+        });
+      }
+
+      eventStream.sendEvent({
+        type: "system",
+        timestamp: Date.now(),
+        metadata: {
+          category: "document_context",
+          searchMode: searchMode,
+          attached: docContexts.map(ctx => ({
+            jobId: ctx.jobId,
+            fileName: ctx.fileName,
+            token: ctx.token,
+            chunkCount: ctx.chunks?.length ?? 0,
+            textLength: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
+            avgSimilarity: searchMode === "vector" && ctx.chunks && ctx.chunks.length > 0
+              ? ctx.chunks.reduce((sum: number, chunk: any) => sum + (chunk.similarity || 0), 0) / ctx.chunks.length
+              : undefined,
+          })),
+        },
+      });
+
+      if (adminClient) {
+        const timestamp = new Date().toISOString();
+        await Promise.all(
+          docContexts.map((ctx) => {
+            const updatedMetadata = withJobStage(
+              (ctx.rawMetadata as Record<string, unknown> | null) ?? null,
+              "injected",
+              {
+                injected_at: timestamp,
+                last_injected_text_length: ctx.metadata?.textLength ?? ctx.chunks?.[0]?.content?.length ?? 0,
+              },
+            );
+            return adminClient
+              .from("processing_jobs")
+              .update({ metadata: updatedMetadata })
+              .eq("id", ctx.jobId);
+          }),
+        );
+      } else {
+        console.warn("Admin client not configured; unable to update document stage to injected");
+      }
+    }
+
+    const conversation: Array<{ role: "assistant" | "user" | "system"; content: string }> = [];
+    // Include document context as a system message so the model always sees it
+    if (typeof docSummaryContextText === "string" && docSummaryContextText.trim().length > 0) {
+      conversation.push({
+        role: "system",
+        content: docSummaryContextText,
+      });
+    }
+    conversation.push(
+      ...augmentedMessages.map((message) => ({
+        role: message.role === "assistant" ? "assistant" : "user",
+        content: typeof message.content === "string" ? message.content : String(message.content),
+      })),
+    );
+
+    // BYPASS: Check for marketplace/listing requests FIRST (all providers)
+    const lastUserMessage = messages.length > 0 && messages[messages.length - 1]?.role === "user"
+      ? (typeof messages[messages.length - 1].content === "string" 
+          ? messages[messages.length - 1].content 
+          : String(messages[messages.length - 1].content ?? ""))
+      : "";
+    
+    if (lastUserMessage && isResellingRequest(lastUserMessage)) {
+      console.log(`🚨 [BYPASS] Marketplace/listing request detected - calling tool directly`);
+      const result = await handleResellingRequestInChat(lastUserMessage, eventStream, corsHeaders, authHeader);
+      if (result) {
+        return result;
+      }
+      // If handleResellingRequestInChat returns null, continue with normal flow
+    }
 
     if (selectedProvider === "openai") {
       const apiKey = Deno.env.get("OPENAI_API_KEY");
@@ -814,22 +1059,6 @@ serve(async (req) => {
         return new Response(eventStream.stream, {
           headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
         });
-      }
-
-      // BYPASS: Check for reselling requests FIRST and handle directly
-      const lastUserMessage = messages.length > 0 && messages[messages.length - 1]?.role === "user"
-        ? (typeof messages[messages.length - 1].content === "string" 
-            ? messages[messages.length - 1].content 
-            : String(messages[messages.length - 1].content ?? ""))
-        : "";
-      
-      if (lastUserMessage && isResellingRequest(lastUserMessage)) {
-        console.log(`🚨 [BYPASS] Reselling request detected in chat - calling tool directly`);
-        const result = await handleResellingRequestInChat(lastUserMessage, eventStream, corsHeaders, authHeader);
-        if (result) {
-          return result;
-        }
-        // If handleResellingRequestInChat returns null, continue with normal flow
       }
 
       // NOTE: Agents SDK v0.3.2 doesn't support hosted_tool (async run functions)
@@ -1991,7 +2220,7 @@ serve(async (req) => {
           "  - Use clear formatting with emojis\n\n" +
           "IMPORTANT: Technical messages and system status go to the MCP Event Log (right panel), NOT the chat.\n" +
           "The chat is read aloud, so keep responses conversational. Technical details are logged separately.\n" +
-          "- Create Canva design: `/canva-mcp create_design template=presentation text=\"TEXT\"`\n\n" +
+ +
           "IMPORTANT: For location/business queries (e.g., 'nearest Starbucks', 'find restaurants in X'), use Google Places API, NOT web search.\n" +
           "Examples: 'Find Starbucks in Des Moines' → `/google-places-mcp search_places query=\"Starbucks in Des Moines\"`\n\n" +
           "When you need to execute a command, format it exactly as shown above. The system will execute it and return results.";
@@ -2151,10 +2380,9 @@ serve(async (req) => {
               try {
             // Check if authentication is needed for this command
             // Some MCP commands require user-specific API keys from the key manager
-            const requiresAuth = command.includes("google-places-mcp") || 
+            const requiresAuth = command.includes("google-places-mcp") ||
                                  command.includes("alphavantage-mcp") ||
-                                 command.includes("twelvedata") ||
-                                 command.includes("canva-mcp");
+                                 command.includes("twelvedata");
             
             if (requiresAuth && !authHeader) {
               eventStream.sendEvent({
@@ -2536,37 +2764,38 @@ serve(async (req) => {
     
     // Ensure error is logged even if eventStream fails
     try {
-    
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    const errorStack = error instanceof Error ? error.stack : undefined;
-    
-    // Always return a stream, even for errors
-    eventStream.sendEvent({
-      type: "system",
-      timestamp: Date.now(),
-      error: errorMessage,
-      metadata: {
-        category: "function_error",
-        stack: errorStack,
-        errorType: error instanceof Error ? error.constructor.name : typeof error,
-      },
-    });
-    eventStream.sendContent(`I apologize, but I encountered an error processing your request. Please try again.`);
-    eventStream.close();
-    
-    return new Response(eventStream.stream, {
-      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
-    });
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      const errorStack = error instanceof Error ? error.stack : undefined;
+      
+      // Always return a stream, even for errors
+      if (eventStream) {
+        eventStream.sendEvent({
+          type: "system",
+          timestamp: Date.now(),
+          error: errorMessage,
+          metadata: {
+            category: "function_error",
+            stack: errorStack,
+            errorType: error instanceof Error ? error.constructor.name : typeof error,
+          },
+        });
+        eventStream.sendContent(`I apologize, but I encountered an error processing your request. Please try again.`);
+        eventStream.close();
+        
+        return new Response(eventStream.stream, {
+          headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
+        });
+      }
     } catch (streamError) {
       console.error("Failed to send error via stream:", streamError);
-      // Fallback: return a simple error response
-      return new Response(
-        JSON.stringify({ error: "Internal server error", message: error instanceof Error ? error.message : String(error) }),
-        {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
     }
+    // Fallback: return a simple error response
+    return new Response(
+      JSON.stringify({ error: "Internal server error", message: error instanceof Error ? error.message : String(error) }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      }
+    );
   }
 });

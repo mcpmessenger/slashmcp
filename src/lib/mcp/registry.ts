@@ -105,36 +105,6 @@ export const MCP_SERVER_REGISTRY: McpServerDefinition[] = [
     ],
   },
   {
-    id: "canva-mcp",
-    label: "Canva Designs",
-    description: "Create and manage Canva designs via templates.",
-    category: "design",
-    install: "manus-mcp-cli install canva-mcp",
-    environment: ["CANVA_CLIENT_ID", "CANVA_CLIENT_SECRET"],
-    commands: [
-      {
-        name: "create_design",
-        title: "Create Design",
-        description: "Generate a new Canva design from a template with text prompts.",
-        parameters: [
-          {
-            name: "template",
-            description: "Template identifier to use.",
-            required: true,
-            example: "social_post",
-          },
-          {
-            name: "text",
-            description: "Text content to inject into the template.",
-            required: true,
-            example: "\"New Research Findings\"",
-          },
-        ],
-        example: "/canva-mcp create_design template=social_post text=\"New Research Findings\"",
-      },
-    ],
-  },
-  {
     id: "gemini-mcp",
     label: "Gemini Nano Banana",
     description: "Lightweight Gemini text generation for rapid ideation and summarization.",

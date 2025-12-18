@@ -36,13 +36,7 @@ AVAILABLE MCP COMMANDS:
      Format: /grokipedia-mcp search query="QUERY" [limit=NUMBER]
      Example: /grokipedia-mcp search query="Model Context Protocol" limit=5
 
-4. CANVA-MCP (Design Creation)
-   - create_design: Create a Canva design from template
-     Format: /canva-mcp create_design [template=TEMPLATE] [text="TEXT"]
-     Templates: presentation, doc, whiteboard (default: presentation)
-     Example: /canva-mcp create_design template=presentation text="Hello World"
-
-5. GEMINI-MCP (Text Generation)
+4. GEMINI-MCP (Text Generation)
    - generate_text: Generate text using Gemini
      Format: /gemini-mcp generate_text prompt="PROMPT" [model=MODEL] [temperature=N] [max_output_tokens=N]
      Example: /gemini-mcp generate_text prompt="Write a product description"
@@ -85,7 +79,6 @@ COMMAND TRANSLATION RULES:
 - "What are the odds for [event]?" → /polymarket-mcp get_market_price market_id=EVENT_SLUG
 - "Search Grokipedia for [topic]" or "Search grokipedia for [topic]" or "Grokipedia [topic]" → /grokipedia-mcp search query="TOPIC"
 - "Search for [topic]" → /grokipedia-mcp search query="TOPIC" (prefer Grokipedia) or /search-mcp web_search query="TOPIC"
-- "Create a design with [text]" → /canva-mcp create_design text="TEXT"
 - "Visit [website]" or "Scrape [website]" → /playwright-wrapper browser_navigate url=URL
 - "Take a screenshot of [url]" → /playwright-wrapper browser_take_screenshot url=URL
 - "Send a test email" or "Send us a test email" → /email-mcp send_test_email (automatically uses logged-in user's email)
@@ -109,7 +102,7 @@ COMMAND TRANSLATION RULES:
       "2. Briefly explains that you can help with MCP commands\n" +
       "3. Mentions key capabilities (stock data, design creation, web search, etc.)\n" +
       "4. Offers to help them get started\n" +
-      "Example: 'Hello! I'm your Command Discovery Agent. I can help you use MCP commands to get stock prices, create Canva designs, search the web, and much more. Just ask me in plain language what you'd like to do, and I'll handle it for you!'\n\n" +
+      "Example: 'Hello! I'm your Command Discovery Agent. I can help you use MCP commands to get stock prices, search the web, and much more. Just ask me in plain language what you'd like to do, and I'll handle it for you!'\n\n" +
       allCommands +
       "\n" +
       "WHEN USER ASKS TO EXECUTE A COMMAND:\n" +
@@ -189,8 +182,7 @@ export function createMcpToolAgent(tools: Tool[]): Agent {
       "2. polymarket-mcp: get_market_price (market_id)\n" +
       "3. grokipedia-mcp: search (query, limit) - Search Grokipedia knowledge base\n" +
       "   IMPORTANT: When user says 'Search Grokipedia for X' or 'Grokipedia X' or mentions 'Brockopedia', use: /grokipedia-mcp search query=\"X\"\n" +
-      "4. canva-mcp: create_design (template, text)\n" +
-      "5. gemini-mcp: generate_text (prompt, model, temperature, max_output_tokens)\n" +
+      "4. gemini-mcp: generate_text (prompt, model, temperature, max_output_tokens)\n" +
       "6. playwright-mcp: navigate_and_scrape (url, selector), screenshot (url, selector)\n" +
       "7. playwright-wrapper: browser_navigate (url), browser_snapshot, browser_click (element, ref), browser_extract_text (url), browser_take_screenshot (filename, fullPage)\n" +
       "8. search-mcp: web_search (query, max_results)\n" +
@@ -412,7 +404,7 @@ export function createOrchestratorAgent(
       "FOR COMMAND-RELATED REQUESTS:\n" +
       "- If the user asks HOW to use commands or WHAT commands are available (e.g., 'what commands can I use?', 'how do I get stock prices?'), " +
       "  use `handoff_to_command_discovery` - the Command_Discovery_Agent will handle it.\n" +
-      "- If the user wants to PERFORM an action in plain language (e.g., 'get stock price for AAPL', 'create a Canva design', 'search for X'), " +
+      "- If the user wants to PERFORM an action in plain language (e.g., 'get stock price for AAPL', 'search for X'), " +
       "  use `handoff_to_command_discovery` - it will route to MCP_Tool_Agent to execute automatically.\n" +
       "\n" +
       "FOR KEY MANAGEMENT:\n" +
